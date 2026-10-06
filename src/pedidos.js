@@ -153,17 +153,31 @@ const rotas = [
 
   /* Webhook do Mercado Pago: sem sessão e sem CSRF; a autenticidade vem da ASSINATURA */
   ["POST", /^\/api\/webhooks\/mercadopago$/, async ctx => {
-    if (!mp.configurado()) throw new Erro("Indisponível.", 503);
+    console.log("[webhook] requisição POST chegou (antes de validar)"); // se isto não aparece no Render, a requisição não chegou neste código
+    if (!mp.configurado()) { console.error("[webhook] recusado 503: faltam MP_ACCESS_TOKEN e/ou MP_WEBHOOK_SECRET no ambiente"); throw new Erro("Indisponível.", 503); }
     limite("wh:" + ctx.ip, 600, 6e4);
-    const dataId = ctx.query["data.id"];
-    if (!mp.assinaturaValida(ctx.req.headers["x-signature"], ctx.req.headers["x-request-id"], dataId)) {
+    const h = ctx.req.headers, corpo = ctx.body && typeof ctx.body === "object" ? ctx.body : {};
+    // Documentação: o id vem em ?data.id=ORD...&type=order. O corpo JSON ({type, data:{id}}) serve de reserva.
+    const dataId = String(ctx.query["data.id"] || (corpo.data && corpo.data.id) || "");
+    const tipo = String(ctx.query.type || corpo.type || "");
+    if (!mp.assinaturaValida(h["x-signature"], h["x-request-id"], dataId)) {
+      // log sem segredos: só diz o que chegou, para achar no Render por que foi recusado (segredo errado costuma ser a causa)
+      console.warn("[webhook] REJEITADO 401 | x-signature:" + !!h["x-signature"] + " x-request-id:" + !!h["x-request-id"] + " data.id:" + !!dataId + " tipo:" + tipo.slice(0, 20));
       await audit(null, "WEBHOOK_REJEITADO", "assinatura inválida", ctx.ip); throw new Erro("Assinatura inválida.", 401);
     }
-    if (ctx.query.type !== "order" || !RE_MP_ID.test(String(dataId))) return { ok: true };   // outros tópicos: ignorados
-    const p = await db.get("SELECT id, mp_order_id FROM pedidos WHERE mp_order_id=?", [dataId]);
-    if (!p) { await audit(null, "WEBHOOK_PEDIDO_DESCONHECIDO", String(dataId).slice(0, 40), ctx.ip); return { ok: true }; }
+    console.log("[webhook] recebido tipo=" + tipo.slice(0, 20) + " acao=" + String(corpo.action || "").slice(0, 40) + " id=" + dataId.slice(0, 40));
+    if (tipo !== "order" || !RE_MP_ID.test(dataId)) return { ok: true };   // outros tópicos (e a "simulação" do painel): ignorados com 200
     let o; try { o = await mp.buscarOrder(dataId); } catch (e) { console.error("webhook: consulta MP falhou:", e.message); throw new Erro("Falha ao consultar.", 502); } // 5xx = o MP tenta de novo
-    await aplicar(p.id, o); return { ok: true };
+    let p = await db.get("SELECT id, mp_order_id FROM pedidos WHERE mp_order_id=?", [dataId]);
+    if (!p && o && RE_PUBLIC.test(String(o.external_reference || ""))) {
+      // O webhook pode chegar antes de gravarmos o mp_order_id (ou se essa gravação falhou). A referência é o nosso public_id aleatório.
+      await db.run("UPDATE pedidos SET mp_order_id=? WHERE public_id=? AND mp_order_id IS NULL", [dataId, o.external_reference]);
+      p = await db.get("SELECT id, mp_order_id FROM pedidos WHERE mp_order_id=?", [dataId]);
+    }
+    if (!p) { await audit(null, "WEBHOOK_PEDIDO_DESCONHECIDO", dataId.slice(0, 40), ctx.ip); return { ok: true }; }
+    const status = await aplicar(p.id, o);
+    console.log("[webhook] pedido " + p.id + " -> " + status);
+    return { ok: true };
   }, "webhook"],
 
   /* Administração: pedidos e reembolsos pendentes */

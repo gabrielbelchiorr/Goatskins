@@ -17,6 +17,7 @@ if (cfgProd.PRODUCAO) { // falha cedo: melhor não subir do que subir inseguro
   if (e.MP_ACCESS_TOKEN && !e.MP_WEBHOOK_SECRET) erros.push("MP_WEBHOOK_SECRET ausente (sem ele não dá para validar o webhook)");
   if (cfgProd.driver === "resend" && !e.EMAIL_API_KEY) erros.push("EMAIL_API_KEY ausente");
   if (e.TESTE === "1") erros.push("TESTE=1 desliga o limite de tentativas; não use em produção");
+  if (e.MP_TESTE_APRO === "1") erros.push("MP_TESTE_APRO=1 é só para testes locais; remova do ambiente de produção");
   if (erros.length) { console.error("Configuração de produção inválida:\n - " + erros.join("\n - ")); process.exit(1); }
 }
 module.exports = {
@@ -36,6 +37,7 @@ module.exports = {
   TESTE: e.TESTE === "1",
   // Mercado Pago: segredos só no servidor (.env). Em produção a URL da API é fixa.
   MP_ACCESS_TOKEN: e.MP_ACCESS_TOKEN || "", MP_WEBHOOK_SECRET: e.MP_WEBHOOK_SECRET || "",
+  MP_TESTE_APRO: e.NODE_ENV !== "production" && e.MP_TESTE_APRO === "1", // nunca vale em produção
   MP_API_BASE: e.NODE_ENV === "production" ? "https://api.mercadopago.com" : (e.MP_API_BASE || "https://api.mercadopago.com"),
   PIX_MINUTOS: Math.min(60 * 24, Math.max(30, Number(e.PIX_MINUTOS) || 30)), // o Pix tem mínimo de 30 min no Mercado Pago
   RESERVA_MS: e.NODE_ENV !== "production" && Number(e.RESERVA_SEGUNDOS) > 0 ? Number(e.RESERVA_SEGUNDOS) * 1000 : ((Math.min(60 * 24, Math.max(30, Number(e.PIX_MINUTOS) || 30))) + 5) * 60e3
