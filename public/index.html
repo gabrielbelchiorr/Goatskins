@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GOATSKINS SORTEIOS</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="logo.jpg">
+  <meta name="description" content="Sorteios de skins de CS com prova de resultado verificável.">
+</head>
+<body>
+  <div class="shell">
+    <!-- Menu lateral fixo -->
+    <aside class="side">
+      <a class="brand" href="#" aria-label="GOATSKINS"><img src="logo.jpg" alt="GOATSKINS"></a>
+      <nav class="menu">
+        <button id="loginBtn" class="nv login" type="button">Entrar / Cadastrar</button>
+        <button class="nv on" data-view="sorteios" type="button">Sorteios</button>
+        <button class="nv" data-view="historico" type="button">Histórico</button>
+        <button class="nv" data-view="bilhetes" type="button">Meus bilhetes</button>
+        <button id="contaBtn" class="nv" type="button" hidden>Minha conta</button>
+        <button id="adminBtn" class="nv admin" type="button" hidden>Admin</button>
+      </nav>
+    </aside>
+
+    <div class="content">
+      <div id="faixa" class="faixa" hidden></div>
+      <main>
+        <!-- SORTEIOS -->
+        <section class="view" data-view="sorteios">
+          <div class="hero" id="inicio">
+            <h1 id="heroTitle">GOATSKINS SORTEIOS</h1>
+            <p class="tag" id="heroSub">Escolha seus números e concorra a skins de CS.</p>
+            <div class="cta"><a class="btn" href="#ativos">Ver sorteios</a></div>
+            <div id="heroStats" class="chips"></div>
+          </div>
+
+          <h2 id="ativos">Sorteios ativos</h2>
+          <div id="gridAtivos" class="grid"></div>
+          <p id="noAtivos" class="muted" hidden>Nenhum sorteio ativo no momento.</p>
+
+          <h2 class="gap">Sorteios esgotados</h2>
+          <p class="muted">Vagas 100% preenchidas, aguardando a roleta.</p>
+          <div id="gridEsgotados" class="grid"></div>
+          <p id="noEsgotados" class="muted" hidden>Nenhum sorteio aguardando a roleta.</p>
+
+          <h2 class="gap">Como funciona</h2>
+          <ol class="steps">
+            <li><b>1. Crie sua conta</b> e confirme o e-mail.</li>
+            <li><b>2. Escolha</b> seus números em um sorteio ativo.</li>
+            <li><b>3. Números completos?</b> O sorteio vai para a roleta.</li>
+            <li><b>4. Veja o ganhador</b> no Histórico.</li>
+          </ol>
+        </section>
+
+        <!-- HISTÓRICO -->
+        <section class="view" data-view="historico" hidden>
+          <h2>Histórico de sorteios</h2>
+          <ul id="histList" class="list"></ul>
+          <p id="noHist" class="muted">Ainda não houve nenhum sorteio realizado.</p>
+        </section>
+
+        <!-- MEUS BILHETES -->
+        <section class="view" data-view="bilhetes" hidden>
+          <h2>Meus bilhetes</h2>
+          <ul id="ticketsList" class="list"></ul>
+          <p id="noTickets" class="muted">Entre na sua conta para ver seus bilhetes.</p>
+          <h2 class="gap">Meus pedidos</h2>
+          <ul id="pedList" class="list"></ul>
+          <p id="noPed" class="muted" hidden>Você ainda não fez nenhum pedido.</p>
+        </section>
+      </main>
+      <footer>GOATSKINS &copy; 2026. Não afiliado à Valve nem à Steam.<br><a href="/termos.html">Termos de uso</a> · <a href="/privacidade.html">Política de privacidade</a></footer>
+    </div>
+  </div>
+
+  <div id="modal" class="overlay" hidden>
+    <div class="dialog">
+      <button id="closeBtn" class="x" type="button" aria-label="Fechar">X</button>
+      <div id="modalBody"></div>
+    </div>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>

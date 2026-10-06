@@ -1,0 +1,177 @@
+/* Pedidos e pagamentos (Pix via Mercado Pago Orders API).
+   Regras de ouro:
+   1. O servidor calcula o preço a partir do banco. O navegador só diz QUAIS números quer.
+   2. Reservar números e criar o pedido acontece numa transação só (BEGIN IMMEDIATE + chaves únicas).
+   3. Um pedido só vira PAID depois que o servidor CONSULTA o Mercado Pago e confere status, valor e referência.
+      O webhook apenas "avisa que algo mudou": o que vale é a resposta da API do Mercado Pago.
+   4. Tudo é idempotente: a mesma notificação 10 vezes produz o mesmo resultado de 1 vez. */
+const crypto = require("node:crypto");
+const cfg = require("./config"), mp = require("./mercadopago");
+const { db, agora, tx, audit, notificar, liberar } = require("./db");
+const { Erro, inteiro, limite } = require("./http");
+
+const MAX_PENDENTES = 3;                                   // pedidos Pix abertos por pessoa (evita "segurar" números sem pagar)
+const centavos = v => Math.round(Number(v) * 100);
+const RE_PUBLIC = /^[a-f0-9]{32}$/, RE_MP_ID = /^ORD[A-Za-z0-9]{10,60}$/;
+const HOST_OK = /^https:\/\/([a-z0-9-]+\.)*(mercadopago\.com(\.br)?|mercadolibre\.com)\//i;
+const B64 = /^[A-Za-z0-9+/]+=*$/;
+
+const publico = p => ({
+  id: p.public_id, campanha: p.campaign_id, premio: p.premio, numeros: JSON.parse(p.numeros), total: p.total_centavos / 100,
+  status: p.status, expira_em: p.expira_em, criado_em: p.criado_em, pago_em: p.pago_em,
+  pix: p.status === "PENDING" && p.qr_code ? { qr_code: p.qr_code, qr_code_base64: p.qr_code_base64, ticket_url: p.ticket_url } : null });
+const SEL = "SELECT p.*, c.premio FROM pedidos p JOIN campaigns c ON c.id=p.campaign_id";
+
+/* Interpreta a Order devolvida pelo Mercado Pago. Retorna { estado: PAGO|FALHOU|PENDENTE, novo?, motivo? } */
+function interpretar(o, p) {
+  const pg = o && o.transactions && Array.isArray(o.transactions.payments) ? o.transactions.payments[0] : null;
+  if (!o || o.id !== p.mp_order_id || o.external_reference !== p.public_id) return { estado: "PENDENTE", motivo: "referência diferente" };
+  if (o.status === "processed" && o.status_detail === "accredited" && pg && pg.status === "processed") {
+    const pago = o.total_paid_amount !== undefined ? o.total_paid_amount : pg.paid_amount;
+    if (pago === undefined || centavos(o.total_amount) !== p.total_centavos || centavos(pago) !== p.total_centavos)
+      return { estado: "PENDENTE", motivo: "valor divergente ou ausente" };      // nunca marca como pago com valor diferente
+    return { estado: "PAGO" };
+  }
+  const st = String(o.status || ""), ps = pg ? String(pg.status || "") : "";
+  const ruim = ["canceled", "expired", "failed"];
+  if (ruim.includes(st) || ruim.includes(ps)) return { estado: "FALHOU", novo: { canceled: "CANCELED", expired: "EXPIRED", failed: "FAILED" }[ruim.includes(st) ? st : ps] };
+  return { estado: "PENDENTE" };                                                 // action_required, created, processing... NÃO é pago
+}
+
+/* Aplica o resultado no banco. Idempotente. Retorna o status final do pedido. */
+function aplicar(pedidoId, o) {
+  return tx(() => {
+    liberar();
+    const p = db.prepare("SELECT * FROM pedidos WHERE id=?").get(pedidoId), r = interpretar(o, p), agoraIso = agora();
+    if (p.status === "PAID" || p.status === "REFUND_NEEDED" || p.status === "REFUNDED") {
+      if (p.status === "PAID" && o && ["refunded", "charged_back"].includes(o.status)) audit(p.user_id, "PAGAMENTO_ESTORNADO_NO_MP", "pedido " + p.id + " (" + o.status + ")");
+      return p.status;
+    }
+    if (r.motivo) audit(p.user_id, "PAGAMENTO_IGNORADO", "pedido " + p.id + ": " + r.motivo);
+    if (r.estado === "PENDENTE") { db.prepare("UPDATE pedidos SET mp_status=?, atualizado_em=? WHERE id=?").run(String(o && o.status || "").slice(0, 40), agoraIso, p.id); return p.status; }
+    if (r.estado === "FALHOU") {
+      if (p.status === "PENDING") {
+        db.prepare("UPDATE pedidos SET status=?, mp_status=?, atualizado_em=? WHERE id=?").run(r.novo, String(o.status || "").slice(0, 40), agoraIso, p.id);
+        db.prepare("DELETE FROM reservas WHERE pedido_id=?").run(p.id);
+        notificar(p.user_id, "Pagamento não concluído", "O Pix do seu pedido não foi concluído e os números foram liberados.");
+      }
+      return db.prepare("SELECT status FROM pedidos WHERE id=?").get(p.id).status;
+    }
+    /* PAGO: confirmar os números */
+    const nums = JSON.parse(p.numeros), c = db.prepare("SELECT status FROM campaigns WHERE id=?").get(p.campaign_id);
+    const aindaReservado = db.prepare("SELECT COUNT(*) n FROM reservas WHERE pedido_id=?").get(p.id).n === nums.length;
+    if (!aindaReservado) { // a reserva venceu antes do pagamento chegar: só vende se os números continuam livres
+      const ocupado = !c || c.status !== "OPEN" || nums.some(n => db.prepare("SELECT 1 FROM tickets WHERE campaign_id=? AND n=?").get(p.campaign_id, n) || db.prepare("SELECT 1 FROM reservas WHERE campaign_id=? AND n=?").get(p.campaign_id, n));
+      if (ocupado) {
+        db.prepare("UPDATE pedidos SET status='REFUND_NEEDED', mp_status='processed', atualizado_em=?, pago_em=? WHERE id=?").run(agoraIso, agoraIso, p.id);
+        audit(p.user_id, "PAGAMENTO_TARDIO_REEMBOLSAR", "pedido " + p.id + " pago após a reserva vencer e os números não estão mais livres");
+        notificar(p.user_id, "Pagamento recebido após o prazo", "Os números do seu pedido já não estavam disponíveis. O valor será devolvido; fale com o suporte se precisar.");
+        return "REFUND_NEEDED";
+      }
+    }
+    try { for (const n of nums) db.prepare("INSERT INTO tickets(campaign_id,user_id,n,criado_em) VALUES(?,?,?,?)").run(p.campaign_id, p.user_id, n, agoraIso); }
+    catch (e) { if (!/UNIQUE/i.test(e.message)) throw e; throw new Erro("Conflito ao confirmar números.", 409); } // desfaz a transação inteira
+    db.prepare("DELETE FROM reservas WHERE pedido_id=?").run(p.id);
+    db.prepare("UPDATE pedidos SET status='PAID', mp_status='processed', pago_em=?, atualizado_em=? WHERE id=?").run(agoraIso, agoraIso, p.id);
+    audit(p.user_id, "PAGAMENTO_CONFIRMADO", "pedido " + p.id + " números " + nums.join(","));
+    notificar(p.user_id, "Pagamento confirmado!", "Seus números estão garantidos: " + nums.join(", ") + ".");
+    return "PAID";
+  });
+}
+
+setInterval(() => { try { tx(liberar); } catch (e) { console.error("varredura:", e.message); } }, 60e3).unref();
+
+const rotas = [
+  /* 1-8: o usuário escolhe os números; preço e disponibilidade vêm SEMPRE do banco */
+  ["POST", /^\/api\/campanhas\/(\d+)\/pedidos$/, async ctx => {
+    const u = ctx.user, campId = Number(ctx.params[0]); limite("pedido:" + u.id, 10, 6e5);
+    if (!mp.configurado()) throw new Erro("Pagamentos indisponíveis no momento.", 503);
+    if (!u.email_verificado) throw new Erro("Confirme seu e-mail para participar.", 403);
+    const nums = ctx.body.numeros;
+    if (!Array.isArray(nums) || !nums.length || nums.length > 100) throw new Erro("Escolha pelo menos um número.");
+    const lista = [...new Set(nums.map(n => inteiro(n, 1, 100)))]; // preço, total, status e valor de qualquer outro campo do corpo são ignorados
+    const publicId = crypto.randomBytes(16).toString("hex");
+    const pedido = tx(() => {
+      liberar();
+      const c = db.prepare("SELECT * FROM campaigns WHERE id=?").get(campId); if (!c) throw new Erro("Sorteio não encontrado.", 404);
+      if (c.status !== "OPEN") throw new Erro("Este sorteio não está aberto.");
+      if (c.preco_centavos <= 0) throw new Erro("Este sorteio é gratuito: escolha os números direto no sorteio.");
+      if (lista.some(n => n > c.max)) throw new Erro("Número fora do sorteio.");
+      if (db.prepare("SELECT COUNT(*) n FROM pedidos WHERE user_id=? AND status='PENDING'").get(u.id).n >= MAX_PENDENTES)
+        throw new Erro("Você já tem pedidos Pix aguardando pagamento. Pague ou aguarde expirarem.", 429);
+      const comprados = db.prepare("SELECT COUNT(*) n FROM tickets WHERE campaign_id=? AND user_id=?").get(campId, u.id).n;
+      const reservados = db.prepare("SELECT COUNT(*) n FROM reservas r JOIN pedidos p ON p.id=r.pedido_id WHERE r.campaign_id=? AND p.user_id=?").get(campId, u.id).n;
+      if (comprados + reservados + lista.length > c.max_por_usuario) throw new Erro("Limite de " + c.max_por_usuario + " número(s) por pessoa neste sorteio.");
+      const total = c.preco_centavos * lista.length, agoraIso = agora();
+      const id = Number(db.prepare("INSERT INTO pedidos(public_id,user_id,campaign_id,numeros,total_centavos,expira_em,criado_em,atualizado_em) VALUES(?,?,?,?,?,?,?,?)")
+        .run(publicId, u.id, campId, JSON.stringify(lista.sort((a, b) => a - b)), total, Date.now() + cfg.RESERVA_MS, agoraIso, agoraIso).lastInsertRowid);
+      for (const n of lista) {
+        if (db.prepare("SELECT 1 FROM tickets WHERE campaign_id=? AND n=?").get(campId, n)) throw new Erro("O número " + n + " já foi vendido.");
+        try { db.prepare("INSERT INTO reservas(campaign_id,n,pedido_id) VALUES(?,?,?)").run(campId, n, id); }   // PRIMARY KEY (campanha, número): garantia final
+        catch (e) { if (/UNIQUE|PRIMARY/i.test(e.message)) throw new Erro("O número " + n + " já foi escolhido ou está reservado por outra pessoa."); throw e; }
+      }
+      audit(u.id, "PEDIDO_CRIADO", "pedido " + id + " campanha " + campId + " números " + lista.join(",") + " total " + total, ctx.ip);
+      return { id, total };
+    });
+    try {
+      const o = await mp.criarOrder({ ref: publicId, totalCentavos: pedido.total, email: u.email });
+      const pm = o && o.transactions && o.transactions.payments && o.transactions.payments[0] && o.transactions.payments[0].payment_method || {};
+      if (!RE_MP_ID.test(String(o.id || ""))) throw new Error("resposta sem id de order");
+      db.prepare("UPDATE pedidos SET mp_order_id=?, mp_status=?, qr_code=?, qr_code_base64=?, ticket_url=?, atualizado_em=? WHERE id=?").run(
+        o.id, String(o.status || "").slice(0, 40), typeof pm.qr_code === "string" && pm.qr_code.length < 1500 ? pm.qr_code : null,
+        typeof pm.qr_code_base64 === "string" && pm.qr_code_base64.length < 40000 && B64.test(pm.qr_code_base64) ? pm.qr_code_base64 : null,
+        typeof pm.ticket_url === "string" && HOST_OK.test(pm.ticket_url) ? pm.ticket_url : null, agora(), pedido.id);
+    } catch (e) {
+      console.error("Falha ao criar order no Mercado Pago:", e.message);
+      tx(() => { db.prepare("UPDATE pedidos SET status='FAILED', atualizado_em=? WHERE id=? AND status='PENDING'").run(agora(), pedido.id); db.prepare("DELETE FROM reservas WHERE pedido_id=?").run(pedido.id); });
+      throw new Erro("Não foi possível gerar o Pix agora. Seus números foram liberados; tente novamente em instantes.", 502);
+    }
+    return publico(db.prepare(SEL + " WHERE p.id=?").get(pedido.id));
+  }, "user"],
+
+  /* Pedidos do próprio usuário (nunca de outro: filtro por user_id no SQL) */
+  ["GET", /^\/api\/pedidos$/, ctx => { tx(liberar); return db.prepare(SEL + " WHERE p.user_id=? ORDER BY p.id DESC LIMIT 30").all(ctx.user.id).map(publico); }, "user"],
+  ["GET", /^\/api\/pedidos\/([a-f0-9]{32})$/, ctx => {
+    tx(liberar); const p = db.prepare(SEL + " WHERE p.public_id=? AND p.user_id=?").get(ctx.params[0], ctx.user.id);
+    if (!p) throw new Erro("Pedido não encontrado.", 404); return publico(p);
+  }, "user"],
+  /* "Já paguei": o servidor consulta o Mercado Pago (não confia em nada vindo do navegador) */
+  ["POST", /^\/api\/pedidos\/([a-f0-9]{32})\/atualizar$/, async ctx => {
+    limite("atual:" + ctx.user.id, 20, 6e4);
+    const p = db.prepare("SELECT id, mp_order_id, status FROM pedidos WHERE public_id=? AND user_id=?").get(ctx.params[0], ctx.user.id);
+    if (!p) throw new Erro("Pedido não encontrado.", 404);
+    if (p.mp_order_id && p.status === "PENDING") {
+      let o; try { o = await mp.buscarOrder(p.mp_order_id); } catch (e) { console.error("consulta MP:", e.message); throw new Erro("Não consegui consultar o pagamento agora. Tente em instantes.", 502); }
+      aplicar(p.id, o);
+    }
+    return publico(db.prepare(SEL + " WHERE p.id=?").get(p.id));
+  }, "user"],
+
+  /* Webhook do Mercado Pago: sem sessão e sem CSRF; a autenticidade vem da ASSINATURA */
+  ["POST", /^\/api\/webhooks\/mercadopago$/, async ctx => {
+    if (!mp.configurado()) throw new Erro("Indisponível.", 503);
+    limite("wh:" + ctx.ip, 600, 6e4);
+    const dataId = ctx.query["data.id"];
+    if (!mp.assinaturaValida(ctx.req.headers["x-signature"], ctx.req.headers["x-request-id"], dataId)) {
+      audit(null, "WEBHOOK_REJEITADO", "assinatura inválida", ctx.ip); throw new Erro("Assinatura inválida.", 401);
+    }
+    if (ctx.query.type !== "order" || !RE_MP_ID.test(String(dataId))) return { ok: true };   // outros tópicos: ignorados
+    const p = db.prepare("SELECT id, mp_order_id FROM pedidos WHERE mp_order_id=?").get(dataId);
+    if (!p) { audit(null, "WEBHOOK_PEDIDO_DESCONHECIDO", String(dataId).slice(0, 40), ctx.ip); return { ok: true }; }
+    let o; try { o = await mp.buscarOrder(dataId); } catch (e) { console.error("webhook: consulta MP falhou:", e.message); throw new Erro("Falha ao consultar.", 502); } // 5xx = o MP tenta de novo
+    aplicar(p.id, o); return { ok: true };
+  }, "webhook"],
+
+  /* Administração: pedidos e reembolsos pendentes */
+  ["GET", /^\/api\/admin\/pedidos$/, () => {
+    tx(liberar);
+    return { receita: db.prepare("SELECT COALESCE(SUM(total_centavos),0) n FROM pedidos WHERE status='PAID'").get().n / 100,
+      pedidos: db.prepare("SELECT p.public_id id, p.status, p.total_centavos/100.0 total, p.numeros, p.criado_em, p.pago_em, p.mp_order_id, c.premio, u.nome, u.email FROM pedidos p JOIN campaigns c ON c.id=p.campaign_id JOIN users u ON u.id=p.user_id ORDER BY p.id DESC LIMIT 200").all() };
+  }, "admin"],
+  ["POST", /^\/api\/admin\/pedidos\/([a-f0-9]{32})\/reembolsado$/, ctx => { // o admin devolve o dinheiro no painel do Mercado Pago e marca aqui
+    const r = db.prepare("UPDATE pedidos SET status='REFUNDED', atualizado_em=? WHERE public_id=? AND status='REFUND_NEEDED'").run(agora(), ctx.params[0]);
+    if (!r.changes) throw new Erro("Pedido não está aguardando reembolso.");
+    audit(ctx.user.id, "PEDIDO_REEMBOLSADO", ctx.params[0], ctx.ip); return { ok: true };
+  }, "admin"]
+];
+module.exports = { rotas, aplicar, interpretar };

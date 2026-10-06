@@ -1,0 +1,14 @@
+{
+  "name": "goatskins",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sorteios gratuitos de skins GOATSKINS",
+  "scripts": {
+    "start": "node --no-warnings server.js",
+    "test": "node --no-warnings --test",
+    "admin": "node --no-warnings server.js criar-admin"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
