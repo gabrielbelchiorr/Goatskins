@@ -15,6 +15,9 @@ const centavos = v => Math.round(Number(v) * 100);
 const RE_PUBLIC = /^[a-f0-9]{32}$/, RE_MP_ID = /^ORD[A-Za-z0-9]{10,60}$/;
 const HOST_OK = /^https:\/\/([a-z0-9-]+\.)*(mercadopago\.com(\.br)?|mercadolibre\.com)\//i;
 const B64 = /^[A-Za-z0-9+/]+=*$/;
+/* BR Code do Pix termina em "6304" + CRC16-CCITT (poli 0x1021, inicial 0xFFFF) calculado sobre todo o texto anterior, inclusive o "6304". */
+function crc16(txt) { let c = 0xFFFF; for (const b of Buffer.from(txt, "utf8")) { c ^= b << 8; for (let i = 0; i < 8; i++) c = (c & 0x8000) ? ((c << 1) ^ 0x1021) & 0xFFFF : (c << 1) & 0xFFFF; } return c.toString(16).toUpperCase().padStart(4, "0"); }
+const brcodeOk = q => typeof q === "string" && q.length > 20 && q.startsWith("000201") && q.slice(-8, -4) === "6304" && crc16(q.slice(0, -4)) === q.slice(-4).toUpperCase();
 
 const publico = p => ({
   id: p.public_id, campanha: p.campaign_id, premio: p.premio, numeros: JSON.parse(p.numeros), total: p.total_centavos / 100,
@@ -121,6 +124,9 @@ const rotas = [
       const o = await mp.criarOrder({ ref: publicId, totalCentavos: pedido.total, email: u.email });
       const pm = o && o.transactions && o.transactions.payments && o.transactions.payments[0] && o.transactions.payments[0].payment_method || {};
       if (!RE_MP_ID.test(String(o.id || ""))) throw new Error("resposta sem id de order");
+      // Diagnóstico do Pix (sem segredos e sem o código completo): mostra o que o Mercado Pago devolveu e se o "copia e cola" é um BR Code íntegro.
+      console.log("[pix] order criada status=" + String(o.status || "").slice(0, 30) + " detalhe=" + String(o.status_detail || "").slice(0, 40) + " metodo=" + String(pm.id || "?").slice(0, 20) +
+        " qr_tamanho=" + (typeof pm.qr_code === "string" ? pm.qr_code.length : "AUSENTE") + " qr_crc_ok=" + brcodeOk(pm.qr_code) + " qr_inicio=" + (typeof pm.qr_code === "string" ? pm.qr_code.slice(0, 14) : "-"));
       await db.run("UPDATE pedidos SET mp_order_id=?, mp_status=?, qr_code=?, qr_code_base64=?, ticket_url=?, atualizado_em=? WHERE id=?", [
         o.id, String(o.status || "").slice(0, 40), typeof pm.qr_code === "string" && pm.qr_code.length < 1500 ? pm.qr_code : null,
         typeof pm.qr_code_base64 === "string" && pm.qr_code_base64.length < 40000 && B64.test(pm.qr_code_base64) ? pm.qr_code_base64 : null,
@@ -192,4 +198,4 @@ const rotas = [
     await audit(ctx.user.id, "PEDIDO_REEMBOLSADO", ctx.params[0], ctx.ip); return { ok: true };
   }, "admin"]
 ];
-module.exports = { rotas, aplicar, interpretar };
+module.exports = { rotas, aplicar, interpretar, crc16, brcodeOk };

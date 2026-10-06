@@ -95,3 +95,13 @@ test("webhook: id e tipo só no corpo JSON (sem query) também funciona", comFet
   assert.deepEqual(await chamar({}, h, { type: "order", action: "order.processed", data: { id: ORD } }), { ok: true });
   assert.equal(S.pedido.status, "PAID");
 }));
+
+test("BR Code: CRC16 confere com o vetor padrão e detecta código adulterado", () => {
+  assert.equal(ped.crc16("123456789"), "29B1"); // vetor de teste oficial do CRC16-CCITT-FALSE
+  const base = "00020126360014BR.GOV.BCB.PIX0114+5511999999999520400005303986540510.005802BR5909GOATSKINS6009SAO PAULO62070503***6304";
+  const ok = base + ped.crc16(base);
+  assert.equal(ped.brcodeOk(ok), true);
+  assert.equal(ped.brcodeOk(ok.replace("10.00", "99.00")), false);
+  assert.equal(ped.brcodeOk(ok.slice(0, -2)), false);
+  assert.equal(ped.brcodeOk(null), false);
+});
