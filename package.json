@@ -2,11 +2,16 @@
   "name": "goatskins",
   "version": "1.0.0",
   "private": true,
-  "description": "Sorteios gratuitos de skins GOATSKINS",
+  "description": "Sorteios de skins GOATSKINS (Node.js + PostgreSQL)",
   "scripts": {
     "start": "node --no-warnings server.js",
     "test": "node --no-warnings --test",
-    "admin": "node --no-warnings server.js criar-admin"
+    "admin": "node --no-warnings server.js criar-admin",
+    "migrar-sqlite": "node --no-warnings scripts/migrar-sqlite.js",
+    "backup": "node --no-warnings scripts/backup.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
   },
   "engines": {
     "node": ">=22.13"

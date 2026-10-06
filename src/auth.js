@@ -17,130 +17,137 @@ function confere(s, h) {
 const FALSO = hashSenha("senha-falsa-para-igualar-tempo"); // evita descobrir e-mails pelo tempo de resposta
 
 /* ----- Sessões ----- */
-function abrirSessao(ctx, uid) {
+async function abrirSessao(ctx, uid) {
   const t = crypto.randomBytes(32).toString("hex");
-  db.prepare("INSERT INTO sessions VALUES(?,?,?)").run(sha(t), uid, Date.now() + SESSAO_MS);
+  await db.run("INSERT INTO sessions(token,user_id,expira) VALUES(?,?,?)", [sha(t), uid, Date.now() + SESSAO_MS]);
   const seguro = cfg.PRODUCAO || ctx.req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
   ctx.res.setHeader("Set-Cookie", "sid=" + t + "; HttpOnly; SameSite=Lax; Path=/; Max-Age=" + SESSAO_MS / 1000 + seguro);
 }
-function encerrarSessoes(uid) { db.prepare("DELETE FROM sessions WHERE user_id=?").run(uid); }
-function usuarioDaSessao(req) {
+async function encerrarSessoes(uid) { await db.run("DELETE FROM sessions WHERE user_id=?", [uid]); }
+async function usuarioDaSessao(req) {
   const t = cookie(req, "sid"); if (!t) return null;
-  return db.prepare(`SELECT u.id, u.nome, u.email, u.role, u.email_verificado FROM sessions s JOIN users u ON u.id=s.user_id
-    WHERE s.token=? AND s.expira>? AND u.status='ACTIVE'`).get(sha(t), Date.now()) || null;
+  return (await db.get(`SELECT u.id, u.nome, u.email, u.role, u.email_verificado FROM sessions s JOIN users u ON u.id=s.user_id
+    WHERE s.token=? AND s.expira>? AND u.status='ACTIVE'`, [sha(t), Date.now()])) || null;
 }
-setInterval(() => { db.prepare("DELETE FROM sessions WHERE expira<?").run(Date.now()); db.prepare("DELETE FROM tokens_email WHERE expira<?").run(Date.now()); }, 36e5).unref();
+setInterval(() => {
+  Promise.all([db.run("DELETE FROM sessions WHERE expira<?", [Date.now()]), db.run("DELETE FROM tokens_email WHERE expira<?", [Date.now()])])
+    .catch(e => console.error("limpeza de sessões:", e.message));
+}, 36e5).unref();
 
 /* ----- Tokens de e-mail (verificação e redefinição). Só o hash fica no banco. ----- */
-function gerarToken(uid, tipo, horas) {
+async function gerarToken(uid, tipo, horas) {
   const t = crypto.randomBytes(32).toString("hex");
-  db.prepare("INSERT INTO tokens_email VALUES(?,?,?,?,0)").run(sha(t), uid, tipo, Date.now() + horas * 36e5);
+  await db.run("INSERT INTO tokens_email(token_hash,user_id,tipo,expira,usado) VALUES(?,?,?,?,0)", [sha(t), uid, tipo, Date.now() + horas * 36e5]);
   return t;
 }
-function consumirToken(t, tipo) {
-  const r = db.prepare("SELECT * FROM tokens_email WHERE token_hash=? AND tipo=? AND usado=0 AND expira>?").get(sha(String(t || "")), tipo, Date.now());
+async function consumirToken(t, tipo) {
+  const r = await db.get("SELECT * FROM tokens_email WHERE token_hash=? AND tipo=? AND usado=0 AND expira>?", [sha(String(t || "")), tipo, Date.now()]);
   if (!r) throw new Erro("Link inválido ou expirado.");
-  db.prepare("UPDATE tokens_email SET usado=1 WHERE token_hash=?").run(r.token_hash);
+  // o "AND usado=0" torna o consumo atômico: se duas requisições usarem o mesmo link ao mesmo tempo, só uma passa
+  if (!(await db.run("UPDATE tokens_email SET usado=1 WHERE token_hash=? AND usado=0", [r.token_hash])).changes) throw new Erro("Link inválido ou expirado.");
   return r.user_id;
 }
-function enviarVerificacao(u) {
-  const t = gerarToken(u.id, "VERIFICAR", 24);
+async function enviarVerificacao(u) {
+  const t = await gerarToken(u.id, "VERIFICAR", 24);
   mail.enviar(u.email, "Confirme seu e-mail - GOATSKINS", "Olá, " + u.nome + "!\n\nConfirme seu e-mail para poder participar dos sorteios:\n" + cfg.APP_URL + "/api/verificar-email?token=" + t + "\n\nO link vale por 24 horas. Se não foi você, ignore esta mensagem.");
 }
 
-const perfil = id => db.prepare("SELECT id, nome, email, telefone, email_verificado, role, criado_em FROM users WHERE id=?").get(id);
+const perfil = id => db.get("SELECT id, nome, email, telefone, email_verificado, role, criado_em FROM users WHERE id=?", [id]);
 const telefoneOk = v => { if (v == null || v === "") return null; const d = txt(String(v), 25).replace(/[^\d+]/g, ""); if (d.replace(/\D/g, "").length < 8 || d.length > 16) throw new Erro("Telefone inválido."); return d; };
 
 const rotas = [
-  ["POST", /^\/api\/registro$/, ctx => {
+  ["POST", /^\/api\/registro$/, async ctx => {
     const b = ctx.body, ip = ctx.ip; limite("reg:" + ip, 10, 36e5);
     const nome = txt(b.nome, 80, 2), email = txt(b.email, 120, 5).toLowerCase(), tel = telefoneOk(b.telefone);
     if (!RE.email.test(email)) throw new Erro("E-mail inválido.");
     if (!senhaOk(b.senha)) throw new Erro(SENHA_MSG);
     if (b.maior18 !== true || b.consentimento !== true) throw new Erro("Confirme que tem 18 anos ou mais e aceite os termos e a política de privacidade.");
-    if (db.prepare("SELECT 1 FROM users WHERE email=? OR contato=?").get(email, email)) throw new Erro("Este e-mail já tem conta. Tente entrar ou recuperar a senha.");
-    const now = agora();
-    const id = Number(db.prepare("INSERT INTO users(nome,contato,email,telefone,hash,role,criado_em,atualizado_em,consentimento_em) VALUES(?,?,?,?,?,'USER',?,?,?)")
-      .run(nome, email, email, tel, hashSenha(b.senha), now, now, now).lastInsertRowid);
-    audit(id, "CONTA_CRIADA", null, ip); notificar(id, "Bem-vindo(a)!", "Confirme seu e-mail para poder participar dos sorteios.");
-    enviarVerificacao({ id, nome, email }); abrirSessao(ctx, id); return { ok: true };
+    const JA_EXISTE = "Este e-mail já tem conta. Tente entrar ou recuperar a senha.";
+    if (await db.get("SELECT 1 FROM users WHERE email=? OR contato=?", [email, email])) throw new Erro(JA_EXISTE);
+    const now = agora(); let id;
+    try {
+      id = await db.insert("INSERT INTO users(nome,contato,email,telefone,hash,role,criado_em,atualizado_em,consentimento_em) VALUES(?,?,?,?,?,'USER',?,?,?)",
+        [nome, email, email, tel, hashSenha(b.senha), now, now, now]);
+    } catch (e) { if (e.code === "23505") throw new Erro(JA_EXISTE); throw e; } // duas inscrições simultâneas com o mesmo e-mail
+    await audit(id, "CONTA_CRIADA", null, ip); await notificar(id, "Bem-vindo(a)!", "Confirme seu e-mail para poder participar dos sorteios.");
+    await enviarVerificacao({ id, nome, email }); await abrirSessao(ctx, id); return { ok: true };
   }],
-  ["POST", /^\/api\/login$/, ctx => {
+  ["POST", /^\/api\/login$/, async ctx => {
     const ip = ctx.ip; limite("login:" + ip, 30, 6e5);
     const email = String(ctx.body.email || "").trim().toLowerCase(), senha = String(ctx.body.senha || "");
-    const u = db.prepare("SELECT * FROM users WHERE email=? OR contato=?").get(email, email);
+    const u = await db.get("SELECT * FROM users WHERE email=? OR contato=?", [email, email]);
     if (!u) { confere(senha, FALSO); throw new Erro("E-mail ou senha incorretos.", 401); }
     if (u.status !== "ACTIVE") throw new Erro("Conta indisponível. Fale com o suporte.", 403);
     if (u.bloqueado_ate > Date.now()) throw new Erro("Conta bloqueada por tentativas excessivas. Tente novamente em alguns minutos.", 429);
     if (!confere(senha, u.hash)) {
       const f = u.falhas + 1;
-      db.prepare("UPDATE users SET falhas=?, bloqueado_ate=? WHERE id=?").run(f >= MAX_FALHAS ? 0 : f, f >= MAX_FALHAS ? Date.now() + BLOQUEIO_MS : 0, u.id);
-      audit(u.id, f >= MAX_FALHAS ? "CONTA_BLOQUEADA" : "LOGIN_FALHA", null, ip);
+      await db.run("UPDATE users SET falhas=?, bloqueado_ate=? WHERE id=?", [f >= MAX_FALHAS ? 0 : f, f >= MAX_FALHAS ? Date.now() + BLOQUEIO_MS : 0, u.id]);
+      await audit(u.id, f >= MAX_FALHAS ? "CONTA_BLOQUEADA" : "LOGIN_FALHA", null, ip);
       throw new Erro("E-mail ou senha incorretos.", 401);
     }
-    db.prepare("UPDATE users SET falhas=0, bloqueado_ate=0 WHERE id=?").run(u.id);
-    audit(u.id, "LOGIN", null, ip); abrirSessao(ctx, u.id); return { ok: true };
+    await db.run("UPDATE users SET falhas=0, bloqueado_ate=0 WHERE id=?", [u.id]);
+    await audit(u.id, "LOGIN", null, ip); await abrirSessao(ctx, u.id); return { ok: true };
   }],
-  ["POST", /^\/api\/logout$/, ctx => {
-    const t = cookie(ctx.req, "sid"); if (t) db.prepare("DELETE FROM sessions WHERE token=?").run(sha(t));
+  ["POST", /^\/api\/logout$/, async ctx => {
+    const t = cookie(ctx.req, "sid"); if (t) await db.run("DELETE FROM sessions WHERE token=?", [sha(t)]);
     ctx.res.setHeader("Set-Cookie", "sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
-    if (ctx.user) audit(ctx.user.id, "LOGOUT", null, ctx.ip); return { ok: true };
+    if (ctx.user) await audit(ctx.user.id, "LOGOUT", null, ctx.ip); return { ok: true };
   }],
-  ["GET", /^\/api\/verificar-email$/, ctx => {
+  ["GET", /^\/api\/verificar-email$/, async ctx => {
     try {
-      const uid = consumirToken(ctx.query.token, "VERIFICAR");
-      db.prepare("UPDATE users SET email_verificado=1, atualizado_em=? WHERE id=?").run(agora(), uid);
-      audit(uid, "EMAIL_VERIFICADO", null, ctx.ip); notificar(uid, "E-mail confirmado", "Agora você já pode participar dos sorteios.");
+      const uid = await consumirToken(ctx.query.token, "VERIFICAR");
+      await db.run("UPDATE users SET email_verificado=1, atualizado_em=? WHERE id=?", [agora(), uid]);
+      await audit(uid, "EMAIL_VERIFICADO", null, ctx.ip); await notificar(uid, "E-mail confirmado", "Agora você já pode participar dos sorteios.");
       return { redirect: "/?msg=email-verificado" };
     } catch (e) { if (e instanceof Erro) return { redirect: "/?msg=link-invalido" }; throw e; }
   }],
-  ["POST", /^\/api\/reenviar-verificacao$/, ctx => {
+  ["POST", /^\/api\/reenviar-verificacao$/, async ctx => {
     limite("reenv:" + ctx.user.id, 5, 36e5);
-    const u = perfil(ctx.user.id); if (u.email_verificado) throw new Erro("Seu e-mail já está confirmado.");
+    const u = await perfil(ctx.user.id); if (u.email_verificado) throw new Erro("Seu e-mail já está confirmado.");
     if (!u.email) throw new Erro("Esta conta não tem e-mail cadastrado.");
-    enviarVerificacao(u); return { ok: true };
+    await enviarVerificacao(u); return { ok: true };
   }, "user"],
-  ["POST", /^\/api\/esqueci-senha$/, ctx => {
+  ["POST", /^\/api\/esqueci-senha$/, async ctx => {
     limite("esq:" + ctx.ip, 5, 36e5);
     const email = String(ctx.body.email || "").trim().toLowerCase();
-    const u = db.prepare("SELECT id, nome, email FROM users WHERE email=? AND status='ACTIVE'").get(email);
+    const u = await db.get("SELECT id, nome, email FROM users WHERE email=? AND status='ACTIVE'", [email]);
     if (u) {
-      const t = gerarToken(u.id, "REDEFINIR", 1); audit(u.id, "SENHA_RECUPERACAO_PEDIDA", null, ctx.ip);
+      const t = await gerarToken(u.id, "REDEFINIR", 1); await audit(u.id, "SENHA_RECUPERACAO_PEDIDA", null, ctx.ip);
       mail.enviar(u.email, "Redefinição de senha - GOATSKINS", "Olá, " + u.nome + "!\n\nPara criar uma nova senha, acesse:\n" + cfg.APP_URL + "/?redefinir=" + t + "\n\nO link vale por 1 hora. Se não foi você, ignore.");
     }
     return { ok: true }; // mesma resposta exista ou não o e-mail (não revela cadastros)
   }],
-  ["POST", /^\/api\/redefinir-senha$/, ctx => {
+  ["POST", /^\/api\/redefinir-senha$/, async ctx => {
     limite("red:" + ctx.ip, 10, 36e5);
     if (!senhaOk(ctx.body.senha)) throw new Erro(SENHA_MSG);
-    const uid = tx(() => consumirToken(ctx.body.token, "REDEFINIR"));
-    db.prepare("UPDATE users SET hash=?, falhas=0, bloqueado_ate=0, atualizado_em=? WHERE id=?").run(hashSenha(ctx.body.senha), agora(), uid);
-    encerrarSessoes(uid); audit(uid, "SENHA_REDEFINIDA", null, ctx.ip); notificar(uid, "Senha alterada", "Sua senha foi redefinida."); return { ok: true };
+    const uid = await tx(() => consumirToken(ctx.body.token, "REDEFINIR"));
+    await db.run("UPDATE users SET hash=?, falhas=0, bloqueado_ate=0, atualizado_em=? WHERE id=?", [hashSenha(ctx.body.senha), agora(), uid]);
+    await encerrarSessoes(uid); await audit(uid, "SENHA_REDEFINIDA", null, ctx.ip); await notificar(uid, "Senha alterada", "Sua senha foi redefinida."); return { ok: true };
   }],
   ["GET", /^\/api\/conta$/, ctx => perfil(ctx.user.id), "user"],
-  ["PUT", /^\/api\/conta$/, ctx => { // só nome e telefone: papel, e-mail e status nunca vêm do navegador
-    db.prepare("UPDATE users SET nome=?, telefone=?, atualizado_em=? WHERE id=?").run(txt(ctx.body.nome, 80, 2), telefoneOk(ctx.body.telefone), agora(), ctx.user.id);
-    audit(ctx.user.id, "PERFIL_ATUALIZADO", null, ctx.ip); return perfil(ctx.user.id);
+  ["PUT", /^\/api\/conta$/, async ctx => { // só nome e telefone: papel, e-mail e status nunca vêm do navegador
+    await db.run("UPDATE users SET nome=?, telefone=?, atualizado_em=? WHERE id=?", [txt(ctx.body.nome, 80, 2), telefoneOk(ctx.body.telefone), agora(), ctx.user.id]);
+    await audit(ctx.user.id, "PERFIL_ATUALIZADO", null, ctx.ip); return perfil(ctx.user.id);
   }, "user"],
-  ["POST", /^\/api\/conta\/senha$/, ctx => {
+  ["POST", /^\/api\/conta\/senha$/, async ctx => {
     limite("pw:" + ctx.user.id, 10, 36e5);
-    const u = db.prepare("SELECT hash FROM users WHERE id=?").get(ctx.user.id);
+    const u = await db.get("SELECT hash FROM users WHERE id=?", [ctx.user.id]);
     if (!confere(String(ctx.body.atual || ""), u.hash)) throw new Erro("Senha atual incorreta.", 401);
     if (!senhaOk(ctx.body.nova)) throw new Erro(SENHA_MSG);
-    db.prepare("UPDATE users SET hash=?, atualizado_em=? WHERE id=?").run(hashSenha(ctx.body.nova), agora(), ctx.user.id);
-    encerrarSessoes(ctx.user.id); abrirSessao(ctx, ctx.user.id); // derruba outros dispositivos
-    audit(ctx.user.id, "SENHA_ALTERADA", null, ctx.ip); return { ok: true };
+    await db.run("UPDATE users SET hash=?, atualizado_em=? WHERE id=?", [hashSenha(ctx.body.nova), agora(), ctx.user.id]);
+    await encerrarSessoes(ctx.user.id); await abrirSessao(ctx, ctx.user.id); // derruba outros dispositivos
+    await audit(ctx.user.id, "SENHA_ALTERADA", null, ctx.ip); return { ok: true };
   }, "user"],
-  ["POST", /^\/api\/conta\/excluir$/, ctx => { // LGPD: anonimiza a conta (os bilhetes ficam para manter a integridade dos sorteios)
-    const u = db.prepare("SELECT hash, role FROM users WHERE id=?").get(ctx.user.id);
+  ["POST", /^\/api\/conta\/excluir$/, async ctx => { // LGPD: anonimiza a conta (os bilhetes ficam para manter a integridade dos sorteios)
+    const u = await db.get("SELECT hash, role FROM users WHERE id=?", [ctx.user.id]);
     if (u.role !== "USER") throw new Erro("Contas de administração não podem ser excluídas por aqui.", 403);
     if (!confere(String(ctx.body.senha || ""), u.hash)) throw new Erro("Senha incorreta.", 401);
-    db.prepare("UPDATE users SET nome='Usuário removido', contato='removido-'||id, email=NULL, telefone=NULL, hash='', status='DELETED', atualizado_em=? WHERE id=?").run(agora(), ctx.user.id);
-    db.prepare("DELETE FROM notifications WHERE user_id=?").run(ctx.user.id); encerrarSessoes(ctx.user.id);
-    audit(ctx.user.id, "CONTA_EXCLUIDA", null, ctx.ip);
+    await db.run("UPDATE users SET nome='Usuário removido', contato='removido-'||id::text, email=NULL, telefone=NULL, hash='', status='DELETED', atualizado_em=? WHERE id=?", [agora(), ctx.user.id]);
+    await db.run("DELETE FROM notifications WHERE user_id=?", [ctx.user.id]); await encerrarSessoes(ctx.user.id);
+    await audit(ctx.user.id, "CONTA_EXCLUIDA", null, ctx.ip);
     ctx.res.setHeader("Set-Cookie", "sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"); return { ok: true };
   }, "user"],
-  ["GET", /^\/api\/notificacoes$/, ctx => db.prepare("SELECT id, titulo, texto, lida, criado_em FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 30").all(ctx.user.id), "user"],
-  ["POST", /^\/api\/notificacoes\/lidas$/, ctx => { db.prepare("UPDATE notifications SET lida=1 WHERE user_id=?").run(ctx.user.id); return { ok: true }; }, "user"]
+  ["GET", /^\/api\/notificacoes$/, ctx => db.all("SELECT id, titulo, texto, lida, criado_em FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 30", [ctx.user.id]), "user"],
+  ["POST", /^\/api\/notificacoes\/lidas$/, async ctx => { await db.run("UPDATE notifications SET lida=1 WHERE user_id=?", [ctx.user.id]); return { ok: true }; }, "user"]
 ];
 module.exports = { rotas, usuarioDaSessao, hashSenha, ipDe };

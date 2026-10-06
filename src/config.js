@@ -8,10 +8,11 @@ try { // leitor simples de .env (sem biblioteca)
   }
 } catch (e) { /* sem .env: usa os padrões */ }
 const e = process.env, PORT = Number(e.PORT) || 3000, DATA_DIR = e.DATA_DIR || path.join(raiz, "data");
-const cfgProd = { PRODUCAO: e.NODE_ENV === "production", url: (e.APP_URL || "").replace(/\/$/, ""), driver: e.EMAIL_DRIVER || "console" };
+const cfgProd = { PRODUCAO: e.NODE_ENV === "production", url: (e.APP_URL || "").replace(/\/$/, ""), driver: e.EMAIL_DRIVER || "console", dbUrl: e.DATABASE_URL || "" };
 if (cfgProd.PRODUCAO) { // falha cedo: melhor não subir do que subir inseguro
   const erros = [];
   if (!/^https:\/\//.test(cfgProd.url)) erros.push("APP_URL precisa começar com https://");
+  if (!/^postgres(ql)?:\/\//.test(cfgProd.dbUrl)) erros.push("DATABASE_URL ausente ou inválida (no Render, use a Internal Database URL do PostgreSQL)");
   if (cfgProd.driver === "console") erros.push("EMAIL_DRIVER=console grava links de login/senha em arquivo; use resend");
   if (e.MP_ACCESS_TOKEN && !e.MP_WEBHOOK_SECRET) erros.push("MP_WEBHOOK_SECRET ausente (sem ele não dá para validar o webhook)");
   if (cfgProd.driver === "resend" && !e.EMAIL_API_KEY) erros.push("EMAIL_API_KEY ausente");
@@ -21,7 +22,12 @@ if (cfgProd.PRODUCAO) { // falha cedo: melhor não subir do que subir inseguro
 module.exports = {
   raiz, PORT, DATA_DIR,
   APP_URL: (e.APP_URL || "http://localhost:" + PORT).replace(/\/$/, ""),
-  DATABASE_PATH: e.DATABASE_PATH || path.join(DATA_DIR, "goatskins.db"),
+  // PostgreSQL. Em produção DATABASE_URL é obrigatória (validada acima). Em desenvolvimento há um padrão local.
+  DATABASE_URL: e.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/goatskins",
+  // SSL: a Internal URL do Render não usa SSL; a External URL (host *.render.com) usa. Force com DATABASE_SSL=1 ou desligue com DATABASE_SSL=0.
+  DATABASE_SSL: e.DATABASE_SSL === "1" || (e.DATABASE_SSL !== "0" && /\.render\.com/i.test(e.DATABASE_URL || "")),
+  PG_POOL_MAX: Math.min(30, Math.max(2, Number(e.PG_POOL_MAX) || 10)),
+  SQLITE_PATH: e.SQLITE_PATH || e.DATABASE_PATH || path.join(DATA_DIR, "goatskins.db"), // só usado por scripts/migrar-sqlite.js
   EMAIL_DRIVER: e.EMAIL_DRIVER || "console",   // "console" (grava em data/emails.log) ou "resend"
   EMAIL_API_KEY: e.EMAIL_API_KEY || "",
   EMAIL_FROM: e.EMAIL_FROM || "GOATSKINS <onboarding@resend.dev>",

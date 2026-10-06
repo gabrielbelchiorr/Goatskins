@@ -2,17 +2,18 @@
    Rodar:  node --no-warnings server.js
    Criar o primeiro SUPER_ADMIN:  node --no-warnings server.js criar-admin email@exemplo.com SuaSenha123 "Seu Nome" */
 const http = require("node:http"), fs = require("node:fs"), path = require("node:path");
-const cfg = require("./src/config"), { db, agora, audit } = require("./src/db");
+const cfg = require("./src/config"), { db, iniciar, fechar, agora, audit } = require("./src/db");
 const { Erro, ipDe } = require("./src/http");
 const auth = require("./src/auth");
 
-if (process.argv[2] === "criar-admin") {
+async function criarAdmin() { // usa o banco do DATABASE_URL (em produção: rode no Shell do Render ou com a External URL)
   const [, , , email, senha, nome] = process.argv;
   if (!email || !senha || senha.length < 8) { console.log('Use: node --no-warnings server.js criar-admin email senha(8+ com letras e números) "Nome"'); process.exit(1); }
+  await iniciar();
   const e = email.toLowerCase(), h = auth.hashSenha(senha), now = agora();
-  if (db.prepare("SELECT 1 FROM users WHERE email=? OR contato=?").get(e, e)) db.prepare("UPDATE users SET hash=?, role='SUPER_ADMIN', status='ACTIVE', email_verificado=1, atualizado_em=? WHERE email=? OR contato=?").run(h, now, e, e);
-  else db.prepare("INSERT INTO users(nome,contato,email,hash,role,email_verificado,criado_em,atualizado_em) VALUES(?,?,?,?,'SUPER_ADMIN',1,?,?)").run(nome || "Admin", e, e, h, now, now);
-  audit(null, "ADMIN_CRIADO_PELO_TERMINAL", e); console.log("SUPER_ADMIN pronto:", e); process.exit(0);
+  if (await db.get("SELECT 1 FROM users WHERE email=? OR contato=?", [e, e])) await db.run("UPDATE users SET hash=?, role='SUPER_ADMIN', status='ACTIVE', email_verificado=1, atualizado_em=? WHERE email=? OR contato=?", [h, now, e, e]);
+  else await db.run("INSERT INTO users(nome,contato,email,hash,role,email_verificado,criado_em,atualizado_em) VALUES(?,?,?,?,'SUPER_ADMIN',1,?,?)", [nome || "Admin", e, e, h, now, now]);
+  await audit(null, "ADMIN_CRIADO_PELO_TERMINAL", e); console.log("SUPER_ADMIN pronto:", e); await fechar(); process.exit(0);
 }
 
 process.on("unhandledRejection", e => console.error("[rejeição não tratada]", e && e.message));
@@ -21,8 +22,8 @@ process.on("uncaughtException", e => { console.error("[erro fatal]", e); process
 const ROTAS = [...auth.rotas, ...require("./src/rifas").rotas, ...require("./src/pedidos").rotas, ...require("./src/admin").rotas];
 const PAPEIS_ADMIN = ["ADMIN", "SUPER_ADMIN"];
 
-function despachar(req, res, rota, body) {
-  const user = auth.usuarioDaSessao(req);
+async function despachar(req, res, rota, body) {
+  const user = await auth.usuarioDaSessao(req);
   for (const [metodo, rx, fn, guarda] of ROTAS) {
     if (metodo !== req.method) continue;
     const m = rota.match(rx); if (!m) continue;
@@ -77,5 +78,10 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { "Content-Type": TIPOS[ext] || "application/octet-stream", "Cache-Control": ext === ".jpg" ? "public, max-age=86400" : "no-cache" }); res.end(data);
   });
 });
-server.listen(cfg.PORT, () => console.log("GOATSKINS rodando em " + cfg.APP_URL));
-for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, () => server.close(() => { try { db.close(); } catch (e) { /* já fechado */ } process.exit(0); }));
+async function main() {
+  if (process.argv[2] === "criar-admin") return criarAdmin();
+  await iniciar(); // cria/atualiza as tabelas no PostgreSQL antes de aceitar requisições
+  server.listen(cfg.PORT, () => console.log("GOATSKINS rodando em " + cfg.APP_URL));
+}
+main().catch(e => { console.error("Falha ao iniciar:", e.message); process.exit(1); });
+for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, () => server.close(async () => { try { await fechar(); } catch (e) { /* já fechado */ } process.exit(0); }));
