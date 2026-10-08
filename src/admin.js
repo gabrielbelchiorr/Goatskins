@@ -74,6 +74,44 @@ const rotas = [
     });
     return { ok: true };
   }, "admin"],
+  /* Arquivar mantém campaigns, pedidos, logs e histórico; só esconde a campanha da vitrine.
+     A restrição a CLOSED/zero participantes evita esconder sorteios em andamento e sorteios de verdade. */
+  ["GET", /^\/api\/admin\/campanhas\/arquivadas$/, () =>
+    db.all(`SELECT c.id, c.premio, c.status, c.max,
+      (SELECT COUNT(*) FROM tickets t WHERE t.campaign_id=c.id) total,
+      (SELECT COUNT(*) FROM pedidos p WHERE p.campaign_id=c.id) pedidos
+      FROM campaigns c WHERE c.archived=1 ORDER BY c.id DESC`), "admin"],
+  ["POST", /^\/api\/admin\/campanhas\/(\d+)\/arquivar$/, async ctx => {
+    const id = Number(ctx.params[0]);
+    await tx(async () => {
+      await liberar(); // encerra reservas vencidas antes da checagem
+      const c = await db.get("SELECT status, archived FROM campaigns WHERE id=?", [id]);
+      if (!c) throw new Erro("Sorteio não encontrado.", 404);
+      if (c.archived) return; // operação idempotente
+      if (c.status !== "CLOSED") throw new Erro("Encerre as inscrições antes de arquivar o sorteio.", 409);
+      if ((await db.get("SELECT COUNT(*) n FROM tickets WHERE campaign_id=?", [id])).n)
+        throw new Erro("Este sorteio tem participantes. Ele não pode ser arquivado por esta opção.", 409);
+      if ((await db.get("SELECT COUNT(*) n FROM reservas WHERE campaign_id=?", [id])).n)
+        throw new Erro("Há números reservados. Aguarde a conclusão ou o vencimento dos pedidos.", 409);
+      if ((await db.get("SELECT COUNT(*) n FROM pedidos WHERE campaign_id=? AND status IN ('PENDING','PAID','REFUND_NEEDED')", [id])).n)
+        throw new Erro("Existem pagamentos pendentes, confirmados ou reembolsos a resolver. Não é seguro arquivar ainda.", 409);
+      await db.run("UPDATE campaigns SET archived=1 WHERE id=? AND archived=0", [id]);
+      await audit(ctx.user.id, "SORTEIO_ARQUIVADO", "campanha " + id, ctx.ip);
+    });
+    return { ok: true };
+  }, "admin"],
+  ["POST", /^\/api\/admin\/campanhas\/(\d+)\/desarquivar$/, async ctx => {
+    const id = Number(ctx.params[0]);
+    await tx(async () => {
+      const c = await db.get("SELECT status, archived FROM campaigns WHERE id=?", [id]);
+      if (!c) throw new Erro("Sorteio não encontrado.", 404);
+      if (!c.archived) return;
+      if (c.status !== "CLOSED") throw new Erro("Só é possível restaurar campanhas encerradas.", 409);
+      await db.run("UPDATE campaigns SET archived=0 WHERE id=? AND archived=1", [id]);
+      await audit(ctx.user.id, "SORTEIO_DESARQUIVADO", "campanha " + id, ctx.ip);
+    });
+    return { ok: true };
+  }, "admin"],
   ["POST", /^\/api\/admin\/campanhas\/(\d+)\/encerrar$/, async ctx => {
     const id = Number(ctx.params[0]), r = await db.run("UPDATE campaigns SET status='CLOSED' WHERE id=? AND status='OPEN'", [id]);
     if (!r.changes) throw new Erro("Só é possível encerrar sorteios abertos."); await audit(ctx.user.id, "SORTEIO_ENCERRADO", "campanha " + id, ctx.ip); return { ok: true };

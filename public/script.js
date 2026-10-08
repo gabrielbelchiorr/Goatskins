@@ -1,5 +1,5 @@
 /* GOATSKINS – tela (conversa com o servidor pela API) */
-let S = { eu: null, naoLidas: 0, s: { titulo: "", sub: "", banner: "", cores: { gold: "#d4aa55", copper: "#b8651f", slate: "#1f47e6", navy: "#0e1a33" } }, c: [] };
+let S = { eu: null, naoLidas: 0, s: { titulo: "", sub: "", banner: "", cores: { gold: "#d4aa55", copper: "#b8651f", slate: "#102440", navy: "#0e1a33" } }, c: [] };
 let view = "sorteios";
 const IMG_MAX = 900; // largura máxima das fotos enviadas (px)
 
@@ -57,9 +57,13 @@ async function rodar(err, fn) { try { await fn(); } catch (e) { err.textContent 
 /* ---------- Aparência vinda do servidor ---------- */
 function aplicarAparencia() {
   const s = S.s, root = document.documentElement.style;
-  if (s.cores.slate === "#3d4556") s.cores.slate = "#1f47e6"; // cinza antigo (padrão anterior) -> novo azul de destaque
+  // Paletas antigas eram muito claras no fundo; migramos SOMENTE a exibição para um azul profundo.
+  // Cores personalizadas pelo administrador continuam funcionando normalmente.
+  const corAnterior = String(s.cores.slate || "").toLowerCase();
+  if (corAnterior === "#1f47e6" || corAnterior === "#3d4556") s.cores.slate = "#102440";
   root.setProperty("--gold", s.cores.gold); root.setProperty("--copper", s.cores.copper);
-  root.setProperty("--slate", s.cores.slate); root.setProperty("--navy", s.cores.navy);
+  root.setProperty("--slate", s.cores.slate); root.setProperty("--site-bg", s.cores.slate);
+  root.setProperty("--navy", s.cores.navy);
   root.setProperty("--navy2", "color-mix(in srgb, " + s.cores.navy + " 82%, white)");
   $("heroTitle").textContent = s.titulo; $("heroSub").textContent = s.sub;
   const hero = $("inicio");
@@ -84,11 +88,11 @@ function cardSorteio(c) {
   const bar = h("div", "bar"), fill = h("span"); fill.style.width = pct + "%"; bar.append(fill);
   info.append(bar, h("p", "muted", c.total + " de " + c.max + " números " + (c.preco > 0 ? "vendidos" : "escolhidos") + " · " + pct + "%" + (c.reservados.length ? " · " + c.reservados.length + " reservado(s)" : "")));
   const btn = botao(fechado ? "Aguardando roleta" : restante <= 0 ? "Seus números: " + c.meus.join(", ") : c.preco > 0 ? "Comprar números" : "Escolher números", "", () => escolherNumeros(c));
-  btn.disabled = fechado || restante <= 0; info.append(btn);
+  btn.disabled = fechado || restante <= 0; btn.classList.add("buy-btn"); info.append(btn);
   if (admin()) {
     if (fechado && c.total > 0) info.append(botao("Girar roleta", "alt", () => roleta(c)));
-    if (!fechado) info.append(botao("Encerrar inscrições", "alt", async () => { if (confirm("Encerrar as inscrições de " + c.premio + "?")) { try { await api("/api/admin/campanhas/" + c.id + "/encerrar", "POST"); await carregar(); } catch (e) { alert(e.message); } } }));
-    info.append(botao("Editar", "alt", () => painel("sorteios", c)));
+    if (!fechado) info.append(botao("Encerrar inscrições", "alt sale-close-btn", async () => { if (confirm("Encerrar as inscrições de " + c.premio + "?")) { try { await api("/api/admin/campanhas/" + c.id + "/encerrar", "POST"); await carregar(); } catch (e) { alert(e.message); } } }));
+    info.append(botao("Editar", "alt sale-edit-btn", () => painel("sorteios", c)));
   }
   card.append(prize, info); return card;
 }
@@ -342,7 +346,45 @@ function abaSorteios(box, edit) {
   box.append(par(f.premio, f.desgaste), f.descricao.w, par(f.valor, f.preco), par(f.max, f.mpu), f.cor.w, f.foto.w, err, ok);
   if (edit) box.append(" ", botao("Excluir este sorteio", "alt", () => rodar(err, async () => {
     if (!confirm("Excluir " + c.premio + " e todos os números escolhidos?")) return; await api("/api/admin/campanhas/" + c.id, "DELETE"); await carregar(); painel("sorteios"); })));
-  S.c.filter(x => x.id !== c.id || !edit).forEach(x => box.append(h("div", "arow", x.premio + " (" + x.total + "/" + x.max + ", " + x.status + ")")));
+  if (edit && c.status === "CLOSED" && c.total === 0) {
+    box.append(" ", botao("Arquivar este sorteio", "alt", () => rodar(err, async () => {
+      if (!confirm("Arquivar " + c.premio + "? Ele sumirá da página pública, mas os pedidos serão preservados.")) return;
+      await api("/api/admin/campanhas/" + c.id + "/arquivar", "POST");
+      await carregar(); painel("sorteios");
+    })));
+  }
+  box.append(h("h4", null, "Sorteios não arquivados"));
+  S.c.filter(x => x.id !== c.id || !edit).forEach(x => {
+    const row = h("div", "arow"), info = h("span", null, x.premio + " (" + x.total + "/" + x.max + ", " + x.status + ")");
+    row.append(info, botao("Editar", "alt", () => painel("sorteios", x)));
+    if (x.status === "CLOSED" && x.total === 0)
+      row.append(botao("Arquivar", "alt", () => {
+        const errRow = h("span", "err"); row.append(errRow);
+        rodar(errRow, async () => {
+          if (!confirm("Arquivar " + x.premio + "? Os pedidos não serão apagados.")) return;
+          await api("/api/admin/campanhas/" + x.id + "/arquivar", "POST");
+          await carregar(); painel("sorteios");
+        });
+      }));
+    box.append(row);
+  });
+  const archivadas = h("div"); box.append(archivadas);
+  api("/api/admin/campanhas/arquivadas").then(lista => {
+    if (!archivadas.isConnected) return;
+    archivadas.append(h("h4", null, "Arquivados (visíveis apenas no Admin)"));
+    if (!lista.length) archivadas.append(h("p", "muted", "Nenhum sorteio arquivado."));
+    lista.forEach(x => {
+      const row = h("div", "arow"), errRow = h("span", "err");
+      row.append(h("span", null, x.premio + " · " + x.pedidos + " pedido(s) preservado(s)"),
+        botao("Restaurar", "alt", () => rodar(errRow, async () => {
+          if (!confirm("Restaurar " + x.premio + " para a página pública? Ele continuará encerrado.")) return;
+          await api("/api/admin/campanhas/" + x.id + "/desarquivar", "POST");
+          await carregar(); painel("sorteios");
+        })), errRow);
+      archivadas.append(row);
+    });
+  }).catch(e => archivadas.append(h("p", "err", "Não foi possível carregar os arquivados: " + e.message)));
+
 }
 
 async function abaPedidos(box) {

@@ -5,7 +5,7 @@ const { Erro, RE, txt, inteiro, foto, abrev, limite } = require("./http");
 const mail = require("./mail"), mp = require("./mercadopago");
 
 const PADRAO_VISUAL = { titulo: "GOATSKINS SORTEIOS", sub: "Escolha seus números e concorra a skins de CS.", banner: "",
-  cores: { gold: "#d4aa55", copper: "#b8651f", slate: "#1f47e6", navy: "#0e1a33" } };
+  cores: { gold: "#d4aa55", copper: "#b8651f", slate: "#3d4556", navy: "#0e1a33" } };
 const visual = async () => { const r = await db.get("SELECT v FROM settings WHERE k='visual'"); return r ? JSON.parse(r.v) : PADRAO_VISUAL; };
 
 /* Colunas públicas explícitas: a semente do sorteio NUNCA sai daqui antes da hora. */
@@ -20,7 +20,7 @@ async function estado(u) {
     u ? db.all("SELECT campaign_id c, n FROM tickets WHERE user_id=? ORDER BY n", [u.id]) : [],
     db.all("SELECT w.campaign_id, w.n, w.data, w.total, w.user_id, us.nome FROM winners w JOIN users us ON us.id=w.user_id"),
     u ? db.get("SELECT COUNT(*) n FROM notifications WHERE user_id=? AND lida=0", [u.id]) : { n: 0 },
-    visual(), db.all("SELECT " + COLS + " FROM campaigns ORDER BY id")]);
+    visual(), db.all("SELECT " + COLS + " FROM campaigns WHERE archived=0 ORDER BY id")]);
   reservas.forEach(r => (res[r.c] = res[r.c] || []).push(r.n)); tickets.forEach(r => (ocup[r.c] = ocup[r.c] || []).push(r.n));
   meusT.forEach(r => (meus[r.c] = meus[r.c] || []).push(r.n)); ganhadores.forEach(r => gan[r.campaign_id] = r);
   const nao = naoLidas.n, vis = { ...v }; vis.banner = vis.banner ? "/api/banner?v=" + vis.banner.length : "";

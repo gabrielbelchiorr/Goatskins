@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GOATSKINS SORTEIOS</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=goatskins-premium-1">
   <link rel="icon" href="logo.jpg">
   <meta name="description" content="Sorteios de skins de CS com prova de resultado verificável.">
 </head>
@@ -15,18 +15,23 @@
 
   <!-- Faixa do topo: ocupa toda a largura -->
   <header class="hero" id="inicio">
-    <div class="hero-txt">
-      <h1 id="heroTitle">GOATSKINS SORTEIOS</h1>
-      <p class="tag" id="heroSub">Escolha seus números e concorra a skins de CS.</p>
+    <div class="hero-identity">
+      <img class="hero-emblem" src="logo-marca.webp" alt="" width="58" height="62">
+      <div class="hero-txt">
+        <h1 id="heroTitle">GOATSKINS SORTEIOS</h1>
+        <p class="tag" id="heroSub">Escolha seus números e concorra a skins de CS.</p>
+      </div>
     </div>
-    <div class="cta"><a class="btn" href="#ativos">Ver sorteios</a></div>
-    <div id="heroStats" class="chips"></div>
+    <div class="hero-actions">
+      <div class="cta"><a class="btn" href="#ativos">Ver sorteios</a></div>
+      <div id="heroStats" class="chips"></div>
+    </div>
   </header>
 
   <div class="shell">
     <!-- Menu lateral fixo -->
     <aside class="side" id="menuLateral">
-      <a class="brand" href="#" aria-label="GOATSKINS"><img src="logo.jpg" alt="GOATSKINS"></a>
+      <a class="brand" href="#" aria-label="GOATSKINS"><img src="logo-marca.webp" alt="GOATSKINS"></a>
       <nav class="menu">
         <button id="loginBtn" class="nv login" type="button">Entrar / Cadastrar</button>
         <button class="nv on" data-view="sorteios" type="button">Sorteios</button>
@@ -90,6 +95,6 @@
       <div id="modalBody"></div>
     </div>
   </div>
-  <script src="script.js"></script>
+  <script src="script.js?v=goatskins-premium-1"></script>
 </body>
 </html>

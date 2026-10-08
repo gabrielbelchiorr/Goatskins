@@ -101,7 +101,10 @@ CREATE INDEX IF NOT EXISTS ix_tickets_camp_user ON tickets(campaign_id, user_id)
 CREATE INDEX IF NOT EXISTS ix_sessions_expira ON sessions(expira);
 CREATE INDEX IF NOT EXISTS ix_tokens_expira ON tokens_email(expira);
 CREATE INDEX IF NOT EXISTS ix_audit_quando ON audit_logs(id DESC);
-CREATE INDEX IF NOT EXISTS ix_pedidos_pending ON pedidos(expira_em) WHERE status='PENDING';`
+CREATE INDEX IF NOT EXISTS ix_pedidos_pending ON pedidos(expira_em) WHERE status='PENDING';`,
+/* 3: arquivo reversível de campanhas, sem excluir pedidos ou participantes. */ `
+ALTER TABLE campaigns ADD COLUMN archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1));
+CREATE INDEX IF NOT EXISTS ix_camp_archived ON campaigns(archived, status);`
 /* próximas alterações: acrescente novos itens a este array (nunca edite os já aplicados) */
 ];
 
