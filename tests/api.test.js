@@ -1,14 +1,28 @@
-/* Testes automáticos (sem bibliotecas):  npm test   ou   node --no-warnings --test tests/ */
-const { test, before, after } = require("node:test");
+/* Testes de API ponta a ponta contra um PostgreSQL REAL e DESCARTÁVEL:  TEST_DATABASE_URL=postgresql://.../goatskins_test npm run test:api
+   ATENÇÃO: o teste APAGA todas as tabelas desse banco. Por segurança ele se recusa a rodar se o nome do banco não contiver "test"
+   (assim um .env apontando para produção nunca é tocado). Sem TEST_DATABASE_URL os testes aparecem como "skipped". */
+const { test: _test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs"), os = require("node:os"), path = require("node:path"), crypto = require("node:crypto");
 
+const TEST_URL = process.env.TEST_DATABASE_URL || "", PODE = !!TEST_URL;
+if (PODE && !/test/i.test(decodeURIComponent(new URL(TEST_URL).pathname))) throw new Error('TEST_DATABASE_URL precisa apontar para um banco cujo nome contenha "test" (o teste apaga as tabelas dele).');
+const test = (nome, fn) => _test(nome, { skip: PODE ? false : "defina TEST_DATABASE_URL (banco PostgreSQL descartável)" }, fn);
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), "goat-")), PORT = 3300 + Math.floor(Math.random() * 500), BASE = "http://localhost:" + PORT;
 const MP_PORT = 4300 + Math.floor(Math.random() * 400), SEGREDO = "segredo-de-teste", TOKEN = "TOKEN-DE-TESTE-NAO-VAZAR";
-const env = { ...process.env, DATA_DIR: DIR, PORT: String(PORT), TESTE: "1", EMAIL_DRIVER: "console", APP_URL: BASE, NODE_ENV: "test",
+const env = { ...process.env, DATABASE_URL: TEST_URL, DATABASE_SSL: "0", DATA_DIR: DIR, PORT: String(PORT), TESTE: "1", EMAIL_DRIVER: "console", APP_URL: BASE, NODE_ENV: "test",
   MP_ACCESS_TOKEN: TOKEN, MP_WEBHOOK_SECRET: SEGREDO, MP_API_BASE: "http://localhost:" + MP_PORT, RESERVA_SEGUNDOS: "3" };
 let srv;
+/* Consulta direta ao banco de teste, de forma síncrona (processo filho com o módulo "pg"). Aceita "?" como parâmetro. */
+function sqlSync(sql, params = []) {
+  const script = 'const {Pool,types}=require("pg");types.setTypeParser(20,Number);const q=JSON.parse(process.env.Q),p=new Pool({connectionString:process.env.TEST_DATABASE_URL});' +
+    'p.query(q.sql,q.params).then(r=>{process.stdout.write(JSON.stringify(Array.isArray(r)?[]:r.rows));return p.end()}).catch(e=>{console.error(e.message);process.exit(1)})';
+  const r = spawnSync("node", ["-e", script], { cwd: path.join(__dirname, ".."), encoding: "utf8", env: { ...process.env, TEST_DATABASE_URL: TEST_URL, Q: JSON.stringify({ sql, params }) } });
+  if (r.status !== 0) throw new Error("sqlSync falhou: " + r.stderr);
+  return JSON.parse(r.stdout || "[]");
+}
+const dbLer = (sql, ...a) => { let i = 0; return sqlSync(sql.replace(/\?/g, () => "$" + (++i)), a); };
 /* Mercado Pago FALSO (só para teste): imita POST /v1/orders e GET /v1/orders/:id da Orders API */
 const http = require("node:http"), mpOrders = new Map(), mpChaves = new Map(); let mpSeq = 0, mpAuthErrada = 0;
 const mpServer = http.createServer((req, res) => {
@@ -61,15 +75,16 @@ async function novoSorteio(adm, over = {}) {
   assert.equal(r.status, 200); const e = await adm.get("/api/estado"); return e.dados.c[e.dados.c.length - 1];
 }
 
-before(() => new Promise(r => mpServer.listen(MP_PORT, r)));
-before(async () => {
+PODE && before(() => new Promise(r => mpServer.listen(MP_PORT, r)));
+PODE && before(async () => {
+  sqlSync("DROP SCHEMA public CASCADE; CREATE SCHEMA public;"); // banco de teste limpo a cada execução
   const r = spawnSync("node", ["--no-warnings", "server.js", "criar-admin", "admin@teste.com", "Admin1234", "Chefe"], { env, encoding: "utf8" });
   assert.match(r.stdout, /SUPER_ADMIN pronto/);
   srv = spawn("node", ["--no-warnings", "server.js"], { env, stdio: "ignore" });
   for (let i = 0; i < 50; i++) { try { await fetch(BASE + "/api/estado"); return; } catch (e) { await new Promise(r => setTimeout(r, 100)); } }
   throw new Error("servidor não subiu");
 });
-after(() => { srv.kill(); mpServer.close(); fs.rmSync(DIR, { recursive: true, force: true }); });
+PODE && after(() => { srv.kill(); mpServer.close(); fs.rmSync(DIR, { recursive: true, force: true }); });
 
 test("cadastro valida senha fraca, falta de consentimento e e-mail repetido", async () => {
   const c = cliente(), base = { nome: "Ana Teste", email: "ana@teste.com", senha: "Senha1234", maior18: true, consentimento: true };
@@ -82,8 +97,7 @@ test("cadastro valida senha fraca, falta de consentimento e e-mail repetido", as
 test("senha não fica em texto puro e o e-mail de verificação é gerado", async () => {
   const { email } = await novoUsuario(false);
   assert.match(emailsDe(email).pop(), /verificar-email\?token=/);
-  const { DatabaseSync } = require("node:sqlite"); const d = new DatabaseSync(path.join(DIR, "goatskins.db"));
-  const h = d.prepare("SELECT hash FROM users WHERE email=?").get(email).hash; d.close();
+  const h = dbLer("SELECT hash FROM users WHERE email=?", email)[0].hash;
   assert.ok(h.includes(":") && !h.includes("Senha1234"));
 });
 
@@ -242,7 +256,6 @@ const pedir = async (c, s, numeros, extra = {}) => c.post("/api/campanhas/" + s.
 const mpIdDe = pedido => { for (const [id, o] of mpOrders) if (o._recebido && o.external_reference) { const p = pedido; if (o.external_reference.length === 32 && p) return id; } };
 const ultimoMp = () => [...mpOrders.keys()].pop();
 const estadoDe = async (c, s) => (await c.get("/api/estado")).dados.c.find(x => x.id === s.id);
-const dbLer = (sql, ...a) => { const { DatabaseSync } = require("node:sqlite"), d = new DatabaseSync(path.join(DIR, "goatskins.db")); try { return d.prepare(sql).all(...a); } finally { d.close(); } };
 
 test("pagamento: preço vem do banco; campos forjados (total, status, preço) são ignorados", async () => {
   const adm = await adminLogado(), s = await pagoSorteio(adm), { c } = await novoUsuario();
@@ -274,7 +287,25 @@ test("webhook: sem assinatura, assinatura errada ou id adulterado são rejeitado
   assert.equal((await webhook(id, assinar(id, "r1", "segredo-errado"))).status, 401);
   assert.equal((await webhook(id, assinar("ORD999999999999OUTRO"))).status, 401);          // assinou outro id
   assert.equal((await webhook(id, { ...assinar(id), "x-signature": "ts=1,v1=abc" })).status, 401);
-  assert.equal((await webhook(id, assinar(id), "type=order")).status, 401);               // sem data.id
+  // ID no corpo, com assinatura válida: aceito.
+assert.equal((await webhook(id, assinar(id), "type=order")).status, 200);
+
+// ID ausente tanto na URL quanto no corpo: rejeitado.
+const semId = await fetch(BASE + "/api/webhooks/mercadopago?type=order", {
+  method: "POST",
+  headers: {
+    ...assinar(id),
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({ type: "order", data: {} })
+});
+assert.equal(semId.status, 401);
+
+// ID adulterado no corpo: rejeitado.
+assert.equal(
+  (await webhook("ORD999999999999OUTRO", assinar(id), "type=order")).status,
+  401
+);               // sem data.id
   mpEstado(id, "pago");
   assert.equal((await webhook(id, {})).status, 401);                                       // mesmo com o pagamento real, sem assinatura não conta
   assert.deepEqual((await estadoDe(c, s)).meus, []);
@@ -395,4 +426,136 @@ test("falha do Mercado Pago ao criar o Pix libera os números e não vaza detalh
   assert.equal(r.status, 502); assert.ok(!JSON.stringify(r.dados).includes("localhost") && !JSON.stringify(r.dados).includes(TOKEN));
   assert.deepEqual((await estadoDe(c, s)).reservados, []);
   assert.equal((await pedir(c, s, [1])).status, 200);
+});
+
+
+/* ===== Auditoria pré-lançamento: usuário malicioso ===== */
+const idDe = email => dbLer("SELECT id FROM users WHERE email=?", email)[0].id;
+
+test("login: 30 tentativas SIMULTÂNEAS não burlam o bloqueio (no máximo 5 senhas chegam a ser testadas)", async () => {
+  const { email } = await novoUsuario();
+  const rs = await Promise.all(Array.from({ length: 30 }, () => cliente().post("/api/login", { email, senha: "errada123" })));
+  const n401 = rs.filter(r => r.status === 401).length, n429 = rs.filter(r => r.status === 429).length;
+  assert.ok(n401 <= 5, "foram testadas " + n401 + " senhas"); assert.equal(n401 + n429, 30);
+  assert.equal((await cliente().post("/api/login", { email, senha: "Senha1234" })).status, 429);   // nem a senha certa entra durante o bloqueio
+});
+
+test("cookie de sessão: HttpOnly, SameSite=Lax; o token não fica em texto puro no banco", async () => {
+  const { email } = await novoUsuario();
+  const r = await fetch(BASE + "/api/login", { method: "POST", headers: { "Content-Type": "application/json", "X-Requested-With": "goatskins" }, body: JSON.stringify({ email, senha: "Senha1234" }) });
+  const ck = r.headers.get("set-cookie"); assert.match(ck, /HttpOnly/); assert.match(ck, /SameSite=Lax/); assert.match(ck, /Path=\//);
+  assert.equal(dbLer("SELECT COUNT(*) n FROM sessions WHERE token=?", ck.match(/sid=([^;]+)/)[1])[0].n, 0);   // só o hash do token é guardado
+});
+
+test("privacidade: respostas públicas e de conta não expõem e-mails, hashes nem a semente antes do sorteio", async () => {
+  const adm = await adminLogado(), s = await novoSorteio(adm, { max: 2 }), a = await novoUsuario(), b = await novoUsuario();
+  await a.c.post("/api/campanhas/" + s.id + "/numeros", { numeros: [1] });
+  const antes = JSON.stringify((await cliente().get("/api/estado")).dados) + JSON.stringify((await cliente().get("/api/campanhas/" + s.id + "/verificacao")).dados);
+  for (const x of ["@teste.com", '"hash"', '"seed"', "scrypt", "senha"]) assert.ok(!antes.includes(x), x);
+  await b.c.post("/api/campanhas/" + s.id + "/numeros", { numeros: [2] }); assert.equal((await adm.post("/api/admin/campanhas/" + s.id + "/sortear")).status, 200);
+  const depois = JSON.stringify((await cliente().get("/api/estado")).dados) + JSON.stringify((await cliente().get("/api/campanhas/" + s.id + "/verificacao")).dados);
+  assert.ok(!depois.includes("@teste.com") && !depois.includes('"hash"'));
+  const eu = (await a.c.get("/api/conta")).dados; assert.ok(!("hash" in eu) && !("falhas" in eu)); assert.equal(eu.role, "USER");
+  assert.ok(!JSON.stringify((await adm.get("/api/admin/usuarios")).dados).includes('"hash"'));
+  const notas = JSON.stringify((await a.c.get("/api/notificacoes")).dados); assert.ok(!notas.includes("@teste.com"));
+});
+
+test("erros nunca mostram stack, SQL ou caminhos de arquivo", async () => {
+  const adm = await adminLogado(), { c } = await novoUsuario();
+  const respostas = [await c.get("/api/pedidos/zzzz"), await c.post("/api/campanhas/abc/pedidos", {}), await adm.put("/api/admin/campanhas/1", { premio: 5 }),
+    await cliente().post("/api/registro", { nome: "x", email: "y" }), await c.post("/api/campanhas/1/numeros", { numeros: "'; DROP TABLE users;--" })];
+  for (const r of respostas) assert.ok(!/node_modules|\.js:\d+|SELECT |INSERT |syntax error|ECONN|pg_/i.test(JSON.stringify(r.dados)), JSON.stringify(r.dados));
+  assert.equal((await adm.get("/api/admin/dashboard")).status, 200);   // continua tudo de pé
+});
+
+test("injeção de SQL em campos de texto e IDs não altera dados nem derruba nada", async () => {
+  const adm = await adminLogado(), antes = dbLer("SELECT COUNT(*) n FROM users")[0].n;
+  const r = await cliente().post("/api/registro", { nome: "Robert'); DROP TABLE users;--", email: "sqli@teste.com", senha: "Senha1234", maior18: true, consentimento: true });
+  assert.ok([200, 400].includes(r.status)); assert.ok(dbLer("SELECT COUNT(*) n FROM users")[0].n >= antes);
+  assert.equal((await cliente().post("/api/login", { email: "' OR '1'='1", senha: "' OR '1'='1" })).status, 401);
+  assert.equal((await adm.get("/api/admin/campanhas/1%20OR%201=1/participantes")).status, 404);
+});
+
+test("pedido: números repetidos ou como texto não burlam preço nem limite", async () => {
+  const adm = await adminLogado(), s = await pagoSorteio(adm, { max_por_usuario: 3 }), { c } = await novoUsuario();
+  const r = await pedir(c, s, [3, 3, "3", 3.0]); assert.equal(r.status, 200); assert.deepEqual(r.dados.numeros, [3]); assert.equal(r.dados.total, 10);
+  assert.equal((await pedir(c, s, ["1e1"])).status, 400); assert.equal((await pedir(c, s, [true])).status, 400); assert.equal((await pedir(c, s, [[4]])).status, 400);
+  assert.equal((await pedir(c, s, [4, 5, 6])).status, 400);                                   // 1 (reservado) + 3 > limite de 3
+});
+
+test("concorrência: o mesmo usuário disparando 8 pedidos ao mesmo tempo só consegue 3 abertos", async () => {
+  const adm = await adminLogado(), s = await pagoSorteio(adm, { max: 20, max_por_usuario: 10 }), { c } = await novoUsuario();
+  const rs = await Promise.all([1, 2, 3, 4, 5, 6, 7, 8].map(n => pedir(c, s, [n])));
+  assert.equal(rs.filter(r => r.status === 200).length, 3); assert.equal(rs.filter(r => r.status === 429).length, 5);
+  assert.equal(dbLer("SELECT COUNT(*) n FROM reservas WHERE campaign_id=?", s.id)[0].n, 3);
+});
+
+test("concorrência: pedidos com números sobrepostos nunca reservam o mesmo número duas vezes", async () => {
+  const adm = await adminLogado(), s = await pagoSorteio(adm, { max: 10, max_por_usuario: 3 }), pessoas = await Promise.all(Array.from({ length: 8 }, () => novoUsuario()));
+  const alvos = [[1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7], [7, 8], [8, 1]];
+  const rs = await Promise.all(pessoas.map((p, i) => pedir(p.c, s, alvos[i])));
+  const reservados = dbLer("SELECT n FROM reservas WHERE campaign_id=?", s.id).map(x => x.n);
+  assert.equal(new Set(reservados).size, reservados.length);                                  // nenhum número repetido
+  assert.equal(reservados.length, rs.filter(r => r.status === 200).length * 2);               // cada pedido aceito reservou os 2 números inteiros (tudo ou nada)
+  assert.equal(dbLer("SELECT COUNT(*) n FROM pedidos WHERE campaign_id=? AND status='PENDING'", s.id)[0].n, rs.filter(r => r.status === 200).length);
+});
+
+test("excluir conta é barrado enquanto houver pedido Pix pendente", async () => {
+  const adm = await adminLogado(), s = await pagoSorteio(adm), { c } = await novoUsuario();
+  assert.equal((await pedir(c, s, [1])).status, 200);
+  assert.equal((await c.post("/api/conta/excluir", { senha: "Senha1234" })).status, 409); assert.equal((await c.get("/api/conta")).status, 200);
+});
+
+test("admin não consegue reduzir as vagas abaixo de números vendidos OU reservados", async () => {
+  const adm = await adminLogado(), s = await pagoSorteio(adm, { max: 10 }), { c } = await novoUsuario();
+  await pedir(c, s, [8]);
+  const edit = { premio: "Skin Teste", max: 5, max_por_usuario: 1, preco_numero: 10 };
+  assert.equal((await adm.put("/api/admin/campanhas/" + s.id, edit)).status, 400);
+  assert.equal((await adm.put("/api/admin/campanhas/" + s.id, { ...edit, max: 8 })).status, 200);
+});
+
+test("usuário suspenso perde a sessão na hora e não consegue entrar", async () => {
+  const adm = await adminLogado(), { c, email } = await novoUsuario();
+  assert.equal((await adm.put("/api/admin/usuarios/" + idDe(email) + "/status", { status: "SUSPENDED" })).status, 200);
+  assert.equal((await c.get("/api/conta")).status, 401); assert.equal((await cliente().post("/api/login", { email, senha: "Senha1234" })).status, 403);
+});
+
+test("hierarquia: ADMIN comum não promove ninguém, não mexe em outro ADMIN nem no SUPER_ADMIN", async () => {
+  const sup = await adminLogado(), a = await novoUsuario(), b = await novoUsuario(), idA = idDe(a.email), idB = idDe(b.email), idSup = idDe("admin@teste.com");
+  assert.equal((await sup.put("/api/admin/usuarios/" + idA + "/papel", { role: "ADMIN" })).status, 200);
+  assert.equal((await a.c.get("/api/admin/dashboard")).status, 200);                               // o papel vale na próxima requisição
+  assert.equal((await a.c.put("/api/admin/usuarios/" + idB + "/papel", { role: "ADMIN" })).status, 403);
+  assert.equal((await a.c.put("/api/admin/usuarios/" + idSup + "/status", { status: "SUSPENDED" })).status, 403);
+  assert.equal((await a.c.put("/api/admin/usuarios/" + idA + "/papel", { role: "SUPER_ADMIN" })).status, 403);
+  assert.equal((await sup.put("/api/admin/usuarios/" + idB + "/papel", { role: "SUPER_ADMIN" })).status, 400);   // ninguém vira SUPER_ADMIN pela API
+  assert.equal((await sup.put("/api/admin/usuarios/" + idB + "/papel", { role: "ADMIN" })).status, 200);
+  assert.equal((await a.c.put("/api/admin/usuarios/" + idB + "/status", { status: "SUSPENDED" })).status, 403);     // ADMIN não suspende outro ADMIN
+  assert.equal((await sup.put("/api/admin/usuarios/" + idA + "/papel", { role: "USER" })).status, 200);
+  assert.equal((await a.c.get("/api/admin/dashboard")).status, 403);                               // rebaixado: perde o acesso na hora
+});
+
+test("e-mail de redefinição usa fragmento (#) e e-mails de aviso são gerados (pagamento, troca de senha)", async () => {
+  const adm = await adminLogado(), s = await pagoSorteio(adm), { c, email } = await novoUsuario();
+  await cliente().post("/api/esqueci-senha", { email }); assert.match(emailsDe(email).pop(), /\/#redefinir=[a-f0-9]{64}/);
+  const p = (await pedir(c, s, [2])).dados; mpEstado(ultimoMp(), "pago"); await webhook(ultimoMp());
+  assert.equal((await c.get("/api/pedidos/" + p.id)).dados.status, "PAID");
+  await new Promise(r => setTimeout(r, 300)); assert.match(emailsDe(email).pop(), /Pagamento confirmado/);
+  assert.equal((await c.post("/api/conta/senha", { atual: "Senha1234", nova: "OutraSenha77" })).status, 200);
+  await new Promise(r => setTimeout(r, 300)); assert.match(emailsDe(email).pop(), /senha foi alterada/);
+});
+
+test("webhook: Order que existe no Mercado Pago mas não é de nenhum pedido nosso é registrada e ignorada (200); tipo estranho também", async () => {
+  const antes = dbLer("SELECT COUNT(*) n FROM tickets")[0].n, id = "ORD000000099999TEST";
+  mpOrders.set(id, { id, external_reference: "d".repeat(32), status: "processed", status_detail: "accredited", total_amount: "10.00", total_paid_amount: "10.00", transactions: { payments: [{ status: "processed" }] } });
+  assert.equal((await webhook(id)).status, 200);
+  const r = await fetch(BASE + "/api/webhooks/mercadopago?data.id=" + id + "&type=payment", { method: "POST", headers: assinar(id), body: "{}" }); assert.equal(r.status, 200);
+  assert.equal(dbLer("SELECT COUNT(*) n FROM tickets")[0].n, antes);
+  assert.ok(dbLer("SELECT COUNT(*) n FROM audit_logs WHERE acao='WEBHOOK_PEDIDO_DESCONHECIDO'")[0].n >= 1);
+  assert.equal((await webhook("ORD000000088888NAOEXISTE")).status, 502);   // o MP não conhece essa Order: 5xx faz o MP tentar de novo; nada é criado
+});
+
+test("migrações: restrições da migração 2 estão ativas no banco", () => {
+  assert.equal(dbLer("SELECT COUNT(*) n FROM schema_migrations")[0].n >= 2, true);
+  assert.throws(() => sqlSync("UPDATE users SET role='DONO' WHERE id=1"), /ck_users_role/);
+  assert.throws(() => sqlSync("INSERT INTO tickets(campaign_id,user_id,n,criado_em) VALUES(1,1,0,'x')"), /ck_tickets_n|violates/);
 });

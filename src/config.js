@@ -16,6 +16,7 @@ if (cfgProd.PRODUCAO) { // falha cedo: melhor não subir do que subir inseguro
   if (cfgProd.driver === "console") erros.push("EMAIL_DRIVER=console grava links de login/senha em arquivo; use resend");
   if (e.MP_ACCESS_TOKEN && !e.MP_WEBHOOK_SECRET) erros.push("MP_WEBHOOK_SECRET ausente (sem ele não dá para validar o webhook)");
   if (cfgProd.driver === "resend" && !e.EMAIL_API_KEY) erros.push("EMAIL_API_KEY ausente");
+  if (e.TRUST_PROXY !== "1") console.warn("[config] TRUST_PROXY=1 não está ligado: atrás do proxy do Render todos os usuários pareceriam ter o mesmo IP (limites de tentativa e logs ficam errados).");
   if (e.TESTE === "1") erros.push("TESTE=1 desliga o limite de tentativas; não use em produção");
   if (e.MP_TESTE_APRO === "1") erros.push("MP_TESTE_APRO=1 é só para testes locais; remova do ambiente de produção");
   if (erros.length) { console.error("Configuração de produção inválida:\n - " + erros.join("\n - ")); process.exit(1); }
@@ -34,6 +35,7 @@ module.exports = {
   EMAIL_FROM: e.EMAIL_FROM || "GOATSKINS <onboarding@resend.dev>",
   PRODUCAO: e.NODE_ENV === "production",
   TRUST_PROXY: e.TRUST_PROXY === "1",           // ligue só se houver proxy confiável (Caddy, Nginx)
+  TRUST_PROXY_HOPS: Math.min(5, Math.max(1, Number(e.TRUST_PROXY_HOPS) || 1)), // quantos proxies confiáveis existem na frente (ver ipDe em http.js)
   TESTE: e.TESTE === "1",
   // Mercado Pago: segredos só no servidor (.env). Em produção a URL da API é fixa.
   MP_ACCESS_TOKEN: e.MP_ACCESS_TOKEN || "", MP_WEBHOOK_SECRET: e.MP_WEBHOOK_SECRET || "",

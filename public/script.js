@@ -15,7 +15,7 @@ async function api(url, method, body) {
   const r = await fetch(url, { method: method || "GET", credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-Requested-With": "goatskins" }, body: body ? JSON.stringify(body) : undefined });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.erro || "Erro " + r.status);
+  if (!r.ok) throw new Error(d.erro || (r.status === 429 ? "Muitas tentativas. Aguarde um pouco." : r.status >= 500 ? "Erro no servidor. Tente novamente em instantes." : "Erro " + r.status));
   return d;
 }
 async function carregar() { S = await api("/api/estado"); render(); }
@@ -189,12 +189,13 @@ function escolherNumeros(c) {
     grid.append(b);
   }
   ok.addEventListener("click", async () => {
+    if (ok.disabled) return; const rotulo = ok.textContent; ok.disabled = true; ok.textContent = c.preco > 0 ? "Gerando Pix..." : "Confirmando..."; err.textContent = ""; // evita clique duplo (dois pedidos)
     try {
       if (c.preco > 0) { const p = await api("/api/campanhas/" + c.id + "/pedidos", "POST", { numeros: [...sel] }); await carregar(); return pedidoModal(p); }
       const r = await api("/api/campanhas/" + c.id + "/numeros", "POST", { numeros: [...sel] }); await carregar();
       openModal(false, h("h3", null, "Você está dentro!"), h("p", "center", "Seus números em " + c.premio + ":"), h("div", "big", r.numeros.join(", ")),
         h("p", "muted center", r.completo ? "Vagas completas! O sorteio vai para a roleta em breve." : "Acompanhe em Meus bilhetes."));
-    } catch (e) { err.textContent = e.message; await carregar(); }
+    } catch (e) { err.textContent = e.message; ok.disabled = sel.size === 0; ok.textContent = rotulo; await carregar(); }
   });
   openModal(false, h("h3", null, c.premio), h("p", "muted", "Escolha até " + restante + " número(s). Riscado = indisponível" + (c.preco > 0 ? " (inclui números reservados por quem está pagando). Cada número custa " + brl(c.preco) + "." : ".")), grid, err, ok);
 }
@@ -216,12 +217,12 @@ function pedidoModal(p0) {
     if (p.pix.qr_code) { const cp = botao("Copiar código Pix", "", () => { codigo.select(); (navigator.clipboard ? navigator.clipboard.writeText(codigo.value) : Promise.reject()).then(() => { cp.textContent = "Copiado!"; }, () => { document.execCommand("copy"); }); }); box.append(codigo, cp); }
     if (p.pix.ticket_url) { const a = h("a", null, "Abrir página de pagamento"); a.href = p.pix.ticket_url; a.target = "_blank"; a.rel = "noopener noreferrer"; box.append(h("p", null), a); }
     box.append(h("p", "muted", "Números reservados até " + new Date(p.expira_em).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) + ". Esta tela atualiza sozinha quando o pagamento for confirmado."), err,
-      botao("Já paguei", "alt", () => rodar(err, async () => { p = await api("/api/pedidos/" + p.id + "/atualizar", "POST"); desenhar(); if (p.status === "PAID") carregar(); })));
+      botao("Já paguei", "alt", () => rodar(err, async () => { p = await api("/api/pedidos/" + p.id + "/atualizar", "POST"); desenhar(); if (p.status === "PAID") { carregar(); if (view === "bilhetes") carregarPedidos(); } })));
   };
   desenhar(); openModal(false, box);
   if (p.status === "PENDING") timer = setInterval(async () => {
     if ($("modal").hidden || !box.isConnected) return parar();
-    try { n++; p = n % 3 === 0 ? await api("/api/pedidos/" + p.id + "/atualizar", "POST") : await api("/api/pedidos/" + p.id); desenhar(); if (p.status === "PAID") carregar(); } catch (e) { /* tenta de novo no próximo ciclo */ }
+    try { n++; p = n % 3 === 0 ? await api("/api/pedidos/" + p.id + "/atualizar", "POST") : await api("/api/pedidos/" + p.id); desenhar(); if (p.status === "PAID") { carregar(); if (view === "bilhetes") carregarPedidos(); } } catch (e) { /* tenta de novo no próximo ciclo */ }
   }, 5000);
 }
 async function carregarPedidos() {
@@ -392,6 +393,7 @@ function abaVisual(box) {
 
 /* ---------- Início ---------- */
 $("closeBtn").addEventListener("click", closeModal);
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("modal").hidden) closeModal(); });
 $("modal").addEventListener("click", e => { if (e.target === $("modal")) closeModal(); });
 document.querySelectorAll(".nv[data-view]").forEach(b => b.addEventListener("click", () => {
   view = b.dataset.view; if (view === "bilhetes" && !S.eu) authModal("entrar"); render(); window.scrollTo(0, 0); if (view === "bilhetes") carregarPedidos();
@@ -403,6 +405,9 @@ carregar().then(() => {
   const q = new URLSearchParams(location.search);
   if (q.get("msg") === "email-verificado") aviso("E-mail confirmado!", "Pronto, agora você já pode participar dos sorteios.");
   else if (q.get("msg") === "link-invalido") aviso("Link inválido", "Este link expirou ou já foi usado. Peça um novo em 'Minha conta'.");
-  else if (q.get("redefinir")) authModal("reset:" + q.get("redefinir"));
-  if (q.toString()) history.replaceState(null, "", location.pathname);
+  else {
+    const tk = q.get("redefinir") || new URLSearchParams(location.hash.slice(1)).get("redefinir");
+    if (tk && /^[a-f0-9]{64}$/.test(tk)) authModal("reset:" + tk);
+  }
+  if (q.toString() || location.hash) history.replaceState(null, "", location.pathname);
 }).catch(() => aviso("Servidor fora do ar", "Não consegui falar com o servidor. Confira se ele está rodando."));

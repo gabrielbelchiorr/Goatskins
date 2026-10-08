@@ -8,7 +8,11 @@ Node.js 22.13+ com **PostgreSQL** (única dependência: a biblioteca `pg`). Cada
 3. Copie `.env.example` para `.env` e confira o `DATABASE_URL` (o padrão já aponta para o Docker acima).
 4. Crie o SUPER_ADMIN: `node --no-warnings server.js criar-admin seuemail@x.com SuaSenha123 "Seu Nome"` (as tabelas são criadas automaticamente na primeira execução)
 5. Inicie: `npm start` e abra http://localhost:3000
-6. Testes: `npm test`. Se houver testes em `tests/`, use um banco de teste separado em `DATABASE_URL` (nunca o de produção).
+6. Testes:
+   - `npm run test:unit` — offline, sem banco (pagamentos/webhook com banco falso, senhas, limites, configuração de produção).
+   - `node --test tests/http.smoke.test.js` — sobe o servidor com banco falso e confere cabeçalhos, CSRF, health check, limites e path traversal.
+   - `TEST_DATABASE_URL=postgresql://.../goatskins_test npm run test:api` — testes de API ponta a ponta contra um PostgreSQL **real e descartável**. Ele APAGA todas as tabelas desse banco e se recusa a rodar se o nome do banco não contiver `test`. **Rode antes de cada deploy.**
+   - `npm test` roda tudo (os testes de API aparecem como "skipped" sem `TEST_DATABASE_URL`).
 7. Backup: `npm run backup` (usa `pg_dump`, precisa do cliente PostgreSQL instalado).
 8. Vindo do SQLite antigo: `DATABASE_URL=... npm run migrar-sqlite -- caminho/goatskins.db` (veja "Migrar do SQLite").
 
@@ -25,7 +29,7 @@ src/admin.js       painel: dashboard, usuários, logs, sorteios, aparência
 src/mail.js        envio de e-mail (console ou Resend)
 src/http.js        validação, limite de tentativas, utilidades
 public/            site (HTML, CSS, JS, termos, privacidade)
-tests/api.test.js  testes automáticos
+tests/*.test.js    testes (unitários, smoke HTTP, API com PostgreSQL de teste); tests/helpers/pg-falso.js = banco falso
 scripts/backup.js  backup do banco (pg_dump)
 scripts/migrar-sqlite.js  copia os dados do SQLite antigo para o PostgreSQL
 ```
@@ -51,7 +55,8 @@ Datas continuam como texto ISO (como no SQLite) para manter o código simples.
 ## API
 Pública: `GET /api/estado`, `GET /api/campanhas/:id/verificacao`, `POST /api/registro|login|esqueci-senha|redefinir-senha`, `GET /api/verificar-email`
 Logado: `POST /api/logout|reenviar-verificacao|campanhas/:id/numeros|conta/senha|conta/excluir`, `GET|PUT /api/conta`, `GET /api/notificacoes`
-Admin: `/api/admin/dashboard|usuarios|logs|campanhas|visual`, `.../campanhas/:id/encerrar|sortear|participantes` (papel conferido no servidor)
+Pagamento: `POST /api/campanhas/:id/pedidos`, `GET /api/pedidos`, `GET /api/pedidos/:id`, `POST /api/pedidos/:id/atualizar`, `POST /api/webhooks/mercadopago` (assinatura)
+Admin: `/api/admin/dashboard|usuarios|logs|campanhas|visual|pedidos|ganhadores`, `.../campanhas/:id/encerrar|sortear|participantes` (papel conferido no servidor)
 
 ## Sorteio auditável (commit-reveal)
 1. Ao criar o sorteio o servidor gera uma semente secreta e publica só o **hash** dela (compromisso).
@@ -60,7 +65,7 @@ Admin: `/api/admin/dashboard|usuarios|logs|campanhas|visual`, `.../campanhas/:id
 Limite honesto: quem opera o servidor ainda decide *quando* encerrar. Para reduzir isso, o próximo passo seria misturar uma fonte externa (como o beacon público drand).
 
 ## Segurança implementada
-scrypt + sal, comparação em tempo constante, cookie HttpOnly/SameSite, sessões com hash no banco e expiração, bloqueio por conta (5 falhas = 15 min) e por IP, CSRF por cabeçalho, consultas parametrizadas, validação de toda entrada, permissões no servidor (USER/ADMIN/SUPER_ADMIN), CSP e demais cabeçalhos, proteção contra path traversal, semente nunca exposta, logs de auditoria, nome do ganhador abreviado, exclusão de conta (LGPD), mínimo de dados (sem CPF).
+scrypt assíncrono + sal, comparação em tempo constante, tentativa de login reservada de forma atômica no banco (força bruta paralela não passa), e-mail de aviso ao trocar a senha, link de redefinição em fragmento (#), corpo máximo de 100 KB fora do painel, cookie HttpOnly/SameSite, sessões com hash no banco e expiração, bloqueio por conta (5 falhas = 15 min) e por IP, CSRF por cabeçalho, consultas parametrizadas, validação de toda entrada, permissões no servidor (USER/ADMIN/SUPER_ADMIN), CSP e demais cabeçalhos, proteção contra path traversal, semente nunca exposta, logs de auditoria, nome do ganhador abreviado, exclusão de conta (LGPD), mínimo de dados (sem CPF).
 
 ## O que depende de você
 - **E-mail real**: crie conta em resend.com, verifique seu domínio, gere a API key e coloque `EMAIL_DRIVER=resend`, `EMAIL_API_KEY=...`, `EMAIL_FROM=...` no `.env`.
@@ -71,7 +76,8 @@ scrypt + sal, comparação em tempo constante, cookie HttpOnly/SameSite, sessõe
 - **Render:** Build Command `npm install`, Start Command `npm start`. Variáveis: `NODE_ENV=production`, `APP_URL=https://seu-app.onrender.com`, `TRUST_PROXY=1`, `DATABASE_URL` (Internal Database URL do PostgreSQL do Render), mais as de e-mail e Mercado Pago. Em produção o servidor se recusa a subir sem `DATABASE_URL` válida.
 - **VPS própria:** instalar Node 22+ e PostgreSQL, criar `.env`; rodar com `pm2` ou `systemd`; colocar o **Caddy** na frente (HTTPS automático); apontar o domínio para o IP.
 - Backup: use os backups do serviço de banco (confira o que o seu plano do Render inclui) e/ou `npm run backup` (`pg_dump`, arquivos em `data/backups/`). Restaurar = `pg_restore --clean --no-owner -d "<url>" arquivo.dump`.
-- Monitoramento gratuito: UptimeRobot apontando para `/api/estado`.
+- Health check: `GET /healthz` (leve; responde 503 se o banco não responder). Configure-o como *Health Check Path* no Render e no UptimeRobot (aceita HEAD). Não use `/api/estado`, que é pesada.
+- `TRUST_PROXY=1` é obrigatório no Render. Se, em Admin > Logs, todas as pessoas aparecerem com o mesmo IP, defina também `TRUST_PROXY_HOPS=2` (quantos proxies confiáveis existem na frente do Node).
 - Custo estimado (confira os preços atuais): domínio .com.br ≈ R$ 40/ano; VPS pequena ≈ R$ 25–60/mês; e-mail (Resend) tem plano gratuito para baixo volume; Caddy, HTTPS e UptimeRobot gratuitos. **Total aproximado: R$ 30–65/mês.**
 
 
@@ -84,3 +90,6 @@ Fluxo: escolher números → `POST /api/campanhas/:id/pedidos` (o servidor lê o
 - Sorteio com Pix pendente não pode ser sorteado; preço não muda depois de haver vendas.
 - Variáveis: `MP_ACCESS_TOKEN`, `MP_WEBHOOK_SECRET`, `PIX_MINUTOS` (ver `.env.example`).
 - Teste no sandbox: crie a Order com `payer.first_name = "APRO"` (ver doc do Mercado Pago) e confira que o webhook chega.
+
+## Antes de lançar (checklist)
+Veja `AUDITORIA.md`: resultado da auditoria, riscos que o código não resolve (autorização legal do sorteio, backups do banco, limites do sorteio verificável) e o que ainda precisa ser executado na sua máquina (`npm install`, `npm audit`, `npm run test:api`).
