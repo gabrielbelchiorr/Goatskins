@@ -5,7 +5,7 @@ const { Erro, RE, txt, inteiro, foto, abrev, limite } = require("./http");
 const mail = require("./mail"), mp = require("./mercadopago");
 
 const PADRAO_VISUAL = { titulo: "GOATSKINS SORTEIOS", sub: "Escolha seus números e concorra a skins de CS.", banner: "",
-  cores: { gold: "#d4aa55", copper: "#b8651f", slate: "#3d4556", navy: "#0e1a33" } };
+  cores: { gold: "#d4aa55", copper: "#b8651f", slate: "#1f47e6", navy: "#0e1a33" } };
 const visual = async () => { const r = await db.get("SELECT v FROM settings WHERE k='visual'"); return r ? JSON.parse(r.v) : PADRAO_VISUAL; };
 
 /* Colunas públicas explícitas: a semente do sorteio NUNCA sai daqui antes da hora. */
