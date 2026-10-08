@@ -1,5 +1,5 @@
 /* GOATSKINS – tela (conversa com o servidor pela API) */
-let S = { eu: null, naoLidas: 0, s: { titulo: "", sub: "", banner: "", cores: { gold: "#d4aa55", copper: "#b8651f", slate: "#3d4556", navy: "#0e1a33" } }, c: [] };
+let S = { eu: null, naoLidas: 0, s: { titulo: "", sub: "", banner: "", cores: { gold: "#d4aa55", copper: "#b8651f", slate: "#1f47e6", navy: "#0e1a33" } }, c: [] };
 let view = "sorteios";
 const IMG_MAX = 900; // largura máxima das fotos enviadas (px)
 
@@ -57,6 +57,7 @@ async function rodar(err, fn) { try { await fn(); } catch (e) { err.textContent 
 /* ---------- Aparência vinda do servidor ---------- */
 function aplicarAparencia() {
   const s = S.s, root = document.documentElement.style;
+  if (s.cores.slate === "#3d4556") s.cores.slate = "#1f47e6"; // cinza antigo (padrão anterior) -> novo azul de destaque
   root.setProperty("--gold", s.cores.gold); root.setProperty("--copper", s.cores.copper);
   root.setProperty("--slate", s.cores.slate); root.setProperty("--navy", s.cores.navy);
   root.setProperty("--navy2", "color-mix(in srgb, " + s.cores.navy + " 82%, white)");
@@ -134,6 +135,7 @@ function render() {
   if (!f.hidden) f.append(h("span", null, "Confirme seu e-mail para poder participar. Enviamos um link para " + S.eu.email + "."),
     botao("Reenviar", "", async () => { try { await api("/api/reenviar-verificacao", "POST"); aviso("Enviado", "Confira sua caixa de entrada (e o spam)."); } catch (e) { aviso("Ops", e.message); } }));
   document.querySelectorAll(".view").forEach(v => { v.hidden = v.dataset.view !== view; });
+  $("inicio").hidden = view !== "sorteios"; document.body.classList.toggle("sem-hero", view !== "sorteios");
   document.querySelectorAll(".nv[data-view]").forEach(b => b.classList.toggle("on", b.dataset.view === view));
 }
 
@@ -391,11 +393,26 @@ function abaVisual(box) {
     botao("Salvar aparência", "", () => { const file = ban.i.files[0]; file ? lerFoto(file, salvar) : salvar(undefined); }), " ", botao("Remover banner", "alt", () => salvar("")));
 }
 
+/* ---------- Menu lateral (botão de 3 barras) ---------- */
+const mobileMQ = window.matchMedia("(max-width: 820px)");
+function menuAberto(aberto, guardar) {
+  document.body.classList.toggle("menu-closed", !aberto);
+  $("menuBtn").setAttribute("aria-expanded", String(aberto));
+  $("scrim").hidden = !(aberto && mobileMQ.matches);
+  if (guardar && !mobileMQ.matches) { try { localStorage.setItem("menu", aberto ? "1" : "0"); } catch (e) { /* sem storage: tudo bem */ } }
+}
+$("menuBtn").addEventListener("click", () => menuAberto(document.body.classList.contains("menu-closed"), true));
+$("scrim").addEventListener("click", () => menuAberto(false));
+document.addEventListener("keydown", e => { if (e.key === "Escape" && mobileMQ.matches && !document.body.classList.contains("menu-closed")) menuAberto(false); });
+mobileMQ.addEventListener("change", () => menuAberto(!mobileMQ.matches));
+(() => { let pref = null; try { pref = localStorage.getItem("menu"); } catch (e) { /* ignora */ } menuAberto(mobileMQ.matches ? false : pref !== "0"); })();
+
 /* ---------- Início ---------- */
 $("closeBtn").addEventListener("click", closeModal);
 document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("modal").hidden) closeModal(); });
 $("modal").addEventListener("click", e => { if (e.target === $("modal")) closeModal(); });
 document.querySelectorAll(".nv[data-view]").forEach(b => b.addEventListener("click", () => {
+  if (mobileMQ.matches) menuAberto(false);
   view = b.dataset.view; if (view === "bilhetes" && !S.eu) authModal("entrar"); render(); window.scrollTo(0, 0); if (view === "bilhetes") carregarPedidos();
 }));
 $("loginBtn").addEventListener("click", async () => { if (S.eu) { await api("/api/logout", "POST"); await carregar(); } else authModal("entrar"); });

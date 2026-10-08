@@ -9,9 +9,23 @@
   <meta name="description" content="Sorteios de skins de CS com prova de resultado verificável.">
 </head>
 <body>
+  <button id="menuBtn" class="burger" type="button" aria-label="Abrir ou fechar o menu" aria-controls="menuLateral" aria-expanded="true">
+    <span></span><span></span><span></span>
+  </button>
+
+  <!-- Faixa do topo: ocupa toda a largura -->
+  <header class="hero" id="inicio">
+    <div class="hero-txt">
+      <h1 id="heroTitle">GOATSKINS SORTEIOS</h1>
+      <p class="tag" id="heroSub">Escolha seus números e concorra a skins de CS.</p>
+    </div>
+    <div class="cta"><a class="btn" href="#ativos">Ver sorteios</a></div>
+    <div id="heroStats" class="chips"></div>
+  </header>
+
   <div class="shell">
     <!-- Menu lateral fixo -->
-    <aside class="side">
+    <aside class="side" id="menuLateral">
       <a class="brand" href="#" aria-label="GOATSKINS"><img src="logo.jpg" alt="GOATSKINS"></a>
       <nav class="menu">
         <button id="loginBtn" class="nv login" type="button">Entrar / Cadastrar</button>
@@ -28,13 +42,6 @@
       <main>
         <!-- SORTEIOS -->
         <section class="view" data-view="sorteios">
-          <div class="hero" id="inicio">
-            <h1 id="heroTitle">GOATSKINS SORTEIOS</h1>
-            <p class="tag" id="heroSub">Escolha seus números e concorra a skins de CS.</p>
-            <div class="cta"><a class="btn" href="#ativos">Ver sorteios</a></div>
-            <div id="heroStats" class="chips"></div>
-          </div>
-
           <h2 id="ativos">Sorteios ativos</h2>
           <div id="gridAtivos" class="grid"></div>
           <p id="noAtivos" class="muted" hidden>Nenhum sorteio ativo no momento.</p>
@@ -73,6 +80,9 @@
       <footer>GOATSKINS &copy; 2026. Não afiliado à Valve nem à Steam.<br><a href="/termos.html">Termos de uso</a> · <a href="/privacidade.html">Política de privacidade</a></footer>
     </div>
   </div>
+
+  <div id="scrim" class="scrim" hidden></div>
+  <img class="mascote" src="mascote.webp" alt="" aria-hidden="true" width="720" height="984">
 
   <div id="modal" class="overlay" hidden>
     <div class="dialog" role="dialog" aria-modal="true">
