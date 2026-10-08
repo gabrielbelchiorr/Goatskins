@@ -5,12 +5,14 @@ async function enviar(para, assunto, texto) {
   if (cfg.EMAIL_DRIVER === "resend") {
     const r = await fetch("https://api.resend.com/emails", { method: "POST",
       headers: { Authorization: "Bearer " + cfg.EMAIL_API_KEY, "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(10000), // sem timeout, um provedor lento deixava a requisição pendurada
       body: JSON.stringify({ from: cfg.EMAIL_FROM, to: [para], subject: assunto, text: texto }) });
     if (!r.ok) throw new Error("Falha ao enviar e-mail: HTTP " + r.status);
     return;
   }
+  fs.mkdirSync(cfg.DATA_DIR, { recursive: true }); // sem isto, em máquina nova o e-mail simulado falhava em silêncio (pasta data/ inexistente)
   fs.appendFileSync(path.join(cfg.DATA_DIR, "emails.log"), "=== para: " + para + "\nassunto: " + assunto + "\n" + texto + "\n\n");
   if (!cfg.TESTE) console.log("[e-mail simulado] para " + para + " | " + assunto);
 }
-const enviarSeguro = (...a) => enviar(...a).catch(e => console.error(e.message)); // nunca derruba a requisição
+const enviarSeguro = (...a) => enviar(...a).catch(e => console.error("[e-mail]", e.message)); // nunca derruba a requisição (e a mensagem não inclui a chave nem o texto do e-mail)
 module.exports = { enviar: enviarSeguro };

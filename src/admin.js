@@ -1,5 +1,5 @@
 /* Painel administrativo: tudo aqui exige papel ADMIN ou SUPER_ADMIN, conferido no servidor. */
-const { db, agora, audit, novaSemente } = require("./db");
+const { db, tx, liberar, agora, audit, novaSemente } = require("./db");
 const { Erro, RE, txt, foto, ipDe } = require("./http");
 const { corpoCampanha, sortear, visual } = require("./rifas");
 
@@ -45,23 +45,34 @@ const rotas = [
     await audit(ctx.user.id, "SORTEIO_CRIADO", d.premio, ctx.ip); return { ok: true };
   }, "admin"],
   ["PUT", /^\/api\/admin\/campanhas\/(\d+)$/, async ctx => {
-    const id = Number(ctx.params[0]), d = corpoCampanha(ctx.body, true), ant = await db.get("SELECT foto, status, preco_centavos FROM campaigns WHERE id=?", [id]);
-    if (!ant) throw new Erro("Sorteio não encontrado.", 404);
-    if (ant.status === "DRAWN") throw new Erro("Sorteio já realizado não pode ser editado.");
-    const total = await db.get("SELECT COUNT(*) n, COALESCE(MAX(n),0) m FROM tickets WHERE campaign_id=?", [id]);
-    if (d.preco_centavos !== ant.preco_centavos && (total.n || (await db.get("SELECT COUNT(*) n FROM pedidos WHERE campaign_id=? AND status IN ('PENDING','PAID')", [id])).n))
-      throw new Erro("Não é possível mudar o preço depois que há números vendidos ou pedidos em andamento.");
-    if (d.max < total.m) throw new Erro("Já existem números escolhidos até o " + total.m + "; as vagas não podem ser menores.");
-    await db.run("UPDATE campaigns SET premio=?,desgaste=?,descricao=?,valor=?,cor=?,fim=?,max=?,max_por_usuario=?,foto=?,preco_centavos=? WHERE id=?",
-      [d.premio, d.desgaste, d.descricao, d.valor, d.cor, d.fim, d.max, d.max_por_usuario, d.foto === undefined ? ant.foto : d.foto, d.preco_centavos, id]);
-    await audit(ctx.user.id, "SORTEIO_EDITADO", "campanha " + id, ctx.ip); return { ok: true };
+    const id = Number(ctx.params[0]), d = corpoCampanha(ctx.body, true);
+    // dentro de tx: a mesma trava de escrita dos pedidos. Antes, o admin podia mudar preço/vagas no meio de uma compra (ler, conferir e gravar sem trava).
+    await tx(async () => {
+      await liberar();
+      const ant = await db.get("SELECT foto, status, preco_centavos FROM campaigns WHERE id=?", [id]);
+      if (!ant) throw new Erro("Sorteio não encontrado.", 404);
+      if (ant.status === "DRAWN") throw new Erro("Sorteio já realizado não pode ser editado.");
+      const total = await db.get("SELECT COUNT(*) n, COALESCE(MAX(n),0) m FROM tickets WHERE campaign_id=?", [id]);
+      const reservado = await db.get("SELECT COUNT(*) n, COALESCE(MAX(n),0) m FROM reservas WHERE campaign_id=?", [id]);
+      if (d.preco_centavos !== ant.preco_centavos && (total.n || (await db.get("SELECT COUNT(*) n FROM pedidos WHERE campaign_id=? AND status IN ('PENDING','PAID')", [id])).n))
+        throw new Erro("Não é possível mudar o preço depois que há números vendidos ou pedidos em andamento.");
+      if (d.max < Math.max(total.m, reservado.m)) throw new Erro("Já existem números escolhidos ou reservados até o " + Math.max(total.m, reservado.m) + "; as vagas não podem ser menores.");
+      await db.run("UPDATE campaigns SET premio=?,desgaste=?,descricao=?,valor=?,cor=?,fim=?,max=?,max_por_usuario=?,foto=?,preco_centavos=? WHERE id=?",
+        [d.premio, d.desgaste, d.descricao, d.valor, d.cor, d.fim, d.max, d.max_por_usuario, d.foto === undefined ? ant.foto : d.foto, d.preco_centavos, id]);
+      await audit(ctx.user.id, "SORTEIO_EDITADO", "campanha " + id, ctx.ip);
+    });
+    return { ok: true };
   }, "admin"],
   ["DELETE", /^\/api\/admin\/campanhas\/(\d+)$/, async ctx => {
-    const id = Number(ctx.params[0]), c = await db.get("SELECT status FROM campaigns WHERE id=?", [id]);
-    if (!c) throw new Erro("Sorteio não encontrado.", 404);
-    if (c.status === "DRAWN") throw new Erro("Sorteio realizado fica guardado no histórico e não pode ser excluído.");
-    if ((await db.get("SELECT (SELECT COUNT(*) FROM tickets WHERE campaign_id=?) + (SELECT COUNT(*) FROM pedidos WHERE campaign_id=?) n", [id, id])).n) throw new Erro("Este sorteio já tem participantes ou pedidos. Encerre-o em vez de excluir.");
-    await db.run("DELETE FROM campaigns WHERE id=?", [id]); await audit(ctx.user.id, "SORTEIO_EXCLUIDO", "campanha " + id, ctx.ip); return { ok: true };
+    const id = Number(ctx.params[0]);
+    await tx(async () => { // verificar e apagar na mesma transação: ninguém compra entre uma coisa e outra
+      const c = await db.get("SELECT status FROM campaigns WHERE id=?", [id]);
+      if (!c) throw new Erro("Sorteio não encontrado.", 404);
+      if (c.status === "DRAWN") throw new Erro("Sorteio realizado fica guardado no histórico e não pode ser excluído.");
+      if ((await db.get("SELECT (SELECT COUNT(*) FROM tickets WHERE campaign_id=?) + (SELECT COUNT(*) FROM pedidos WHERE campaign_id=?) n", [id, id])).n) throw new Erro("Este sorteio já tem participantes ou pedidos. Encerre-o em vez de excluir.");
+      await db.run("DELETE FROM campaigns WHERE id=?", [id]); await audit(ctx.user.id, "SORTEIO_EXCLUIDO", "campanha " + id, ctx.ip);
+    });
+    return { ok: true };
   }, "admin"],
   ["POST", /^\/api\/admin\/campanhas\/(\d+)\/encerrar$/, async ctx => {
     const id = Number(ctx.params[0]), r = await db.run("UPDATE campaigns SET status='CLOSED' WHERE id=? AND status='OPEN'", [id]);

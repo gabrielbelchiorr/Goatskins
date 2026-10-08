@@ -1,6 +1,6 @@
 /* Sorteios: listagem pública, escolha de números, sorteio verificável. */
 const crypto = require("node:crypto");
-const { db, sha, agora, tx, audit, notificar, novaSemente, liberar } = require("./db");
+const { db, sha, agora, tx, audit, notificar, novaSemente, liberar, liberarSeVencido } = require("./db");
 const { Erro, RE, txt, inteiro, foto, abrev, limite } = require("./http");
 const mail = require("./mail"), mp = require("./mercadopago");
 
@@ -11,15 +11,20 @@ const visual = async () => { const r = await db.get("SELECT v FROM settings WHER
 /* Colunas públicas explícitas: a semente do sorteio NUNCA sai daqui antes da hora. */
 const COLS = "id, premio, desgaste, descricao, valor, cor, fim, max, max_por_usuario, preco_centavos, length(foto) fl, status, commit_hash"; // a foto sai por URL própria (cache), não dentro do JSON
 async function estado(u) {
-  await tx(() => liberar());
+  await liberarSeVencido(); // só toma a trava de escrita se houver reserva vencida (esta rota é a mais chamada do site)
   const ocup = {}, meus = {}, gan = {}, res = {};
-  (await db.all("SELECT r.campaign_id c, r.n FROM reservas r JOIN pedidos p ON p.id=r.pedido_id WHERE p.status='PENDING' ORDER BY r.n")).forEach(r => (res[r.c] = res[r.c] || []).push(r.n));
-  (await db.all("SELECT campaign_id c, n FROM tickets ORDER BY n")).forEach(r => (ocup[r.c] = ocup[r.c] || []).push(r.n));
-  if (u) (await db.all("SELECT campaign_id c, n FROM tickets WHERE user_id=? ORDER BY n", [u.id])).forEach(r => (meus[r.c] = meus[r.c] || []).push(r.n));
-  (await db.all("SELECT w.campaign_id, w.n, w.data, w.total, w.user_id, us.nome FROM winners w JOIN users us ON us.id=w.user_id")).forEach(r => gan[r.campaign_id] = r);
-  const nao = u ? (await db.get("SELECT COUNT(*) n FROM notifications WHERE user_id=? AND lida=0", [u.id])).n : 0;
-  const vis = { ...(await visual()) }; vis.banner = vis.banner ? "/api/banner?v=" + vis.banner.length : "";
-  return { eu: u, naoLidas: nao, pix: mp.configurado(), s: vis, c: (await db.all("SELECT " + COLS + " FROM campaigns ORDER BY id")).map(c => ({
+  // consultas independentes rodam juntas (o pool tem várias conexões); eram 8 idas ao banco em sequência
+  const [reservas, tickets, meusT, ganhadores, naoLidas, v, campanhas] = await Promise.all([
+    db.all("SELECT r.campaign_id c, r.n FROM reservas r JOIN pedidos p ON p.id=r.pedido_id WHERE p.status='PENDING' AND p.expira_em>? ORDER BY r.n", [Date.now()]),
+    db.all("SELECT campaign_id c, n FROM tickets ORDER BY n"),
+    u ? db.all("SELECT campaign_id c, n FROM tickets WHERE user_id=? ORDER BY n", [u.id]) : [],
+    db.all("SELECT w.campaign_id, w.n, w.data, w.total, w.user_id, us.nome FROM winners w JOIN users us ON us.id=w.user_id"),
+    u ? db.get("SELECT COUNT(*) n FROM notifications WHERE user_id=? AND lida=0", [u.id]) : { n: 0 },
+    visual(), db.all("SELECT " + COLS + " FROM campaigns ORDER BY id")]);
+  reservas.forEach(r => (res[r.c] = res[r.c] || []).push(r.n)); tickets.forEach(r => (ocup[r.c] = ocup[r.c] || []).push(r.n));
+  meusT.forEach(r => (meus[r.c] = meus[r.c] || []).push(r.n)); ganhadores.forEach(r => gan[r.campaign_id] = r);
+  const nao = naoLidas.n, vis = { ...v }; vis.banner = vis.banner ? "/api/banner?v=" + vis.banner.length : "";
+  return { eu: u, naoLidas: nao, pix: mp.configurado(), s: vis, c: campanhas.map(c => ({
     ...c, foto: c.fl ? "/api/campanhas/" + c.id + "/foto?v=" + c.fl : "", fl: undefined, preco: c.preco_centavos / 100, preco_centavos: undefined, reservados: res[c.id] || [], ocupados: ocup[c.id] || [], total: (ocup[c.id] || []).length, meus: meus[c.id] || [],
     ganhador: gan[c.id] ? { n: gan[c.id].n, nome: abrev(gan[c.id].nome), data: gan[c.id].data, total: gan[c.id].total, eu: !!u && gan[c.id].user_id === u.id } : null })) };
 }

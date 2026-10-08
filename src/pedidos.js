@@ -6,8 +6,8 @@
       O webhook apenas "avisa que algo mudou": o que vale é a resposta da API do Mercado Pago.
    4. Tudo é idempotente: a mesma notificação 10 vezes produz o mesmo resultado de 1 vez. */
 const crypto = require("node:crypto");
-const cfg = require("./config"), mp = require("./mercadopago");
-const { db, agora, tx, audit, notificar, liberar } = require("./db");
+const cfg = require("./config"), mp = require("./mercadopago"), mail = require("./mail");
+const { db, agora, tx, audit, notificar, liberar, liberarSeVencido } = require("./db");
 const { Erro, inteiro, limite } = require("./http");
 
 const MAX_PENDENTES = 3;                                   // pedidos Pix abertos por pessoa (evita "segurar" números sem pagar)
@@ -42,29 +42,47 @@ function interpretar(o, p) {
 }
 
 /* Aplica o resultado no banco. Idempotente. Retorna o status final do pedido. */
-function aplicar(pedidoId, o) {
+async function aplicar(pedidoId, o) {
+  const r = await aplicarNoBanco(pedidoId, o);
+  if (r.confirmouAgora) await avisarPagamento(r.confirmouAgora); // e-mail só DEPOIS do commit e nunca derruba o webhook
+  return r.status;
+}
+async function avisarPagamento(p) {
+  try {
+    const u = await db.get("SELECT nome, email FROM users WHERE id=?", [p.user_id]);
+    if (u && u.email) mail.enviar(u.email, "Pagamento confirmado - GOATSKINS", "Olá, " + u.nome + "!\n\nRecebemos o seu Pix. Seus números estão garantidos: " + JSON.parse(p.numeros).join(", ") + ".\nAcompanhe em \"Meus bilhetes\": " + cfg.APP_URL + "\n\nPedido: " + p.public_id.slice(0, 8).toUpperCase());
+  } catch (e) { console.error("e-mail de pagamento:", e.message); }
+}
+function aplicarNoBanco(pedidoId, o) {
   return tx(async () => {
     await liberar();
     const p = await db.get("SELECT * FROM pedidos WHERE id=?", [pedidoId]), r = interpretar(o, p), agoraIso = agora();
     if (p.status === "PAID" || p.status === "REFUND_NEEDED" || p.status === "REFUNDED") {
       if (p.status === "PAID" && o && ["refunded", "charged_back"].includes(o.status)) await audit(p.user_id, "PAGAMENTO_ESTORNADO_NO_MP", "pedido " + p.id + " (" + o.status + ")");
-      return p.status;
+      return { status: p.status };
     }
     if (r.motivo) await audit(p.user_id, "PAGAMENTO_IGNORADO", "pedido " + p.id + ": " + r.motivo);
-    if (r.estado === "PENDENTE") { await db.run("UPDATE pedidos SET mp_status=?, atualizado_em=? WHERE id=?", [String(o && o.status || "").slice(0, 40), agoraIso, p.id]); return p.status; }
+    if (r.estado === "PENDENTE") { await db.run("UPDATE pedidos SET mp_status=?, atualizado_em=? WHERE id=?", [String(o && o.status || "").slice(0, 40), agoraIso, p.id]); return { status: p.status }; }
     if (r.estado === "FALHOU") {
       if (p.status === "PENDING") {
         await db.run("UPDATE pedidos SET status=?, mp_status=?, atualizado_em=? WHERE id=?", [r.novo, String(o.status || "").slice(0, 40), agoraIso, p.id]);
         await db.run("DELETE FROM reservas WHERE pedido_id=?", [p.id]);
         await notificar(p.user_id, "Pagamento não concluído", "O Pix do seu pedido não foi concluído e os números foram liberados.");
       }
-      return (await db.get("SELECT status FROM pedidos WHERE id=?", [p.id])).status;
+      return { status: (await db.get("SELECT status FROM pedidos WHERE id=?", [p.id])).status };
     }
     /* PAGO: confirmar os números */
     const nums = JSON.parse(p.numeros), c = await db.get("SELECT status FROM campaigns WHERE id=?", [p.campaign_id]);
     const aindaReservado = (await db.get("SELECT COUNT(*) n FROM reservas WHERE pedido_id=?", [p.id])).n === nums.length;
     if (!aindaReservado) { // a reserva venceu antes do pagamento chegar: só vende se os números continuam livres
       let ocupado = !c || c.status !== "OPEN";
+      // pagamento tardio também não pode furar o limite de números por pessoa (a pessoa pode ter feito outros pedidos depois que este venceu)
+      if (!ocupado) {
+        const ja = (await db.get("SELECT COUNT(*) n FROM tickets WHERE campaign_id=? AND user_id=?", [p.campaign_id, p.user_id])).n;
+        const res = (await db.get("SELECT COUNT(*) n FROM reservas r JOIN pedidos q ON q.id=r.pedido_id WHERE r.campaign_id=? AND q.user_id=?", [p.campaign_id, p.user_id])).n;
+        const lim = await db.get("SELECT max_por_usuario m, max FROM campaigns WHERE id=?", [p.campaign_id]);
+        if (ja + res + nums.length > lim.m || nums.some(n => n > lim.max)) ocupado = true;
+      }
       for (const n of nums) {
         if (ocupado) break;
         if (await db.get("SELECT 1 FROM tickets WHERE campaign_id=? AND n=?", [p.campaign_id, n]) || await db.get("SELECT 1 FROM reservas WHERE campaign_id=? AND n=?", [p.campaign_id, n])) ocupado = true;
@@ -73,7 +91,7 @@ function aplicar(pedidoId, o) {
         await db.run("UPDATE pedidos SET status='REFUND_NEEDED', mp_status='processed', atualizado_em=?, pago_em=? WHERE id=?", [agoraIso, agoraIso, p.id]);
         await audit(p.user_id, "PAGAMENTO_TARDIO_REEMBOLSAR", "pedido " + p.id + " pago após a reserva vencer e os números não estão mais livres");
         await notificar(p.user_id, "Pagamento recebido após o prazo", "Os números do seu pedido já não estavam disponíveis. O valor será devolvido; fale com o suporte se precisar.");
-        return "REFUND_NEEDED";
+        return { status: "REFUND_NEEDED" };
       }
     }
     try { for (const n of nums) await db.run("INSERT INTO tickets(campaign_id,user_id,n,criado_em) VALUES(?,?,?,?)", [p.campaign_id, p.user_id, n, agoraIso]); }
@@ -82,7 +100,7 @@ function aplicar(pedidoId, o) {
     await db.run("UPDATE pedidos SET status='PAID', mp_status='processed', pago_em=?, atualizado_em=? WHERE id=?", [agoraIso, agoraIso, p.id]);
     await audit(p.user_id, "PAGAMENTO_CONFIRMADO", "pedido " + p.id + " números " + nums.join(","));
     await notificar(p.user_id, "Pagamento confirmado!", "Seus números estão garantidos: " + nums.join(", ") + ".");
-    return "PAID";
+    return { status: "PAID", confirmouAgora: p };
   });
 }
 
@@ -140,9 +158,9 @@ const rotas = [
   }, "user"],
 
   /* Pedidos do próprio usuário (nunca de outro: filtro por user_id no SQL) */
-  ["GET", /^\/api\/pedidos$/, async ctx => { await tx(() => liberar()); return (await db.all(SEL + " WHERE p.user_id=? ORDER BY p.id DESC LIMIT 30", [ctx.user.id])).map(publico); }, "user"],
+  ["GET", /^\/api\/pedidos$/, async ctx => { await liberarSeVencido(); return (await db.all(SEL + " WHERE p.user_id=? ORDER BY p.id DESC LIMIT 30", [ctx.user.id])).map(publico); }, "user"],
   ["GET", /^\/api\/pedidos\/([a-f0-9]{32})$/, async ctx => {
-    await tx(() => liberar()); const p = await db.get(SEL + " WHERE p.public_id=? AND p.user_id=?", [ctx.params[0], ctx.user.id]);
+    await liberarSeVencido(); const p = await db.get(SEL + " WHERE p.public_id=? AND p.user_id=?", [ctx.params[0], ctx.user.id]);
     if (!p) throw new Erro("Pedido não encontrado.", 404); return publico(p);
   }, "user"],
   /* "Já paguei": o servidor consulta o Mercado Pago (não confia em nada vindo do navegador) */
@@ -188,7 +206,7 @@ const rotas = [
 
   /* Administração: pedidos e reembolsos pendentes */
   ["GET", /^\/api\/admin\/pedidos$/, async () => {
-    await tx(() => liberar());
+    await liberarSeVencido();
     return { receita: (await db.get("SELECT COALESCE(SUM(total_centavos),0) n FROM pedidos WHERE status='PAID'")).n / 100,
       pedidos: await db.all("SELECT p.public_id id, p.status, (p.total_centavos/100.0)::float8 total, p.numeros, p.criado_em, p.pago_em, p.mp_order_id, c.premio, u.nome, u.email FROM pedidos p JOIN campaigns c ON c.id=p.campaign_id JOIN users u ON u.id=p.user_id ORDER BY p.id DESC LIMIT 200") };
   }, "admin"],

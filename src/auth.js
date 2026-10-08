@@ -8,13 +8,22 @@ const MAX_FALHAS = 5, BLOQUEIO_MS = 15 * 60e3, SESSAO_MS = 7 * 864e5;
 const senhaOk = s => typeof s === "string" && s.length >= 8 && s.length <= 100 && /[a-zA-Z]/.test(s) && /\d/.test(s);
 const SENHA_MSG = "A senha precisa ter 8 ou mais caracteres, com letras e números.";
 
-function hashSenha(s) { const sal = crypto.randomBytes(16).toString("hex"); return sal + ":" + crypto.scryptSync(s, sal, 64).toString("hex"); }
-function confere(s, h) {
+/* scrypt ASSÍNCRONO (roda no pool de threads do libuv): o scryptSync travava o servidor inteiro ~50-100 ms a cada login/cadastro,
+   então uma enxurrada de tentativas de login derrubava o site para todo mundo. O formato do hash guardado ("sal:hex") não mudou. */
+const scrypt = (s, sal) => new Promise((ok, falha) => crypto.scrypt(s, sal, 64, (e, k) => e ? falha(e) : ok(k)));
+async function hashSenha(s) { const sal = crypto.randomBytes(16).toString("hex"); return sal + ":" + (await scrypt(s, sal)).toString("hex"); }
+async function confere(s, h) {
   if (!h || !h.includes(":")) return false;
-  const [sal, k] = h.split(":"), a = crypto.scryptSync(s, sal, 64), b = Buffer.from(k, "hex");
+  const [sal, k] = h.split(":"), a = await scrypt(s, sal), b = Buffer.from(k, "hex");
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
-const FALSO = hashSenha("senha-falsa-para-igualar-tempo"); // evita descobrir e-mails pelo tempo de resposta
+let FALSO = null; // hash de uma senha qualquer: usado quando o e-mail não existe, para o tempo de resposta não revelar quem tem conta
+const falso = async () => FALSO || (FALSO = await hashSenha("senha-falsa-para-igualar-tempo"));
+/* Aviso de segurança por e-mail (senha alterada). Nunca derruba a requisição. */
+async function avisarSenha(uid) {
+  const u = await db.get("SELECT nome, email FROM users WHERE id=?", [uid]);
+  if (u && u.email) mail.enviar(u.email, "Sua senha foi alterada - GOATSKINS", "Olá, " + u.nome + "!\n\nA senha da sua conta foi alterada agora há pouco. Se foi você, não precisa fazer nada.\nSe NÃO foi você, use \"Esqueci minha senha\" no site imediatamente e fale com o suporte.");
+}
 
 /* ----- Sessões ----- */
 async function abrirSessao(ctx, uid) {
@@ -67,7 +76,7 @@ const rotas = [
     const now = agora(); let id;
     try {
       id = await db.insert("INSERT INTO users(nome,contato,email,telefone,hash,role,criado_em,atualizado_em,consentimento_em) VALUES(?,?,?,?,?,'USER',?,?,?)",
-        [nome, email, email, tel, hashSenha(b.senha), now, now, now]);
+        [nome, email, email, tel, await hashSenha(b.senha), now, now, now]);
     } catch (e) { if (e.code === "23505") throw new Erro(JA_EXISTE); throw e; } // duas inscrições simultâneas com o mesmo e-mail
     await audit(id, "CONTA_CRIADA", null, ip); await notificar(id, "Bem-vindo(a)!", "Confirme seu e-mail para poder participar dos sorteios.");
     await enviarVerificacao({ id, nome, email }); await abrirSessao(ctx, id); return { ok: true };
@@ -76,13 +85,17 @@ const rotas = [
     const ip = ctx.ip; limite("login:" + ip, 30, 6e5);
     const email = String(ctx.body.email || "").trim().toLowerCase(), senha = String(ctx.body.senha || "");
     const u = await db.get("SELECT * FROM users WHERE email=? OR contato=?", [email, email]);
-    if (!u) { confere(senha, FALSO); throw new Erro("E-mail ou senha incorretos.", 401); }
-    if (u.status !== "ACTIVE") throw new Erro("Conta indisponível. Fale com o suporte.", 403);
-    if (u.bloqueado_ate > Date.now()) throw new Erro("Conta bloqueada por tentativas excessivas. Tente novamente em alguns minutos.", 429);
-    if (!confere(senha, u.hash)) {
-      const f = u.falhas + 1;
-      await db.run("UPDATE users SET falhas=?, bloqueado_ate=? WHERE id=?", [f >= MAX_FALHAS ? 0 : f, f >= MAX_FALHAS ? Date.now() + BLOQUEIO_MS : 0, u.id]);
-      await audit(u.id, f >= MAX_FALHAS ? "CONTA_BLOQUEADA" : "LOGIN_FALHA", null, ip);
+    if (!u) { await confere(senha, await falso()); throw new Erro("E-mail ou senha incorretos.", 401); }
+    if (u.status !== "ACTIVE") { await confere(senha, await falso()); throw new Erro("Conta indisponível. Fale com o suporte.", 403); }
+    if (u.bloqueado_ate > Date.now()) { await confere(senha, await falso()); throw new Erro("Conta bloqueada por tentativas excessivas. Tente novamente em alguns minutos.", 429); }
+    /* A tentativa é RESERVADA de forma atômica ANTES de conferir a senha. Assim, mesmo com centenas de requisições simultâneas,
+       só MAX_FALHAS senhas por janela chegam a ser testadas (antes: "lê falhas, soma no JS, grava" deixava todas passarem com falhas=0). */
+    const agoraMs = Date.now();
+    const reserva = await db.get(`UPDATE users SET falhas = CASE WHEN falhas + 1 >= ? THEN 0 ELSE falhas + 1 END,
+      bloqueado_ate = CASE WHEN falhas + 1 >= ? THEN ?::bigint ELSE 0 END WHERE id=? AND bloqueado_ate <= ? RETURNING bloqueado_ate`, [MAX_FALHAS, MAX_FALHAS, agoraMs + BLOQUEIO_MS, u.id, agoraMs]);
+    if (!reserva) { await confere(senha, await falso()); throw new Erro("Conta bloqueada por tentativas excessivas. Tente novamente em alguns minutos.", 429); }
+    if (!(await confere(senha, u.hash))) {
+      await audit(u.id, reserva.bloqueado_ate > agoraMs ? "CONTA_BLOQUEADA" : "LOGIN_FALHA", null, ip);
       throw new Erro("E-mail ou senha incorretos.", 401);
     }
     await db.run("UPDATE users SET falhas=0, bloqueado_ate=0 WHERE id=?", [u.id]);
@@ -113,7 +126,7 @@ const rotas = [
     const u = await db.get("SELECT id, nome, email FROM users WHERE email=? AND status='ACTIVE'", [email]);
     if (u) {
       const t = await gerarToken(u.id, "REDEFINIR", 1); await audit(u.id, "SENHA_RECUPERACAO_PEDIDA", null, ctx.ip);
-      mail.enviar(u.email, "Redefinição de senha - GOATSKINS", "Olá, " + u.nome + "!\n\nPara criar uma nova senha, acesse:\n" + cfg.APP_URL + "/?redefinir=" + t + "\n\nO link vale por 1 hora. Se não foi você, ignore.");
+      mail.enviar(u.email, "Redefinição de senha - GOATSKINS", "Olá, " + u.nome + "!\n\nPara criar uma nova senha, acesse:\n" + cfg.APP_URL + "/#redefinir=" + t + "\n\nO link vale por 1 hora. Se não foi você, ignore.");
     }
     return { ok: true }; // mesma resposta exista ou não o e-mail (não revela cadastros)
   }],
@@ -121,8 +134,9 @@ const rotas = [
     limite("red:" + ctx.ip, 10, 36e5);
     if (!senhaOk(ctx.body.senha)) throw new Erro(SENHA_MSG);
     const uid = await tx(() => consumirToken(ctx.body.token, "REDEFINIR"));
-    await db.run("UPDATE users SET hash=?, falhas=0, bloqueado_ate=0, atualizado_em=? WHERE id=?", [hashSenha(ctx.body.senha), agora(), uid]);
-    await encerrarSessoes(uid); await audit(uid, "SENHA_REDEFINIDA", null, ctx.ip); await notificar(uid, "Senha alterada", "Sua senha foi redefinida."); return { ok: true };
+    await db.run("UPDATE users SET hash=?, falhas=0, bloqueado_ate=0, atualizado_em=? WHERE id=?", [await hashSenha(ctx.body.senha), agora(), uid]);
+    await encerrarSessoes(uid); await audit(uid, "SENHA_REDEFINIDA", null, ctx.ip); await notificar(uid, "Senha alterada", "Sua senha foi redefinida.");
+    await avisarSenha(uid); return { ok: true };
   }],
   ["GET", /^\/api\/conta$/, ctx => perfil(ctx.user.id), "user"],
   ["PUT", /^\/api\/conta$/, async ctx => { // só nome e telefone: papel, e-mail e status nunca vêm do navegador
@@ -132,16 +146,19 @@ const rotas = [
   ["POST", /^\/api\/conta\/senha$/, async ctx => {
     limite("pw:" + ctx.user.id, 10, 36e5);
     const u = await db.get("SELECT hash FROM users WHERE id=?", [ctx.user.id]);
-    if (!confere(String(ctx.body.atual || ""), u.hash)) throw new Erro("Senha atual incorreta.", 401);
+    if (!(await confere(String(ctx.body.atual || ""), u.hash))) throw new Erro("Senha atual incorreta.", 401);
     if (!senhaOk(ctx.body.nova)) throw new Erro(SENHA_MSG);
-    await db.run("UPDATE users SET hash=?, atualizado_em=? WHERE id=?", [hashSenha(ctx.body.nova), agora(), ctx.user.id]);
+    await db.run("UPDATE users SET hash=?, atualizado_em=? WHERE id=?", [await hashSenha(ctx.body.nova), agora(), ctx.user.id]);
     await encerrarSessoes(ctx.user.id); await abrirSessao(ctx, ctx.user.id); // derruba outros dispositivos
-    await audit(ctx.user.id, "SENHA_ALTERADA", null, ctx.ip); return { ok: true };
+    await audit(ctx.user.id, "SENHA_ALTERADA", null, ctx.ip); await avisarSenha(ctx.user.id); return { ok: true };
   }, "user"],
   ["POST", /^\/api\/conta\/excluir$/, async ctx => { // LGPD: anonimiza a conta (os bilhetes ficam para manter a integridade dos sorteios)
     const u = await db.get("SELECT hash, role FROM users WHERE id=?", [ctx.user.id]);
     if (u.role !== "USER") throw new Erro("Contas de administração não podem ser excluídas por aqui.", 403);
-    if (!confere(String(ctx.body.senha || ""), u.hash)) throw new Erro("Senha incorreta.", 401);
+    if (!(await confere(String(ctx.body.senha || ""), u.hash))) throw new Erro("Senha incorreta.", 401);
+    // pedido Pix em andamento ou reembolso a receber: sem e-mail não há como confirmar nem devolver o valor
+    if ((await db.get("SELECT COUNT(*) n FROM pedidos WHERE user_id=? AND status IN ('PENDING','REFUND_NEEDED')", [ctx.user.id])).n)
+      throw new Erro("Você tem pedido Pix aguardando pagamento ou reembolso. Conclua isso antes de excluir a conta (ou fale com o suporte).", 409);
     await db.run("UPDATE users SET nome='Usuário removido', contato='removido-'||id::text, email=NULL, telefone=NULL, hash='', status='DELETED', atualizado_em=? WHERE id=?", [agora(), ctx.user.id]);
     await db.run("DELETE FROM notifications WHERE user_id=?", [ctx.user.id]); await encerrarSessoes(ctx.user.id);
     await audit(ctx.user.id, "CONTA_EXCLUIDA", null, ctx.ip);
@@ -150,4 +167,4 @@ const rotas = [
   ["GET", /^\/api\/notificacoes$/, ctx => db.all("SELECT id, titulo, texto, lida, criado_em FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 30", [ctx.user.id]), "user"],
   ["POST", /^\/api\/notificacoes\/lidas$/, async ctx => { await db.run("UPDATE notifications SET lida=1 WHERE user_id=?", [ctx.user.id]); return { ok: true }; }, "user"]
 ];
-module.exports = { rotas, usuarioDaSessao, hashSenha, ipDe };
+module.exports = { rotas, usuarioDaSessao, hashSenha, confere, senhaOk, ipDe };

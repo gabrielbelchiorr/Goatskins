@@ -12,7 +12,9 @@ const cfg = require("./config");
 types.setTypeParser(20, v => Number(v));    // BIGINT / COUNT(*) / BIGSERIAL chegam como número (todos cabem em 2^53)
 types.setTypeParser(1700, v => parseFloat(v)); // NUMERIC (ex.: SUM, divisões) também como número
 
+// statement_timeout / idle_in_transaction_session_timeout: uma consulta travada ou uma transação esquecida aberta nunca segura a trava de escrita para sempre.
 const pool = new Pool({ connectionString: cfg.DATABASE_URL, max: cfg.PG_POOL_MAX, connectionTimeoutMillis: 10000, idleTimeoutMillis: 30000,
+  statement_timeout: 20000, idle_in_transaction_session_timeout: 30000, application_name: "goatskins",
   ssl: cfg.DATABASE_SSL ? { rejectUnauthorized: false } : undefined });
 pool.on("error", e => console.error("[pg] erro em conexão ociosa:", e.message)); // sem isso um erro de rede derrubaria o processo
 
@@ -86,6 +88,20 @@ CREATE INDEX ix_pedidos_user ON pedidos(user_id, id);
 CREATE INDEX ix_pedidos_status ON pedidos(status, expira_em);
 CREATE INDEX ix_pedidos_camp ON pedidos(campaign_id);
 CREATE INDEX ix_reservas_pedido ON reservas(pedido_id);`
+,
+/* 2: restrições extras (defesa em profundidade) e índices. As CHECK entram como NOT VALID: valem para toda linha nova/alterada sem
+      reescrever nem barrar dados antigos. Depois de conferir os dados, dá para rodar ALTER TABLE ... VALIDATE CONSTRAINT <nome>. */ `
+ALTER TABLE users ADD CONSTRAINT ck_users_role CHECK (role IN ('USER','ADMIN','SUPER_ADMIN')) NOT VALID;
+ALTER TABLE users ADD CONSTRAINT ck_users_status CHECK (status IN ('ACTIVE','SUSPENDED','DELETED')) NOT VALID;
+ALTER TABLE campaigns ADD CONSTRAINT ck_camp_status CHECK (status IN ('OPEN','CLOSED','DRAWN')) NOT VALID;
+ALTER TABLE campaigns ADD CONSTRAINT ck_camp_max CHECK (max BETWEEN 1 AND 100 AND max_por_usuario BETWEEN 1 AND max) NOT VALID;
+ALTER TABLE tickets ADD CONSTRAINT ck_tickets_n CHECK (n BETWEEN 1 AND 100) NOT VALID;
+ALTER TABLE reservas ADD CONSTRAINT ck_reservas_n CHECK (n BETWEEN 1 AND 100) NOT VALID;
+CREATE INDEX IF NOT EXISTS ix_tickets_camp_user ON tickets(campaign_id, user_id);
+CREATE INDEX IF NOT EXISTS ix_sessions_expira ON sessions(expira);
+CREATE INDEX IF NOT EXISTS ix_tokens_expira ON tokens_email(expira);
+CREATE INDEX IF NOT EXISTS ix_audit_quando ON audit_logs(id DESC);
+CREATE INDEX IF NOT EXISTS ix_pedidos_pending ON pedidos(expira_em) WHERE status='PENDING';`
 /* próximas alterações: acrescente novos itens a este array (nunca edite os já aplicados) */
 ];
 
@@ -123,9 +139,15 @@ async function audit(uid, acao, detalhe, ip) {
 async function notificar(uid, titulo, texto) {
   await run("INSERT INTO notifications(user_id,titulo,texto,criado_em) VALUES(?,?,?,?)", [uid, titulo, texto, agora()]);
 }
+/* Versão barata para rotas de leitura: só entra na transação (e na trava de escrita) quando existe mesmo algo vencido.
+   Antes, TODA chamada a /api/estado e /api/pedidos disputava a trava global de escrita. */
+async function liberarSeVencido() {
+  if (await get("SELECT 1 FROM pedidos WHERE status='PENDING' AND expira_em<? LIMIT 1", [Date.now()])) await tx(() => liberar());
+}
+const ping = () => get("SELECT 1 ok");
 /* Libera reservas de pedidos vencidos. Chamar DENTRO de uma transação (ou via tx(() => liberar())). */
 async function liberar() {
   await run("UPDATE pedidos SET status='EXPIRED', atualizado_em=? WHERE status='PENDING' AND expira_em<?", [agora(), Date.now()]);
   await run("DELETE FROM reservas WHERE pedido_id IN (SELECT id FROM pedidos WHERE status<>'PENDING')");
 }
-module.exports = { db, tx, iniciar, fechar, liberar, sha, agora, audit, notificar, novaSemente };
+module.exports = { db, tx, iniciar, fechar, liberar, liberarSeVencido, ping, sha, agora, audit, notificar, novaSemente };
