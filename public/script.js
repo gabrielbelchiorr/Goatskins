@@ -5,6 +5,12 @@ let sorteioAtual = null, pedidoPendente = null, buscandoPendente = false, pedido
 const sorteioURL = Number(new URLSearchParams(location.search).get("sorteio"));
 if (Number.isInteger(sorteioURL) && sorteioURL > 0) { view = "detalhe"; sorteioAtual = sorteioURL; }
 
+// DEMONSTRAÇÃO LOCAL (faculdade): null = sorteio normal; número = animação simulada.
+// Só funciona em localhost e em sorteios gratuitos; nunca grava vencedor no servidor.
+const NUMERO_ESCOLHIDO_TESTE = null;
+// Nome que aparece como ganhador na animação de teste (troque pelo nome do seu amigo).
+const NOME_GANHADOR_TESTE = "Fulano";
+
 const IMG_MAX = 900; // largura máxima das fotos enviadas (px)
 
 function $(id) { const e = document.getElementById(id); if (!e) throw new Error("id ausente: " + id); return e; }
@@ -441,11 +447,15 @@ function roleta(c) {
   go.addEventListener("click", async () => {
     go.disabled = true;
     try {
-      const w = await api("/api/admin/campanhas/" + c.id + "/sortear", "POST"), i = nums.indexOf(w.n);
+      const demoLocal = ["localhost", "127.0.0.1"].includes(location.hostname) && Number(c.preco) === 0 && NUMERO_ESCOLHIDO_TESTE !== null;
+      if (demoLocal && !nums.includes(NUMERO_ESCOLHIDO_TESTE)) throw new Error("Número de teste não participa deste sorteio: " + NUMERO_ESCOLHIDO_TESTE);
+      const w = demoLocal
+        ? { n: NUMERO_ESCOLHIDO_TESTE, nome: NOME_GANHADOR_TESTE }
+        : await api("/api/admin/campanhas/" + c.id + "/sortear", "POST"), i = nums.indexOf(w.n);
       const centro = (i + 0.5) * SEG, jit = (Math.random() - 0.5) * SEG * 0.7;
       const rot = (5 + Math.floor(Math.random() * 4)) * 360 + (((-(centro + jit)) % 360) + 360) % 360;
       wheel.style.transition = "transform 5s cubic-bezier(0.15, 0.7, 0.1, 1)"; wheel.style.transform = "rotate(" + rot + "deg)";
-      setTimeout(async () => { res.textContent = "Nº " + w.n + " · " + w.nome; await carregar(); }, 5100);
+      setTimeout(async () => { res.textContent = "Nº " + w.n + " · " + w.nome; if (!demoLocal) await carregar(); }, 5100);
     } catch (e) { res.textContent = e.message; }
   });
   openModal(false, h("h3", null, "Roleta: " + c.premio), wrap, res, go);
