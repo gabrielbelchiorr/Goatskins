@@ -22,7 +22,7 @@ const brcodeOk = q => typeof q === "string" && q.length > 20 && q.startsWith("00
 const publico = p => ({
   id: p.public_id, campanha: p.campaign_id, premio: p.premio, numeros: JSON.parse(p.numeros), total: p.total_centavos / 100,
   status: p.status, expira_em: p.expira_em, criado_em: p.criado_em, pago_em: p.pago_em,
-  pix: p.status === "PENDING" && p.qr_code ? { qr_code: p.qr_code, qr_code_base64: p.qr_code_base64, ticket_url: p.ticket_url } : null });
+  pix: p.status === "PENDING" && p.expira_em > Date.now() && p.qr_code ? { qr_code: p.qr_code, qr_code_base64: p.qr_code_base64, ticket_url: p.ticket_url } : null });
 const SEL = "SELECT p.*, c.premio FROM pedidos p JOIN campaigns c ON c.id=p.campaign_id";
 
 /* Interpreta a Order devolvida pelo Mercado Pago. Retorna { estado: PAGO|FALHOU|PENDENTE, novo?, motivo? } */
@@ -65,7 +65,9 @@ function aplicarNoBanco(pedidoId, o) {
     if (r.estado === "PENDENTE") { await db.run("UPDATE pedidos SET mp_status=?, atualizado_em=? WHERE id=?", [String(o && o.status || "").slice(0, 40), agoraIso, p.id]); return { status: p.status }; }
     if (r.estado === "FALHOU") {
       if (p.status === "PENDING") {
-        await db.run("UPDATE pedidos SET status=?, mp_status=?, atualizado_em=? WHERE id=?", [r.novo, String(o.status || "").slice(0, 40), agoraIso, p.id]);
+        // O cancelamento feito ao fim da janela vira EXPIRED (um cancelamento antecipado continua CANCELED).
+        const novoStatus = r.novo === "CANCELED" && Number(p.expira_em) <= Date.now() ? "EXPIRED" : r.novo;
+        await db.run("UPDATE pedidos SET status=?, mp_status=?, atualizado_em=? WHERE id=?", [novoStatus, String(o.status || "").slice(0, 40), agoraIso, p.id]);
         await db.run("DELETE FROM reservas WHERE pedido_id=?", [p.id]);
         await notificar(p.user_id, "Pagamento não concluído", "O Pix do seu pedido não foi concluído e os números foram liberados.");
       }
@@ -104,7 +106,34 @@ function aplicarNoBanco(pedidoId, o) {
   });
 }
 
-setInterval(() => { tx(() => liberar()).catch(e => console.error("varredura:", e.message)); }, 60e3).unref();
+/* O prazo de RESERVA_MS pode ser 5 minutos, mas o Pix do MP fica pagável por pelo menos 30.
+   Por isso NUNCA liberamos números de uma Order real antes de confirmar cancelamento
+   na API, ou pagamento. Se o MP estiver offline, a reserva segue bloqueada e tentamos de novo.
+   Isso evita vender o mesmo número para duas pessoas. */
+let varreduraAtiva = null;
+async function finalizarVencidos() {
+  if (!mp.configurado()) return;
+  if (varreduraAtiva) return varreduraAtiva;
+  varreduraAtiva = (async () => {
+    const lista = await db.all("SELECT id, public_id, mp_order_id FROM pedidos WHERE status='PENDING' AND expira_em<? AND mp_order_id IS NOT NULL ORDER BY expira_em LIMIT 10", [Date.now()]);
+    for (const p of lista) {
+      try {
+        // Reconciliar primeiro: se o pagamento aconteceu no limite, não cancelar um pagamento confirmado.
+        let order = await mp.buscarOrder(p.mp_order_id);
+        const status = await aplicar(p.id, order);
+        if (status !== "PENDING") continue;
+        order = await mp.cancelarOrder(p.mp_order_id, p.public_id);
+        await aplicar(p.id, order);
+        // Se a API não confirmou a transição, não liberamos a reserva.
+      } catch (e) {
+        console.error("[pix] cancelamento/consulta pendente: pedido " + p.id + " | " + e.message);
+      }
+    }
+    await tx(() => liberar()); // pedidos que nem chegaram a gerar Order
+  })().finally(() => { varreduraAtiva = null; });
+  return varreduraAtiva;
+}
+setInterval(() => { finalizarVencidos().catch(e => console.error("varredura Pix:", e.message)); }, 5000).unref();
 
 const rotas = [
   /* 1-8: o usuário escolhe os números; preço e disponibilidade vêm SEMPRE do banco */
@@ -112,9 +141,10 @@ const rotas = [
     const u = ctx.user, campId = Number(ctx.params[0]); limite("pedido:" + u.id, 10, 6e5);
     if (!mp.configurado()) throw new Erro("Pagamentos indisponíveis no momento.", 503);
     if (!u.email_verificado) throw new Erro("Confirme seu e-mail para participar.", 403);
+    finalizarVencidos().catch(e => console.error("[pix] varredura:", e.message)); // cancelamento fora da resposta do cliente
     const nums = ctx.body.numeros;
     if (!Array.isArray(nums) || !nums.length || nums.length > 100) throw new Erro("Escolha pelo menos um número.");
-    const lista = [...new Set(nums.map(n => inteiro(n, 1, 100)))]; // preço, total, status e valor de qualquer outro campo do corpo são ignorados
+    const lista = [...new Set(nums.map(n => inteiro(n, 1, 100)))].sort((a,b)=>a-b); // preço, total, status e valor de qualquer outro campo do corpo são ignorados
     const publicId = crypto.randomBytes(16).toString("hex");
     const pedido = await tx(async () => {
       await liberar();
@@ -122,6 +152,12 @@ const rotas = [
       if (c.status !== "OPEN") throw new Erro("Este sorteio não está aberto.");
       if (c.preco_centavos <= 0) throw new Erro("Este sorteio é gratuito: escolha os números direto no sorteio.");
       if (lista.some(n => n > c.max)) throw new Erro("Número fora do sorteio.");
+      // Idempotência de negócio: ao repetir os mesmos números ainda pendentes, retorna a cobrança antiga.
+      const anterior = await db.get("SELECT id, mp_order_id, qr_code FROM pedidos WHERE user_id=? AND campaign_id=? AND numeros=? AND status='PENDING' AND expira_em>? ORDER BY id DESC LIMIT 1", [u.id, campId, JSON.stringify(lista), Date.now()]);
+      if (anterior) {
+        if (!anterior.mp_order_id || !anterior.qr_code) throw new Erro("Seu Pix está sendo gerado. Aguarde alguns segundos e tente voltar ao pagamento.", 409);
+        return { id: anterior.id, reutilizado: true };
+      }
       if ((await db.get("SELECT COUNT(*) n FROM pedidos WHERE user_id=? AND status='PENDING'", [u.id])).n >= MAX_PENDENTES)
         throw new Erro("Você já tem pedidos Pix aguardando pagamento. Pague ou aguarde expirarem.", 429);
       const comprados = (await db.get("SELECT COUNT(*) n FROM tickets WHERE campaign_id=? AND user_id=?", [campId, u.id])).n;
@@ -138,6 +174,7 @@ const rotas = [
       await audit(u.id, "PEDIDO_CRIADO", "pedido " + id + " campanha " + campId + " números " + lista.join(",") + " total " + total, ctx.ip);
       return { id, total };
     });
+    if (pedido.reutilizado) return publico(await db.get(SEL + " WHERE p.id=?", [pedido.id]));
     try {
       const o = await mp.criarOrder({ ref: publicId, totalCentavos: pedido.total, email: u.email });
       const pm = o && o.transactions && o.transactions.payments && o.transactions.payments[0] && o.transactions.payments[0].payment_method || {};
@@ -157,10 +194,16 @@ const rotas = [
     return publico(await db.get(SEL + " WHERE p.id=?", [pedido.id]));
   }, "user"],
 
+  /* Recuperação autenticada: nunca depende de localStorage nem devolve Pix de outra pessoa. */
+  ["GET", /^\/api\/pedidos\/pendente$/, async ctx => {
+    finalizarVencidos().catch(e => console.error("[pix] varredura:", e.message)); await liberarSeVencido();
+    const p = await db.get(SEL + " WHERE p.user_id=? AND p.status='PENDING' AND p.expira_em>? AND p.qr_code IS NOT NULL ORDER BY p.id DESC LIMIT 1", [ctx.user.id, Date.now()]);
+    return p ? publico(p) : null;
+  }, "user"],
   /* Pedidos do próprio usuário (nunca de outro: filtro por user_id no SQL) */
-  ["GET", /^\/api\/pedidos$/, async ctx => { await liberarSeVencido(); return (await db.all(SEL + " WHERE p.user_id=? ORDER BY p.id DESC LIMIT 30", [ctx.user.id])).map(publico); }, "user"],
+  ["GET", /^\/api\/pedidos$/, async ctx => { finalizarVencidos().catch(e => console.error("[pix] varredura:", e.message)); await liberarSeVencido(); return (await db.all(SEL + " WHERE p.user_id=? ORDER BY p.id DESC LIMIT 30", [ctx.user.id])).map(publico); }, "user"],
   ["GET", /^\/api\/pedidos\/([a-f0-9]{32})$/, async ctx => {
-    await liberarSeVencido(); const p = await db.get(SEL + " WHERE p.public_id=? AND p.user_id=?", [ctx.params[0], ctx.user.id]);
+    finalizarVencidos().catch(e => console.error("[pix] varredura:", e.message)); await liberarSeVencido(); const p = await db.get(SEL + " WHERE p.public_id=? AND p.user_id=?", [ctx.params[0], ctx.user.id]);
     if (!p) throw new Erro("Pedido não encontrado.", 404); return publico(p);
   }, "user"],
   /* "Já paguei": o servidor consulta o Mercado Pago (não confia em nada vindo do navegador) */
@@ -216,4 +259,4 @@ const rotas = [
     await audit(ctx.user.id, "PEDIDO_REEMBOLSADO", ctx.params[0], ctx.ip); return { ok: true };
   }, "admin"]
 ];
-module.exports = { rotas, aplicar, interpretar, crc16, brcodeOk };
+module.exports = { rotas, aplicar, interpretar, crc16, brcodeOk, finalizarVencidos };

@@ -1,6 +1,10 @@
 /* GOATSKINS – tela (conversa com o servidor pela API) */
 let S = { eu: null, naoLidas: 0, s: { titulo: "", sub: "", banner: "", cores: { gold: "#d4aa55", copper: "#b8651f", slate: "#102440", navy: "#0e1a33" } }, c: [] };
 let view = "sorteios";
+let sorteioAtual = null, pedidoPendente = null, buscandoPendente = false, pedidoPoll = null;
+const sorteioURL = Number(new URLSearchParams(location.search).get("sorteio"));
+if (Number.isInteger(sorteioURL) && sorteioURL > 0) { view = "detalhe"; sorteioAtual = sorteioURL; }
+
 const IMG_MAX = 900; // largura máxima das fotos enviadas (px)
 
 function $(id) { const e = document.getElementById(id); if (!e) throw new Error("id ausente: " + id); return e; }
@@ -18,7 +22,7 @@ async function api(url, method, body) {
   if (!r.ok) throw new Error(d.erro || (r.status === 429 ? "Muitas tentativas. Aguarde um pouco." : r.status >= 500 ? "Erro no servidor. Tente novamente em instantes." : "Erro " + r.status));
   return d;
 }
-async function carregar() { S = await api("/api/estado"); render(); }
+async function carregar() { S = await api("/api/estado"); render(); await atualizarPendente(); }
 
 function lerFoto(file, cb) {
   const r = new FileReader();
@@ -39,7 +43,7 @@ function lerFoto(file, cb) {
 /* ---------- Janela (modal) e campos ---------- */
 function openModal(wide, ...nodes) {
   const b = $("modalBody"); b.innerHTML = ""; b.append(...nodes);
-  b.parentElement.classList.toggle("wide", !!wide); $("modal").hidden = false;
+  b.parentElement.classList.toggle("wide", !!wide); b.parentElement.classList.remove("pix-dialog"); $("modal").hidden = false;
 }
 function closeModal() { $("modal").hidden = true; }
 function campo(rotulo, tipo, valor) {
@@ -73,9 +77,23 @@ function aplicarAparencia() {
 
 /* ---------- Telas ---------- */
 const cheio = c => c.total >= c.max;
+function navegar(novaView) {
+  sorteioAtual = null; view = novaView;
+  const u = new URL(location.href); u.searchParams.delete("sorteio");
+  history.pushState({}, "", u.pathname + u.search);
+  render(); window.scrollTo(0, 0);
+}
+function abrirSorteio(id) {
+  const c = S.c.find(x => x.id === id); if (!c) return;
+  sorteioAtual = id; view = "detalhe";
+  history.pushState({}, "", "?sorteio=" + encodeURIComponent(id));
+  render(); window.scrollTo(0, 0);
+}
 function cardSorteio(c) {
   const pct = Math.round(Math.min(100, c.total / c.max * 100)), restante = c.max_por_usuario - c.meus.length, fechado = c.status !== "OPEN" || cheio(c);
-  const card = h("article", "card"), prize = h("div", "prize");
+  const card = h("article", "card"), prize = h("button", "prize");
+  prize.type = "button"; prize.setAttribute("aria-label", "Ver sorteio " + c.premio);
+  prize.addEventListener("click", () => abrirSorteio(c.id));
   if (c.foto) { prize.classList.add("photo"); const im = h("img"); im.src = c.foto; im.alt = c.premio; im.loading = "lazy"; prize.append(im); }
   else { prize.textContent = c.premio; prize.style.backgroundColor = c.cor; }
   if (c.valor) prize.append(h("span", "chip", "Skin " + brl(c.valor)));
@@ -87,8 +105,8 @@ function cardSorteio(c) {
   if (c.preco > 0) info.append(h("p", "price", "Cada número: " + brl(c.preco)));
   const bar = h("div", "bar"), fill = h("span"); fill.style.width = pct + "%"; bar.append(fill);
   info.append(bar, h("p", "muted", c.total + " de " + c.max + " números " + (c.preco > 0 ? "vendidos" : "escolhidos") + " · " + pct + "%" + (c.reservados.length ? " · " + c.reservados.length + " reservado(s)" : "")));
-  const btn = botao(fechado ? "Aguardando roleta" : restante <= 0 ? "Seus números: " + c.meus.join(", ") : c.preco > 0 ? "Comprar números" : "Escolher números", "", () => escolherNumeros(c));
-  btn.disabled = fechado || restante <= 0; btn.classList.add("buy-btn"); info.append(btn);
+  const btn = botao(fechado ? "Ver sorteio encerrado" : restante <= 0 ? "Ver meus números" : "Ver sorteio e escolher números", "", () => abrirSorteio(c.id));
+  btn.classList.add("buy-btn"); info.append(btn);
   if (admin()) {
     if (fechado && c.total > 0) info.append(botao("Girar roleta", "alt", () => roleta(c)));
     if (!fechado) info.append(botao("Encerrar inscrições", "alt sale-close-btn", async () => { if (confirm("Encerrar as inscrições de " + c.premio + "?")) { try { await api("/api/admin/campanhas/" + c.id + "/encerrar", "POST"); await carregar(); } catch (e) { alert(e.message); } } }));
@@ -138,9 +156,93 @@ function render() {
   f.hidden = !(S.eu && !S.eu.email_verificado);
   if (!f.hidden) f.append(h("span", null, "Confirme seu e-mail para poder participar. Enviamos um link para " + S.eu.email + "."),
     botao("Reenviar", "", async () => { try { await api("/api/reenviar-verificacao", "POST"); aviso("Enviado", "Confira sua caixa de entrada (e o spam)."); } catch (e) { aviso("Ops", e.message); } }));
+  if (view === "detalhe") {
+    const c = S.c.find(x => x.id === sorteioAtual);
+    if (c) renderDetalhe(c);
+    else { sorteioAtual = null; view = "sorteios"; }
+  }
   document.querySelectorAll(".view").forEach(v => { v.hidden = v.dataset.view !== view; });
   $("inicio").hidden = view !== "sorteios"; document.body.classList.toggle("sem-hero", view !== "sorteios");
   document.querySelectorAll(".nv[data-view]").forEach(b => b.classList.toggle("on", b.dataset.view === view));
+}
+
+/* ---------- Página exclusiva da skin ---------- */
+function renderDetalhe(c) {
+  const root = $("saleDetail"); root.innerHTML = "";
+  const aberto = c.status === "OPEN" && !cheio(c), restante = Math.max(0, c.max_por_usuario - c.meus.length);
+  const voltar = botao("← Voltar aos sorteios", "alt", () => navegar("sorteios")); voltar.classList.add("sale-back");
+  const top = h("div", "sale-hero"), visual = h("div", "sale-art"), infos = h("div", "sale-overview");
+  if (c.foto) { const im = h("img"); im.src = c.foto; im.alt = c.premio; visual.append(im); }
+  else { visual.append(h("span", "sale-fallback", "✦")); visual.style.background = c.cor; }
+  infos.append(h("span", "sale-eyebrow", "✦ GOATSKINS / SORTEIO #" + c.id), h("h1", null, c.premio));
+  if (c.desgaste) infos.append(h("p", "sale-wear", c.desgaste));
+  if (c.descricao) infos.append(h("p", "muted", c.descricao));
+  const specs = h("div", "sale-specs");
+  [["VALOR DA COTA", brl(c.preco)], ["DISPONÍVEIS", String(Math.max(0,c.max-c.total-c.reservados.length))], ["PARTICIPAÇÕES", c.total + " / " + c.max]].forEach(([k,v]) => {
+    const s = h("div", "sale-spec"); s.append(h("small", null, k), h("strong", null, v)); specs.append(s);
+  });
+  const barra = h("div", "sale-progress"), dentro = h("span"); dentro.style.width = Math.round(100*c.total/c.max) + "%";
+  barra.append(dentro); infos.append(specs,barra,h("p","muted",Math.round(100*c.total/c.max)+"% preenchido · "+c.reservados.length+" reservado(s) aguardando Pix"));
+  top.append(visual,infos); root.append(voltar,top);
+  const area = h("section","sale-numbers");
+  const areaHead = h("div","sale-numbers-head");
+  areaHead.append(h("div",null),h("div","sale-legend","● Livre     ◉ Selecionado     ◈ Reservado     ✓ Vendido"));
+  areaHead.firstChild.append(h("span","sale-eyebrow","ESCOLHA A SUA SORTE"),h("h2",null,"Selecione seus números"));
+  area.append(areaHead);
+  if (!aberto || !restante) {
+    const texto = !aberto ? "Este sorteio não está aceitando novos números." : "Você já atingiu seu limite de números neste sorteio.";
+    area.append(h("p","muted",texto));
+  }
+  const sel = new Set(), grade = h("div","sale-grid"), err = h("p","err");
+  const checkout = h("div","sale-checkout"), resumo = h("div","sale-checkout-total"), finalizar = botao(c.preco > 0 ? "GARANTIR NÚMEROS · PIX" : "CONFIRMAR NÚMEROS");
+  finalizar.classList.add("sale-pay-btn");
+  const botoes = [];
+  function atualizar() {
+    for (const [n,b] of botoes) { b.classList.toggle("on",sel.has(n)); b.setAttribute("aria-pressed",String(sel.has(n))); }
+    resumo.replaceChildren(h("small",null,sel.size+" NÚMERO(S) SELECIONADO(S)"),h("strong",null,brl(c.preco*sel.size)));
+    finalizar.disabled = !sel.size || !aberto || !restante;
+  }
+  const disponiveis = [];
+  for(let n=1;n<=c.max;n++) {
+    const b=h("button","num",String(n).padStart(2,"0")); b.type="button";
+    if (c.meus.includes(n)) {b.classList.add("mine"); b.title="Seu número"; b.disabled=true;}
+    else if(c.ocupados.includes(n)) {b.classList.add("sold");b.title="Vendido";b.disabled=true;}
+    else if(c.reservados.includes(n)) {b.classList.add("res");b.title="Reservado";b.disabled=true;}
+    else { disponiveis.push(n); if(!aberto || !restante) b.disabled=true; else b.addEventListener("click",()=>{
+      if(sel.has(n))sel.delete(n);else if(sel.size<restante)sel.add(n);atualizar();
+    }); }
+    botoes.push([n,b]);grade.append(b);
+  }
+  if (aberto && restante) {
+    const random = h("div","sale-random"); random.append(h("span",null,"SELEÇÃO RÁPIDA"));
+    [1,3,5,10].forEach(n=>random.append(botao("+"+n,"alt",()=>{
+      // Amostragem sem repetição; nunca escolhe um número reservado/vendido.
+      const possiveis = disponiveis.filter(x=>!sel.has(x));
+      for(let i=possiveis.length-1;i>0;i--){const k=Math.floor(Math.random()*(i+1));[possiveis[i],possiveis[k]]=[possiveis[k],possiveis[i]];}
+      possiveis.slice(0,Math.max(0,Math.min(n,restante-sel.size))).forEach(x=>sel.add(x));atualizar();
+    })));
+    random.append(botao("Limpar","alt",()=>{sel.clear();atualizar();}));area.append(random);
+  }
+  area.append(grade,err);
+  if (aberto && restante) {
+    checkout.append(resumo,finalizar);area.append(checkout);
+    finalizar.addEventListener("click",()=>rodar(err,async()=>{
+      if (!S.eu) return authModal("entrar");
+      if (!S.eu.email_verificado) return verificarEmailModal();
+      if (!sel.size) return;
+      const nums=[...sel].sort((a,b)=>a-b); finalizar.disabled=true; finalizar.textContent="PROCESSANDO...";
+      try {
+        if (c.preco>0) {
+          const pedido=await api("/api/campanhas/"+c.id+"/pedidos","POST",{numeros:nums});
+          await carregar(); pedidoModal(pedido);
+        } else {
+          const r=await api("/api/campanhas/"+c.id+"/numeros","POST",{numeros:nums});
+          await carregar(); aviso("Participação confirmada!","Seus números: "+r.numeros.join(", "));
+        }
+      } catch(e) {err.textContent=e.message; finalizar.disabled=false;finalizar.textContent=c.preco>0?"GARANTIR NÚMEROS · PIX":"CONFIRMAR NÚMEROS";}
+    }));
+  }
+  atualizar();root.append(area);
 }
 
 /* ---------- Conta: entrar, cadastrar, recuperar senha ---------- */
@@ -206,39 +308,116 @@ function escolherNumeros(c) {
   openModal(false, h("h3", null, c.premio), h("p", "muted", "Escolha até " + restante + " número(s). Riscado = indisponível" + (c.preco > 0 ? " (inclui números reservados por quem está pagando). Cada número custa " + brl(c.preco) + "." : ".")), grid, err, ok);
 }
 
-/* ---------- Pagamento Pix ---------- */
+/* ---------- Pix: sessão persistente no banco, com contagem baseada no servidor ---------- */
 const STATUS_PEDIDO = { PENDING: "Aguardando pagamento", PAID: "Pago", EXPIRED: "Expirado", CANCELED: "Cancelado", FAILED: "Não concluído", REFUND_NEEDED: "Reembolso em andamento", REFUNDED: "Reembolsado" };
-const MSG_PEDIDO = { EXPIRED: "O tempo para pagar acabou e os números foram liberados. Se você chegou a pagar, o sistema confirma sozinho; se os números já tiverem sido vendidos, o valor é devolvido.",
-  CANCELED: "O pagamento não foi concluído e os números foram liberados.", FAILED: "O pagamento não foi concluído e os números foram liberados.",
-  REFUND_NEEDED: "Recebemos o pagamento depois do prazo e os números já não estavam disponíveis. O valor será devolvido.", REFUNDED: "O valor deste pedido foi devolvido." };
+const MSG_PEDIDO = { EXPIRED: "O prazo terminou. O sistema só libera os números depois de cancelar a cobrança no Mercado Pago.",
+  CANCELED: "A cobrança foi cancelada e os números foram liberados.", FAILED: "O pagamento não foi concluído e os números foram liberados.",
+  REFUND_NEEDED: "Recebemos um pagamento após o prazo e o valor precisa ser devolvido.", REFUNDED: "O valor deste pedido foi devolvido." };
+const relogio = expira => {
+  const segundos=Math.max(0,Math.ceil((Number(expira)-Date.now())/1000));
+  return String(Math.floor(segundos/60)).padStart(2,"0")+":"+String(segundos%60).padStart(2,"0");
+};
+function desenharBarra() {
+  const b=$("pendingPixBar"), p=pedidoPendente;
+  if (!S.eu || !p || p.status!=="PENDING" || Number(p.expira_em)<=Date.now() || !p.pix) { b.hidden=true; return; }
+  b.hidden=false;$("pendingPixTitle").textContent="Pagamento pendente · "+p.premio;
+  $("pendingPixCountdown").textContent="PIX RESERVADO POR "+relogio(p.expira_em);
+}
+async function atualizarPendente() {
+  if (!S.eu) {pedidoPendente=null;desenharBarra();return;}
+  if (buscandoPendente) return;
+  buscandoPendente=true;
+  try {pedidoPendente=await api("/api/pedidos/pendente");desenharBarra();}
+  catch(e) { /* mantém a barra anterior até termos resposta do servidor */ }
+  finally {buscandoPendente=false;}
+}
+$("resumePixBtn").addEventListener("click",async()=>{
+  const atual=pedidoPendente;if(!atual)return;
+  try {const p=await api("/api/pedidos/"+atual.id);pedidoModal(p);}catch(e){aviso("Pagamento",e.message);}
+});
+setInterval(desenharBarra,1000);
+setInterval(()=>{if(S.eu)atualizarPendente();},15000);
+document.addEventListener("visibilitychange",()=>{if(!document.hidden&&S.eu)atualizarPendente();});
+
 function pedidoModal(p0) {
-  let p = p0, timer = null, n = 0; const box = h("div"), parar = () => { clearInterval(timer); timer = null; };
+  if(pedidoPoll){clearInterval(pedidoPoll);pedidoPoll=null;}
+  let p=p0;
+  const box=h("div","pix-checkout"), card=h("div","pix-panel"), err=h("p","err");
   const desenhar = () => {
-    box.innerHTML = "";
-    if (p.status === "PAID") { box.append(h("h3", null, "Pagamento confirmado!"), h("p", "center", "Seus números em " + p.premio + ":"), h("div", "big", p.numeros.join(", ")), h("p", "muted center", "Acompanhe em Meus bilhetes.")); return parar(); }
-    if (p.status !== "PENDING" || !p.pix) { box.append(h("h3", null, "Pedido " + (STATUS_PEDIDO[p.status] || "").toLowerCase()), h("p", null, MSG_PEDIDO[p.status] || "Não foi possível gerar o Pix deste pedido.")); return parar(); }
-    const err = h("p", "err"), codigo = h("input", "pixcode"); codigo.readOnly = true; codigo.value = p.pix.qr_code || "";
-    box.append(h("h3", null, "Pague com Pix"), h("p", null, p.premio + " · números " + p.numeros.join(", ") + " · " + brl(p.total)));
-    if (p.pix.qr_code_base64) { const im = h("img", "qr"); im.src = "data:image/png;base64," + p.pix.qr_code_base64; im.alt = "QR Code do Pix"; box.append(im); }
-    if (p.pix.qr_code) { const cp = botao("Copiar código Pix", "", () => { codigo.select(); (navigator.clipboard ? navigator.clipboard.writeText(codigo.value) : Promise.reject()).then(() => { cp.textContent = "Copiado!"; }, () => { document.execCommand("copy"); }); }); box.append(codigo, cp); }
-    if (p.pix.ticket_url) { const a = h("a", null, "Abrir página de pagamento"); a.href = p.pix.ticket_url; a.target = "_blank"; a.rel = "noopener noreferrer"; box.append(h("p", null), a); }
-    box.append(h("p", "muted", "Números reservados até " + new Date(p.expira_em).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) + ". Esta tela atualiza sozinha quando o pagamento for confirmado."), err,
-      botao("Já paguei", "alt", () => rodar(err, async () => { p = await api("/api/pedidos/" + p.id + "/atualizar", "POST"); desenhar(); if (p.status === "PAID") { carregar(); if (view === "bilhetes") carregarPedidos(); } })));
+    card.innerHTML="";
+    if (p.status==="PAID") {
+      card.append(h("span","pix-success","✓ PAGAMENTO APROVADO"),h("h2",null,"Números garantidos!"),
+        h("p","muted center",p.premio),h("div","big",p.numeros.join(", ")));
+      if(pedidoPoll){clearInterval(pedidoPoll);pedidoPoll=null;}
+      atualizarPendente();carregar().catch(()=>{});return;
+    }
+    if(p.status!=="PENDING") {
+      card.append(h("h2",null,"Pedido "+(STATUS_PEDIDO[p.status]||p.status).toLowerCase()),
+        h("p","muted center",MSG_PEDIDO[p.status]||"Verifique seus pedidos."));
+      if(pedidoPoll){clearInterval(pedidoPoll);pedidoPoll=null;}
+      atualizarPendente();carregar().catch(()=>{});return;
+    }
+    const aindaValido=Number(p.expira_em)>Date.now();
+    if(!aindaValido || !p.pix) {
+      card.append(h("span","pix-countdown pix-expired","◷ PRAZO DE 5 MINUTOS ENCERRADO"),
+        h("h2",null,"Encerrando cobrança"),
+        h("p","muted center","O pagamento está sendo conciliado com o Mercado Pago. Os números ficam protegidos até a confirmação do cancelamento ou do pagamento."));
+      return;
+    }
+    const countdown=h("span","pix-countdown", "◷ EXPIRA EM "+relogio(p.expira_em));
+    card.append(countdown,h("h2",null,"Pague agora"),h("p","pix-sub","Escaneie o QR Code para garantir seus números."));
+    if(p.pix.qr_code_base64){const img=h("img","pix-qr");img.src="data:image/png;base64,"+p.pix.qr_code_base64;img.alt="QR Code Pix";card.append(img);}
+    const detalhe=h("div","pix-detail");detalhe.append(h("small",null,"VOCÊ ESTÁ COMPRANDO"),h("strong",null,p.premio),
+      h("p",null,"Números "+p.numeros.map(x=>"#"+String(x).padStart(2,"0")).join(" · ")),
+      h("div","pix-total",brl(p.total)));card.append(detalhe);
+    if(p.pix.qr_code){
+      const codigo=h("input","pixcode");codigo.type="text";codigo.readOnly=true;codigo.value=p.pix.qr_code;
+      const cp=botao("▣   COPIAR CÓDIGO PIX", "", async()=>{
+        try {if(navigator.clipboard&&window.isSecureContext) await navigator.clipboard.writeText(codigo.value);
+          else {codigo.select();if(!document.execCommand("copy"))throw new Error("Falha ao copiar");}
+          cp.textContent="✓  CÓDIGO COPIADO!";
+        } catch(e) {err.textContent="Não consegui copiar. Selecione o código abaixo.";codigo.focus();codigo.select();}
+      });cp.classList.add("pix-copy");card.append(cp);
+      const details=h("details","pix-details"),summary=h("summary",null,"Ver código Pix copia e cola");details.append(summary,codigo);card.append(details);
+    }
+    card.append(h("p","pix-note","O pagamento é confirmado automaticamente. Não é necessário enviar comprovante."));
+    const tick=()=>{
+      if(!card.isConnected)return;
+      countdown.textContent="◷ EXPIRA EM "+relogio(p.expira_em);
+      if(Number(p.expira_em)<=Date.now()) desenhar();
+    };
+    countdown.tick=tick;
   };
-  desenhar(); openModal(false, box);
-  if (p.status === "PENDING") timer = setInterval(async () => {
-    if ($("modal").hidden || !box.isConnected) return parar();
-    try { n++; p = n % 3 === 0 ? await api("/api/pedidos/" + p.id + "/atualizar", "POST") : await api("/api/pedidos/" + p.id); desenhar(); if (p.status === "PAID") { carregar(); if (view === "bilhetes") carregarPedidos(); } } catch (e) { /* tenta de novo no próximo ciclo */ }
-  }, 5000);
+  box.append(card,err);desenhar();openModal(false,box);$("modalBody").parentElement.classList.add("pix-dialog");
+  // Redesenha somente quando o estado muda; o contador não reinicia ao recarregar a página.
+  pedidoPoll=setInterval(async()=>{
+    if(!box.isConnected||$("modal").hidden){clearInterval(pedidoPoll);pedidoPoll=null;return;}
+    const rel=card.querySelector(".pix-countdown");if(rel&&rel.tick)rel.tick();
+  },1000);
+  let chamadas=0;
+  const pollStatus=setInterval(async()=>{
+    if(!box.isConnected||$("modal").hidden||p.status!=="PENDING") {clearInterval(pollStatus);return;}
+    try{
+      const antes=p.status, antesPix=!!p.pix;
+      p=++chamadas%2===0 ? await api("/api/pedidos/"+p.id+"/atualizar","POST") : await api("/api/pedidos/"+p.id);
+      if(p.status!==antes||!!p.pix!==antesPix)desenhar();
+      if(p.status!=="PENDING") {clearInterval(pollStatus);await atualizarPendente();}
+    } catch(e) { /* falha de rede: mantém o pedido, tenta de novo na próxima consulta */ }
+  },10000);
+  atualizarPendente();
 }
 async function carregarPedidos() {
-  const ul = $("pedList"), vazio = $("noPed"); ul.innerHTML = "";
-  if (!S.eu) { vazio.hidden = true; return; }
+  const ul=$("pedList"), vazio=$("noPed");ul.innerHTML="";
+  if(!S.eu){vazio.hidden=true;return;}
   try {
-    const ps = await api("/api/pedidos"); vazio.hidden = ps.length > 0;
-    ps.forEach(p => { const li = h("li", "hrow"), t = h("div"); t.append(h("b", null, p.premio), h("p", null, "Números: " + p.numeros.join(", ") + " · " + brl(p.total)), h("p", "muted", STATUS_PEDIDO[p.status] || p.status));
-      if (p.status === "PENDING" && p.pix) t.append(botao("Ver Pix", "alt", () => pedidoModal(p))); li.append(t); ul.append(li); });
-  } catch (e) { vazio.hidden = true; }
+    const ps=await api("/api/pedidos");vazio.hidden=ps.length>0;
+    ps.forEach(p=>{const li=h("li","hrow"), t=h("div");t.append(h("b",null,p.premio),
+      h("p",null,"Números: "+p.numeros.join(", ")+" · "+brl(p.total)),
+      h("p","muted",STATUS_PEDIDO[p.status]||p.status));
+      if(p.status==="PENDING")t.append(botao(p.pix?"Voltar ao Pix":"Acompanhar pedido","alt",()=>pedidoModal(p)));
+      li.append(t);ul.append(li);
+    });
+  } catch(e){vazio.hidden=true;}
 }
 
 /* ---------- Roleta (admin) ----------
@@ -455,7 +634,7 @@ document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("modal"
 $("modal").addEventListener("click", e => { if (e.target === $("modal")) closeModal(); });
 document.querySelectorAll(".nv[data-view]").forEach(b => b.addEventListener("click", () => {
   if (mobileMQ.matches) menuAberto(false);
-  view = b.dataset.view; if (view === "bilhetes" && !S.eu) authModal("entrar"); render(); window.scrollTo(0, 0); if (view === "bilhetes") carregarPedidos();
+  navegar(b.dataset.view); if (view === "bilhetes" && !S.eu) authModal("entrar"); if (view === "bilhetes") carregarPedidos();
 }));
 $("loginBtn").addEventListener("click", async () => { if (S.eu) { await api("/api/logout", "POST"); await carregar(); } else authModal("entrar"); });
 $("contaBtn").addEventListener("click", () => conta().catch(e => aviso("Ops", e.message)));
@@ -468,5 +647,16 @@ carregar().then(() => {
     const tk = q.get("redefinir") || new URLSearchParams(location.hash.slice(1)).get("redefinir");
     if (tk && /^[a-f0-9]{64}$/.test(tk)) authModal("reset:" + tk);
   }
-  if (q.toString() || location.hash) history.replaceState(null, "", location.pathname);
+  // Remove somente tokens e mensagens temporárias, não a URL compartilhável ?sorteio=ID.
+  const limpo = new URL(location.href);
+  limpo.searchParams.delete("msg"); limpo.searchParams.delete("redefinir");
+  if(limpo.hash.includes("redefinir")) limpo.hash="";
+  if(limpo.href!==location.href)history.replaceState(null,"",limpo.pathname+limpo.search+limpo.hash);
 }).catch(() => aviso("Servidor fora do ar", "Não consegui falar com o servidor. Confira se ele está rodando."));
+
+window.addEventListener("popstate",()=>{
+  const id=Number(new URLSearchParams(location.search).get("sorteio"));
+  if(Number.isInteger(id)&&id>0){view="detalhe";sorteioAtual=id;}
+  else{view="sorteios";sorteioAtual=null;}
+  render();
+});

@@ -58,6 +58,9 @@ function criarOrder({ ref, totalCentavos, email }) {
 }
 
 const buscarOrder = id => chamar("GET", "/v1/orders/" + encodeURIComponent(id));
+// O Pix online tem prazo mínimo de 30 minutos no MP. Após 5 min da reserva,
+// tentamos cancelar a Order; a reserva só é liberada DEPOIS de confirmar o cancelamento.
+const cancelarOrder = (id, ref) => chamar("POST", "/v1/orders/" + encodeURIComponent(id) + "/cancel", undefined, ref + "-cancel");
 
 /* Valida o x-signature conforme a documentação do Mercado Pago:
    manifesto = "id:<data.id em minúsculas>;request-id:<x-request-id>;ts:<ts>;" assinado com HMAC-SHA256 usando a
@@ -87,4 +90,4 @@ function assinaturaValida(xSignature, xRequestId, dataId) {
   return false;
 }
 
-module.exports = { configurado, criarOrder, buscarOrder, assinaturaValida };
+module.exports = { configurado, criarOrder, buscarOrder, cancelarOrder, assinaturaValida };

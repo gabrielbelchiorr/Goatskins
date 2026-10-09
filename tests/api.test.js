@@ -38,6 +38,13 @@ const mpServer = http.createServer((req, res) => {
           payment_method: { id: "pix", type: "bank_transfer", ticket_url: "https://www.mercadopago.com.br/sandbox/payments/1/ticket?hash=abc", qr_code: "00020126580014br.gov.bcb.pix0136teste", qr_code_base64: "iVBORw0KGgo=" } }] }, _recebido: d };
       mpOrders.set(id, o); mpChaves.set(k, id); return rs(201, o);
     }
+    const cancel = req.url.match(/^\/v1\/orders\/(ORD\w+)\/cancel$/);
+    if(req.method==="POST" && cancel && mpOrders.has(cancel[1])) {
+      const o=mpOrders.get(cancel[1]);
+      if(o.status!=="created" && o.status!=="action_required") return rs(409,{message:"order not cancellable"});
+      o.status="canceled";o.transactions.payments[0].status="canceled";
+      return rs(200,o);
+    }
     const m = req.url.match(/^\/v1\/orders\/(ORD\w+)$/); if (req.method === "GET" && m && mpOrders.has(m[1])) return rs(200, mpOrders.get(m[1]));
     rs(404, { message: "not found" });
   });
@@ -352,10 +359,29 @@ test("pagamento cancelado/recusado libera os números e não vira pago", async (
   assert.equal((await a.c.get("/api/pedidos/" + q.id)).dados.status, "FAILED");
 });
 
+test("Pix persistente: mesmo pedido, mesmo QR, sem criar nova Order; privado por usuário", async () => {
+  const adm = await adminLogado(), s = await pagoSorteio(adm), a = await novoUsuario(), b = await novoUsuario();
+  const primeiro = (await pedir(a.c, s, [3])).dados;
+  assert.equal(primeiro.status, "PENDING");
+  assert.ok(primeiro.pix && primeiro.pix.qr_code);
+  const recuperado = (await a.c.get("/api/pedidos/pendente")).dados;
+  assert.equal(recuperado.id, primeiro.id);
+  assert.equal(recuperado.pix.qr_code, primeiro.pix.qr_code);
+  const repetido = (await pedir(a.c, s, [3])).dados;
+  assert.equal(repetido.id, primeiro.id);
+  assert.equal((await b.c.get("/api/pedidos/" + primeiro.id)).status, 404);
+  assert.equal((await b.c.get("/api/pedidos/pendente")).dados, null);
+});
+
 test("reserva expirada: libera o número; pagamento tardio só vale se o número continua livre", async () => {
   const adm = await adminLogado(), s = await pagoSorteio(adm), a = await novoUsuario(), b = await novoUsuario(), cc = await novoUsuario();
   const pa = (await pedir(a.c, s, [1])).dados, ida = ultimoMp(), pc = (await pedir(cc.c, s, [2])).dados, idc = ultimoMp();
   await new Promise(r => setTimeout(r, 3300));                                         // reserva (3s) vence
+  // A liberação só acontece DEPOIS do MP confirmar cancelamento; a varredura é assíncrona.
+  for (let k=0;k<30;k++) {
+    if((await estadoDe(b.c,s)).reservados.length===0) break;
+    await new Promise(r=>setTimeout(r,150));
+  }
   assert.deepEqual((await estadoDe(b.c, s)).reservados, []);
   assert.equal((await a.c.get("/api/pedidos/" + pa.id)).dados.status, "EXPIRED");
   const pb = (await pedir(b.c, s, [1])).dados;                                         // outra pessoa reserva o número 1

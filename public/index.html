@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GOATSKINS SORTEIOS</title>
-  <link rel="stylesheet" href="style.css?v=goatskins-premium-1">
+  <link rel="stylesheet" href="style.css?v=goatskins-checkout-2">
   <link rel="icon" href="logo.jpg">
   <meta name="description" content="Sorteios de skins de CS com prova de resultado verificável.">
 </head>
@@ -65,6 +65,11 @@
           </ol>
         </section>
 
+        <!-- Página exclusiva do sorteio: URL compartilhável ?sorteio=ID -->
+        <section class="view" data-view="detalhe" hidden>
+          <div id="saleDetail"></div>
+        </section>
+
         <!-- HISTÓRICO -->
         <section class="view" data-view="historico" hidden>
           <h2>Histórico de sorteios</h2>
@@ -86,6 +91,16 @@
     </div>
   </div>
 
+  <!-- Barra de Pix persistente; restaurada a partir do pedido da conta no servidor -->
+  <div id="pendingPixBar" class="pending-pix" hidden role="status" aria-live="polite">
+    <div class="pending-pix-inner">
+      <div class="pending-pix-info"><span class="pending-pix-icon" aria-hidden="true">◷</span>
+        <div><small id="pendingPixCountdown">PIX RESERVADO</small><strong id="pendingPixTitle">Pagamento pendente</strong></div>
+      </div>
+      <button id="resumePixBtn" class="btn" type="button">▣ &nbsp; VOLTAR AO PAGAMENTO</button>
+    </div>
+  </div>
+
   <div id="scrim" class="scrim" hidden></div>
   <img class="mascote" src="mascote.webp" alt="" aria-hidden="true" width="720" height="984">
 
@@ -95,6 +110,6 @@
       <div id="modalBody"></div>
     </div>
   </div>
-  <script src="script.js?v=goatskins-premium-1"></script>
+  <script src="script.js?v=goatskins-checkout-2"></script>
 </body>
 </html>

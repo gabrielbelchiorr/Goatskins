@@ -42,5 +42,6 @@ module.exports = {
   MP_TESTE_APRO: e.NODE_ENV !== "production" && e.MP_TESTE_APRO === "1", // nunca vale em produção
   MP_API_BASE: e.NODE_ENV === "production" ? "https://api.mercadopago.com" : (e.MP_API_BASE || "https://api.mercadopago.com"),
   PIX_MINUTOS: Math.min(60 * 24, Math.max(30, Number(e.PIX_MINUTOS) || 30)), // o Pix tem mínimo de 30 min no Mercado Pago
-  RESERVA_MS: e.NODE_ENV !== "production" && Number(e.RESERVA_SEGUNDOS) > 0 ? Number(e.RESERVA_SEGUNDOS) * 1000 : ((Math.min(60 * 24, Math.max(30, Number(e.PIX_MINUTOS) || 30))) + 5) * 60e3
+  // Janela de checkout: 5 minutos. O Pix do MP continua com mínimo de 30; o servidor cancela a Order antes de liberar os números.
+  RESERVA_MS: e.NODE_ENV !== "production" && Number(e.RESERVA_SEGUNDOS) > 0 ? Number(e.RESERVA_SEGUNDOS) * 1000 : 5 * 60e3
 };

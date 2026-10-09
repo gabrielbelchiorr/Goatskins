@@ -145,12 +145,12 @@ async function notificar(uid, titulo, texto) {
 /* Versão barata para rotas de leitura: só entra na transação (e na trava de escrita) quando existe mesmo algo vencido.
    Antes, TODA chamada a /api/estado e /api/pedidos disputava a trava global de escrita. */
 async function liberarSeVencido() {
-  if (await get("SELECT 1 FROM pedidos WHERE status='PENDING' AND expira_em<? LIMIT 1", [Date.now()])) await tx(() => liberar());
+  if (await get("SELECT 1 FROM pedidos WHERE status='PENDING' AND mp_order_id IS NULL AND expira_em<? LIMIT 1", [Date.now()])) await tx(() => liberar());
 }
 const ping = () => get("SELECT 1 ok");
 /* Libera reservas de pedidos vencidos. Chamar DENTRO de uma transação (ou via tx(() => liberar())). */
 async function liberar() {
-  await run("UPDATE pedidos SET status='EXPIRED', atualizado_em=? WHERE status='PENDING' AND expira_em<?", [agora(), Date.now()]);
+  await run("UPDATE pedidos SET status='EXPIRED', atualizado_em=? WHERE status='PENDING' AND mp_order_id IS NULL AND expira_em<?", [agora(), Date.now()]);
   await run("DELETE FROM reservas WHERE pedido_id IN (SELECT id FROM pedidos WHERE status<>'PENDING')");
 }
 module.exports = { db, tx, iniciar, fechar, liberar, liberarSeVencido, ping, sha, agora, audit, notificar, novaSemente };

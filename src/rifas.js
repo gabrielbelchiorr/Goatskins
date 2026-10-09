@@ -11,11 +11,12 @@ const visual = async () => { const r = await db.get("SELECT v FROM settings WHER
 /* Colunas públicas explícitas: a semente do sorteio NUNCA sai daqui antes da hora. */
 const COLS = "id, premio, desgaste, descricao, valor, cor, fim, max, max_por_usuario, preco_centavos, length(foto) fl, status, commit_hash"; // a foto sai por URL própria (cache), não dentro do JSON
 async function estado(u) {
+  require("./pedidos").finalizarVencidos().catch(e => console.error("[pix] varredura:", e.message));
   await liberarSeVencido(); // só toma a trava de escrita se houver reserva vencida (esta rota é a mais chamada do site)
   const ocup = {}, meus = {}, gan = {}, res = {};
   // consultas independentes rodam juntas (o pool tem várias conexões); eram 8 idas ao banco em sequência
   const [reservas, tickets, meusT, ganhadores, naoLidas, v, campanhas] = await Promise.all([
-    db.all("SELECT r.campaign_id c, r.n FROM reservas r JOIN pedidos p ON p.id=r.pedido_id WHERE p.status='PENDING' AND p.expira_em>? ORDER BY r.n", [Date.now()]),
+    db.all("SELECT r.campaign_id c, r.n FROM reservas r JOIN pedidos p ON p.id=r.pedido_id WHERE p.status='PENDING' ORDER BY r.n"),
     db.all("SELECT campaign_id c, n FROM tickets ORDER BY n"),
     u ? db.all("SELECT campaign_id c, n FROM tickets WHERE user_id=? ORDER BY n", [u.id]) : [],
     db.all("SELECT w.campaign_id, w.n, w.data, w.total, w.user_id, us.nome FROM winners w JOIN users us ON us.id=w.user_id"),
