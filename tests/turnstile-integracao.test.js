@@ -7,7 +7,7 @@ const path = require('node:path');
 const cfg = {
   TURNSTILE_SITE_KEY: 'site-test',
   TURNSTILE_SECRET_KEY: 'secret-test',
-  TURNSTILE_HOSTNAMES: 'goatskins.br',
+  TURNSTILE_HOSTNAMES: 'goatskins.com.br,www.goatskins.com.br',
   APP_URL: 'https://goatskins.onrender.com',
   PRODUCAO: true,
   TESTE: true
@@ -17,6 +17,7 @@ const filename = path.join(__dirname, '../src/security.js');
 const moduleObj = new Module(filename);
 moduleObj.filename = filename;
 moduleObj.require = id => {
+  if (id === 'node:crypto') return require('node:crypto');
   if (id === './config') return cfg;
   if (id === './http') return { Erro, ipDe: () => '127.0.0.1' };
   if (id === './db') return { db: { get: async () => ({n:3}) }, sha: s => s };
@@ -43,15 +44,16 @@ test('aceita apenas hostname e action autorizados', async () => {
     assert.equal(corpo.response,'token');
     return {ok:true,json:async () => resposta};
   };
-  for (const hostname of ['goatskins.br','goatskins.onrender.com']) {
+  for (const hostname of ['goatskins.com.br','www.goatskins.com.br','goatskins.onrender.com']) {
     resposta = {success:true,hostname,action:'registro'};
     await sec.verificar('token','registro');
   }
   for (const data of [
     {success:true,hostname:'dominio-invasor.com',action:'registro'},
-    {success:true,hostname:'sub.goatskins.br',action:'registro'},
-    {success:true,hostname:'goatskins.br',action:'login'},
-    {success:false,hostname:'goatskins.br',action:'registro'},
+    {success:true,hostname:'sub.goatskins.com.br',action:'registro'},
+    {success:true,hostname:'goatskins.br',action:'registro'},
+    {success:true,hostname:'goatskins.com.br',action:'login'},
+    {success:false,hostname:'goatskins.com.br',action:'registro'},
     {success:true,action:'registro'}
   ]) {
     resposta = data;
@@ -62,6 +64,13 @@ test('aceita apenas hostname e action autorizados', async () => {
 test('bloqueia a operação quando Cloudflare não responde', async () => {
   global.fetch = async () => { throw Error('offline'); };
   await assert.rejects(sec.verificar('token','registro'),e=>e.code===503);
+});
+
+test('resposta malformada do provedor falha fechada com erro temporário', async () => {
+  for (const resposta of [null, [], 'ok', {}, {success:'true'}]) {
+    global.fetch = async () => ({ok:true,json:async()=>resposta});
+    await assert.rejects(sec.verificar('token','registro'),e=>e.code===503);
+  }
 });
 
 test('exige validação no cadastro e recuperação de senha; login após limiar', async () => {

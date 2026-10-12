@@ -1,9 +1,33 @@
 /* Boundary controls. No external service is contacted until local limits pass. */
 const cfg = require('./config');
+const crypto = require('node:crypto');
 const { Erro, ipDe } = require('./http');
 const { db, sha } = require('./db');
 const { consumirLimite } = require('./registration');
 const enabled = () => !!(cfg.TURNSTILE_SITE_KEY && cfg.TURNSTILE_SECRET_KEY);
+function origem(req, rota) {
+  if (!cfg.ORIGIN_VERIFY_SECRET) return;
+  // O monitor interno do Render precisa continuar verificando o banco.
+  // Esta exceção não autoriza a API nem o webhook.
+  if (rota === '/healthz' && ['GET','HEAD'].includes(req.method)) return;
+  const recebido = req.headers['x-goatskins-origin'];
+  if (typeof recebido !== 'string' || recebido.length !== cfg.ORIGIN_VERIFY_SECRET.length ||
+      !/^[a-f0-9]{64}$/i.test(recebido) ||
+      !crypto.timingSafeEqual(Buffer.from(recebido),Buffer.from(cfg.ORIGIN_VERIFY_SECRET))) {
+    throw new Erro('Origem não autorizada.',403);
+  }
+}
+function canonico(req, rota) {
+  if (!cfg.PRODUCAO || !['GET','HEAD'].includes(req.method) ||
+      !['/','/index.html','/termos.html','/privacidade.html','/cookies.html'].includes(rota)) return null;
+  const alvo = new URL(cfg.APP_URL);
+  let host = '';
+  try { host = new URL('https://' + String(req.headers.host || '')).host; } catch (_) { /* redireciona para a origem fixa */ }
+  if (host === alvo.host) return null;
+  // Só a origem configurada decide o destino. Nunca usamos um host enviado pelo cliente.
+  const url = req.urlObj || new URL(req.url,'http://localhost');
+  return alvo.origin + url.pathname + url.search;
+}
 function csrf(req, guarda) {
   if (req.method === 'GET' || req.method === 'HEAD' || guarda === 'webhook') return;
   const origin = req.headers.origin;
@@ -20,6 +44,7 @@ async function verificar(token, action) {
       headers:{'Content-Type':'application/json'}, signal:AbortSignal.timeout(8000),
       body:JSON.stringify({secret:cfg.TURNSTILE_SECRET_KEY,response:token}) });
     if (!r.ok) throw new Error(); d = await r.json();
+    if (!d || typeof d !== 'object' || Array.isArray(d) || typeof d.success !== 'boolean') throw new Error();
   } catch (_) { throw new Erro('Verificação indisponível. Tente novamente.',503); }
   // Nunca aceite o hostname informado pelo cliente. Confira somente os hosts configurados
   // no servidor: APP_URL (canônico) e aliases explícitos, sem curingas.
@@ -44,4 +69,4 @@ async function proteger(req, body, rota) {
   } else await verificar(body.turnstileToken,action);
 }
 const rotas = [['GET', /^\/api\/seguranca$/, async()=>({turnstileSiteKey:enabled()?cfg.TURNSTILE_SITE_KEY:null})]];
-module.exports={rotas,csrf,verificar,proteger};
+module.exports={rotas,csrf,verificar,proteger,origem,canonico};

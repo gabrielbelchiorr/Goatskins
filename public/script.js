@@ -22,20 +22,24 @@ const admin = () => !!S.eu && (S.eu.role === "ADMIN" || S.eu.role === "SUPER_ADM
 
 /* Fala com o servidor. O cabeçalho X-Requested-With é uma proteção contra ataques CSRF. */
 async function api(url, method, body) {
-  const r = await fetch(url, { method: method || "GET", credentials: "same-origin",
+  const r = await fetch(url, { method: method || "GET", credentials: "same-origin", signal: AbortSignal.timeout(20000),
     headers: { "Content-Type": "application/json", "X-Requested-With": "goatskins" }, body: body ? JSON.stringify(body) : undefined });
   const d = await r.json().catch(() => ({}));
   if (!r.ok && d.tipo === "TURNSTILE_REQUIRED") {
     const action = url === "/api/login" ? "login" : url === "/api/registro" ? "registro" : "recuperacao";
     const token = await desafioSeguranca(action);
-    const retry = await fetch(url, {method: method || "GET", credentials:"same-origin", headers:{"Content-Type":"application/json","X-Requested-With":"goatskins"}, body:JSON.stringify({...body,turnstileToken:token})});
+    const retry = await fetch(url, {method: method || "GET", credentials:"same-origin", signal:AbortSignal.timeout(20000), headers:{"Content-Type":"application/json","X-Requested-With":"goatskins"}, body:JSON.stringify({...body,turnstileToken:token})});
     const result = await retry.json(); if(!retry.ok) throw new Error(result.erro || "Falha na verificação."); return result;
   }
   if (!r.ok && d.tipo === "MFA_REQUIRED") { await confirmarMfa(); return api(url,method,body); }
   if (!r.ok) throw new Error(d.erro || (r.status === 429 ? "Muitas tentativas. Aguarde um pouco." : r.status >= 500 ? "Erro no servidor. Tente novamente em instantes." : "Erro " + r.status));
   return d;
 }
-async function carregar() { S = await api("/api/estado"); render(); await atualizarPendente(); }
+async function carregar() {
+  S = await api("/api/estado"); render();
+  window.GoatskinsLoading?.finish();
+  await atualizarPendente();
+}
 
 function lerFoto(file, cb) {
   const r = new FileReader();
@@ -147,7 +151,8 @@ function render() {
     if (c.foto) { const im = h("img"); im.src = c.foto; im.alt = ""; li.append(im); }
     const t = h("div");
     t.append(h("b", null, c.premio), h("p", "muted", (c.valor ? brl(c.valor) + " · " : "") + fmt(w.data) + " · " + w.total + " participantes"),
-      h("p", null, "Ganhador(a): " + w.nome + " · Nº " + w.n + (w.eu ? " (você!)" : "")), botao("Ver prova", "alt", () => prova(c)));
+      h("p", null, "Ganhador(a): " + w.nome + " · Nº " + w.n + (w.eu ? " (você!)" : "")),
+      botao("Ver resultado", "alt", () => roleta(c)), botao("Ver prova", "alt", () => prova(c)));
     li.append(t); hl.append(li);
   });
   $("noHist").hidden = S.c.some(c => c.ganhador);
@@ -196,6 +201,8 @@ function renderDetalhe(c) {
   const barra = h("div", "sale-progress"), dentro = h("span"); dentro.style.width = Math.round(100*c.total/c.max) + "%";
   barra.append(dentro); infos.append(specs,barra,h("p","muted",Math.round(100*c.total/c.max)+"% preenchido · "+c.reservados.length+" reservado(s) aguardando Pix"));
   top.append(visual,infos); root.append(voltar,top);
+  if (c.ganhador) root.append(botao("Ver resultado do sorteio", "alt", () => roleta(c)));
+  else if (admin() && !aberto && c.total > 0) root.append(botao("Abrir roleta", "", () => roleta(c)));
   const area = h("section","sale-numbers");
   const areaHead = h("div","sale-numbers-head");
   areaHead.append(h("div",null),h("div","sale-legend","● Livre     ◉ Selecionado     ◈ Reservado     ✓ Vendido"));
@@ -493,39 +500,20 @@ async function carregarPedidos() {
   } catch(e){vazio.hidden=true;}
 }
 
-/* ---------- Roleta (admin) ----------
-   O servidor escolhe o vencedor e devolve o número. A roleta só anima até ele.
-   Cada casa é um número que realmente participa do sorteio. */
+/* ---------- Tela da roleta ----------
+   A animação apresenta o vencedor do servidor. Reabrir o resultado não faz outro sorteio. */
 function roleta(c) {
-  const nums = c.ocupados, N = nums.length, SEG = 360 / N, wrap = h("div", "rwrap"), wheel = h("div", "rwheel");
-  wrap.style.setProperty("--rs", "min(80vw, 380px)");
-  const st = [];
-  for (let i = 0; i < N; i++) st.push("hsl(" + (i * 360 / N) + ",65%," + (i % 2 ? 42 : 52) + "%) " + i * SEG + "deg " + (i + 1) * SEG + "deg");
-  wheel.style.background = "conic-gradient(" + st.join(",") + ")";
-  const radial = N > 20, k = Math.min(0.06, (2 * Math.PI * 0.4 / N) * 0.62);
-  for (let i = 0; i < N; i++) {
-    const l = h("div", "rl", String(nums[i]));
-    l.style.transform = "translate(-50%,-50%) rotate(" + (i + 0.5) * SEG + "deg) translateY(calc(var(--rs) * -" + (radial ? 0.4 : 0.37) + "))" + (radial ? " rotate(-90deg)" : "");
-    l.style.fontSize = "calc(var(--rs) * " + (radial ? k : 0.085) + ")";
-    wheel.append(l);
-  }
-  wrap.append(wheel, h("div", "rptr"));
-  const res = h("div", "big"), go = botao("GIRAR");
-  go.addEventListener("click", async () => {
-    go.disabled = true;
-    try {
-      const demoLocal = ["localhost", "127.0.0.1"].includes(location.hostname) && Number(c.preco) === 0 && NUMERO_ESCOLHIDO_TESTE !== null;
-      if (demoLocal && !nums.includes(NUMERO_ESCOLHIDO_TESTE)) throw new Error("Número de teste não participa deste sorteio: " + NUMERO_ESCOLHIDO_TESTE);
-      const w = demoLocal
-        ? { n: NUMERO_ESCOLHIDO_TESTE, nome: NOME_GANHADOR_TESTE }
-        : await api("/api/admin/campanhas/" + c.id + "/sortear", "POST"), i = nums.indexOf(w.n);
-      const centro = (i + 0.5) * SEG, jit = (Math.random() - 0.5) * SEG * 0.7;
-      const rot = (5 + Math.floor(Math.random() * 4)) * 360 + (((-(centro + jit)) % 360) + 360) % 360;
-      wheel.style.transition = "transform 5s cubic-bezier(0.15, 0.7, 0.1, 1)"; wheel.style.transform = "rotate(" + rot + "deg)";
-      setTimeout(async () => { res.textContent = "Nº " + w.n + " · " + w.nome; if (!demoLocal) await carregar(); }, 5100);
-    } catch (e) { res.textContent = e.message; }
-  });
-  openModal(false, h("h3", null, "Roleta: " + c.premio), wrap, res, go);
+  const demoLocal = ["localhost", "127.0.0.1"].includes(location.hostname) && Number(c.preco) === 0 && NUMERO_ESCOLHIDO_TESTE !== null;
+  try {
+    if (!window.GoatskinsRoulette) throw new Error("Não foi possível carregar a roleta. Atualize a página para tentar novamente.");
+    closeModal();
+    window.GoatskinsRoulette.open({ campaign: c, winner: c.ganhador, preview: demoLocal,
+      draw: () => demoLocal ? Promise.resolve({ n: NUMERO_ESCOLHIDO_TESTE, nome: NOME_GANHADOR_TESTE }) : api("/api/admin/campanhas/" + c.id + "/sortear", "POST"),
+      recover: async () => { S = await api("/api/estado"); render(); return S.c.find(x => x.id === c.id)?.ganhador || null; },
+      onComplete: () => { if (!demoLocal) return carregar(); },
+      onHistory: () => navegar("historico"), onProof: () => prova(S.c.find(x => x.id === c.id) || c)
+    });
+  } catch (e) { aviso("Não foi possível abrir a roleta", e.message); }
 }
 
 /* ---------- Prova do sorteio (qualquer pessoa confere no próprio navegador) ---------- */
@@ -613,6 +601,8 @@ function abaSorteios(box, edit) {
   S.c.filter(x => x.id !== c.id || !edit).forEach(x => {
     const row = h("div", "arow"), info = h("span", null, x.premio + " (" + x.total + "/" + x.max + ", " + x.status + ")");
     row.append(info, botao("Editar", "alt", () => painel("sorteios", x)));
+    if (!x.ganhador && (x.status !== "OPEN" || cheio(x)) && x.total > 0)
+      row.append(botao("Abrir roleta", "alt", () => roleta(x)));
     if (x.status === "CLOSED" && x.total === 0)
       row.append(botao("Arquivar", "alt", () => {
         const errRow = h("span", "err"); row.append(errRow);
@@ -730,7 +720,10 @@ carregar().then(() => {
   limpo.searchParams.delete("msg"); limpo.searchParams.delete("redefinir");
   if(limpo.hash.includes("redefinir")) limpo.hash="";
   if(limpo.href!==location.href)history.replaceState(null,"",limpo.pathname+limpo.search+limpo.hash);
-}).catch(() => aviso("Servidor fora do ar", "Não consegui falar com o servidor. Confira se ele está rodando."));
+}).catch(() => {
+  if (window.GoatskinsLoading) window.GoatskinsLoading.fail();
+  else aviso("Não foi possível carregar", "A conexão demorou ou o serviço está temporariamente indisponível. Atualize a página para tentar novamente.");
+});
 
 window.addEventListener("popstate",()=>{
   const id=Number(new URLSearchParams(location.search).get("sorteio"));

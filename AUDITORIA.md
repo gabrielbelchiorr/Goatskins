@@ -1,4 +1,4 @@
-> Documento da entrega anterior. Para esta versão, leia LEIA_PRIMEIRO_SEGURANCA.md e AUDITORIA_SEGURANCA.md.
+> Documento histórico de 06/10/2026. Para o pacote atual, leia PUBLICAR_EM_CASA.md e SEGURANCA.md. Os números e pendências abaixo refletem a auditoria antiga.
 
 # Auditoria pré-lançamento — GOATSKINS
 

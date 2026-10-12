@@ -46,6 +46,13 @@ async function despachar(req, res, rota, body) {
 }
 
 const TIPOS = { ".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "text/javascript", ".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".ico": "image/x-icon" };
+// Lista explícita: um backup, relatório, arquivo de configuração ou código copiado
+// por engano para public/ nunca se torna um download público.
+const ARQUIVOS_PUBLICOS = new Set([
+  "index.html", "termos.html", "privacidade.html", "cookies.html",
+  "style.css", "script.js", "page-loader.js", "roulette.js", "roulette.css",
+  "logo.jpg", "logo-marca.webp", "cenario.webp", "mascote.webp"
+]);
 function cabecalhos(res) {
   res.setHeader("X-Content-Type-Options", "nosniff"); res.setHeader("X-Frame-Options", "DENY"); res.setHeader("Referrer-Policy", "same-origin");
   res.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'");
@@ -59,10 +66,16 @@ const server = http.createServer((req, res) => {
   req.on("error", () => { /* cliente caiu no meio do envio: nada a fazer */ });
   let url; try { url = new URL(req.url, "http://localhost"); if (url.origin !== "http://localhost") throw 0; } catch (e) { res.writeHead(400); return res.end(); } // "GET //" derrubava o servidor
   const rota = url.pathname; req.urlObj = url;
+  try { security.origem(req, rota); } catch (e) {
+    res.setHeader('Connection','close');
+    return json(res, e.code || 403, {erro:'Origem não autorizada.'});
+  }
   if (rota === "/healthz" && (req.method === "GET" || req.method === "HEAD")) { // health check do Render/UptimeRobot: leve e confere o banco
     return ping().then(() => { res.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" }); res.end(req.method === "HEAD" ? undefined : "ok"); },
       e => { console.error("[healthz] banco indisponível:", e.message); res.writeHead(503, { "Cache-Control": "no-store" }); res.end(); });
   }
+  const canonico = security.canonico(req, rota);
+  if (canonico) { res.writeHead(308, {Location:canonico, 'Cache-Control':'no-store'}); return res.end(); }
   if (rota.startsWith("/api/")) {
     try { limite("api:" + ipDe(req), 300, 60000); } catch (e) { return json(res, e.code, { erro: e.message }); }
     const partes = []; let tam = 0, estourou = false;
@@ -72,7 +85,8 @@ const server = http.createServer((req, res) => {
       if (estourou) return;
       try {
         let body = {}; if (partes.length) { try { body = JSON.parse(Buffer.concat(partes).toString()); } catch (e) { throw new Erro("JSON inválido."); } }
-        const r = await despachar(req, res, rota, body && typeof body === "object" ? body : {});
+        if (!body || typeof body !== "object" || Array.isArray(body)) throw new Erro("O corpo da requisição precisa ser um objeto JSON.");
+        const r = await despachar(req, res, rota, body);
         if (r && r.raw) { res.writeHead(200, { "Content-Type": r.tipo, "Cache-Control": "public, max-age=86400" }); return res.end(r.raw); }
         if (r && r.redirect) { res.writeHead(302, { Location: r.redirect }); return res.end(); }
         json(res, 200, r);
@@ -87,10 +101,16 @@ const server = http.createServer((req, res) => {
   const PUB = path.join(cfg.raiz, "public");
   let f; try { f = path.join(PUB, decodeURIComponent(rota === "/" ? "/index.html" : rota)); } catch (e) { res.writeHead(400); return res.end(); }
   if (!f.startsWith(PUB + path.sep) || path.relative(PUB, f).split(path.sep).some(p => p.startsWith("."))) { res.writeHead(403); return res.end(); } // impede ../ e arquivos ocultos (.env, .git)
-  fs.readFile(f, (err, data) => {
+  if (!ARQUIVOS_PUBLICOS.has(path.relative(PUB, f))) { res.writeHead(404); return res.end("Não encontrado"); }
+  // Também impede que um link simbólico com nome autorizado exponha um arquivo externo.
+  fs.realpath(f, (err, real) => {
     if (err) { res.writeHead(404); return res.end("Não encontrado"); }
-    const ext = path.extname(f);
-    res.writeHead(200, { "Content-Type": TIPOS[ext] || "application/octet-stream", "Cache-Control": ext === ".jpg" ? "public, max-age=86400" : "no-cache" }); res.end(req.method === "HEAD" ? undefined : data);
+    if (!real.startsWith(PUB + path.sep)) { res.writeHead(403); return res.end(); }
+    fs.readFile(real, (err, data) => {
+      if (err) { res.writeHead(404); return res.end("Não encontrado"); }
+      const ext = path.extname(f);
+      res.writeHead(200, { "Content-Type": TIPOS[ext], "Cache-Control": [".jpg", ".webp", ".png", ".ico"].includes(ext) ? "public, max-age=86400" : "no-cache" }); res.end(req.method === "HEAD" ? undefined : data);
+    });
   });
 });
 /* O balanceador do Render mantém conexões abertas por ~60 s; se o Node fechar antes (padrão 5 s) surgem 502 esporádicos. */

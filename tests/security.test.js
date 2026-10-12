@@ -11,6 +11,33 @@ test('CSRF rejects foreign Origin even with custom header',()=>{
  req.headers['sec-fetch-site']='cross-site';assert.throws(()=>sec.csrf(req,'user'),e=>e.code===403);
  assert.doesNotThrow(()=>sec.csrf(req,'webhook'));
 });
+test('origem protegida recusa acesso direto, headers forjados e valores duplicados',()=>{
+ const original=cfg.ORIGIN_VERIFY_SECRET, secret='c'.repeat(64);
+ try {
+  cfg.ORIGIN_VERIFY_SECRET='';assert.doesNotThrow(()=>sec.origem({method:'GET',headers:{}},'/'));
+  cfg.ORIGIN_VERIFY_SECRET=secret;
+  for(const value of [undefined,'curto','d'.repeat(64),secret+', '+secret,[secret,secret],'é'.repeat(64)]) {
+   const req={method:'POST',headers:{'x-goatskins-origin':value,'cf-connecting-ip':'1.2.3.4'}};
+   assert.throws(()=>sec.origem(req,'/api/webhooks/mercadopago'),e=>e.code===403);
+  }
+  assert.doesNotThrow(()=>sec.origem({method:'POST',headers:{'x-goatskins-origin':secret}},'/api/webhooks/mercadopago'));
+  for(const method of ['GET','HEAD'])assert.doesNotThrow(()=>sec.origem({method,headers:{}},'/healthz'));
+  assert.throws(()=>sec.origem({method:'POST',headers:{}},'/healthz'),e=>e.code===403);
+ } finally {cfg.ORIGIN_VERIFY_SECRET=original;}
+});
+test('domínio canônico redireciona somente documentos e nunca usa um host do cliente como destino',()=>{
+ const original={PRODUCAO:cfg.PRODUCAO,APP_URL:cfg.APP_URL};
+ try {
+  cfg.PRODUCAO=true;cfg.APP_URL='https://goatskins.com.br';
+  const req={method:'GET',headers:{host:'www.goatskins.com.br'},url:'/?sorteio=4'};
+  assert.equal(sec.canonico(req,'/'),'https://goatskins.com.br/?sorteio=4');
+  req.headers.host='evil.test';assert.equal(sec.canonico(req,'/'),'https://goatskins.com.br/?sorteio=4');
+  req.headers.host='GOATSKINS.COM.BR:443';assert.equal(sec.canonico(req,'/'),null);
+  req.headers.host='www.goatskins.com.br';req.method='POST';assert.equal(sec.canonico(req,'/'),null);
+  req.method='GET';assert.equal(sec.canonico(req,'/api/estado'),null);
+  cfg.PRODUCAO=false;assert.equal(sec.canonico(req,'/'),null);
+ } finally {Object.assign(cfg,original);}
+});
 test('limiter memory does not grow on blocked requests',()=>{
  const key='security-memory';http.limite(key,3,60000);http.limite(key,3,60000);http.limite(key,3,60000);
  for(let i=0;i<1000;i++)assert.throws(()=>http.limite(key,3,60000));

@@ -24,6 +24,8 @@ if (cfgProd.PRODUCAO) { // falha cedo: melhor não subir do que subir inseguro
   if (!/^[a-f0-9]{64}$/i.test(e.MFA_ENCRYPTION_KEY || "")) erros.push("MFA_ENCRYPTION_KEY precisa ter 32 bytes aleatórios em hexadecimal");
   if (!e.TURNSTILE_SITE_KEY || !e.TURNSTILE_SECRET_KEY) erros.push("Configure TURNSTILE_SITE_KEY e TURNSTILE_SECRET_KEY em produção");
   if (/^[123]x00000000000000000000/.test(e.TURNSTILE_SITE_KEY || "")) erros.push("Chave de teste Turnstile não permitida em produção");
+  if (/^[123]x00000000000000000000/.test(e.TURNSTILE_SECRET_KEY || "")) erros.push("Secret de teste Turnstile não permitido em produção");
+  if (e.ORIGIN_VERIFY_SECRET && !/^[a-f0-9]{64}$/i.test(e.ORIGIN_VERIFY_SECRET)) erros.push("ORIGIN_VERIFY_SECRET precisa ter 32 bytes aleatórios em hexadecimal");
   if (e.TESTE === "1") erros.push("TESTE=1 desliga o limite de tentativas; não use em produção");
   if (e.MP_TESTE_APRO === "1") erros.push("MP_TESTE_APRO=1 é só para testes locais; remova do ambiente de produção");
   if (erros.length) { console.error("Configuração de produção inválida:\n - " + erros.join("\n - ")); process.exit(1); }
@@ -35,6 +37,8 @@ module.exports = {
   TURNSTILE_SECRET_KEY: e.TURNSTILE_SECRET_KEY || "",
   // Domínios adicionais sob seu controle. APP_URL continua sendo o domínio canônico.
   TURNSTILE_HOSTNAMES: e.TURNSTILE_HOSTNAMES || "",
+  // Opcional: só ativar após a Cloudflare inserir este segredo no header de requisição.
+  ORIGIN_VERIFY_SECRET: e.ORIGIN_VERIFY_SECRET || "",
   DATABASE_CA: e.DATABASE_CA || "",
   APP_URL: (e.APP_URL || "http://localhost:" + PORT).replace(/\/$/, ""),
   // PostgreSQL. Em produção DATABASE_URL é obrigatória (validada acima). Em desenvolvimento há um padrão local.

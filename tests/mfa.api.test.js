@@ -7,7 +7,7 @@ test('MFA: enrollment, encrypted secret, admin enforcement, rotation, replay and
  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
  const dbUrl=new URL(url);
  const port=5200+crypto.randomInt(500),base='http://127.0.0.1:'+port;
- const env={...process.env,NODE_ENV:'test',RENDER:'',TESTE:'1',DATABASE_URL:dbUrl.toString(),DATABASE_SSL:'0',PG_POOL_MAX:'1',PORT:String(port),APP_URL:base,EMAIL_DRIVER:'console',MFA_ENCRYPTION_KEY:crypto.randomBytes(32).toString('hex'),TURNSTILE_SITE_KEY:'',TURNSTILE_SECRET_KEY:'',MP_ACCESS_TOKEN:'',MP_WEBHOOK_SECRET:''};
+ const env={...process.env,NODE_ENV:'test',RENDER:'',TESTE:'1',DATABASE_URL:dbUrl.toString(),DATABASE_SSL:'0',PG_POOL_MAX:'1',PORT:String(port),APP_URL:base,EMAIL_DRIVER:'console',MFA_ENCRYPTION_KEY:crypto.randomBytes(32).toString('hex'),TURNSTILE_SITE_KEY:'',TURNSTILE_SECRET_KEY:'',MP_ACCESS_TOKEN:'',MP_WEBHOOK_SECRET:'',ORIGIN_VERIFY_SECRET:''};
  const run=(args)=>new Promise((resolve,reject)=>{const p=spawn(process.execPath,args,{env,stdio:'pipe'});let error='';p.stderr.on('data',b=>error+=b);p.on('exit',n=>n?reject(Error(error)):resolve());});
  let srv;
  try {

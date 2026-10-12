@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Prévia do loading | GOATSKINS</title>
+  <script src="public/page-loader.js"></script>
+  <link rel="stylesheet" href="public/style.css">
+</head>
+<body>
+  <div id="pageLoader" class="page-loader">
+    <div class="page-loader-content">
+      <div class="page-loader-mark" aria-hidden="true">
+        <span class="page-loader-orbit"></span>
+        <img src="public/logo-marca.webp" alt="" width="84" height="90">
+      </div>
+      <p class="page-loader-brand">GOAT<span>SKINS</span></p>
+      <p id="loaderMessage" class="page-loader-message" role="status" aria-live="polite">Preparando seus sorteios...</p>
+      <div class="page-loader-track" aria-hidden="true"><span></span></div>
+      <button id="loaderRetry" class="btn" type="button" hidden>Tentar novamente</button>
+    </div>
+  </div>
+  <main class="legal">
+    <h1>GOATSKINS</h1>
+    <p>Prévia do novo carregamento.</p>
+    <button id="replayLoader" class="btn" type="button">Ver novamente</button>
+  </main>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('replayLoader').addEventListener('click', () => location.reload());
+      setTimeout(() => window.GoatskinsLoading.finish(), 900);
+    });
+  </script>
+</body>
+</html>

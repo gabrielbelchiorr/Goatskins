@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Prévia da roleta | GOATSKINS</title>
+  <link rel="stylesheet" href="public/style.css">
+  <link rel="stylesheet" href="public/roulette.css">
+</head>
+<body>
+  <main class="legal">
+    <h1>Prévia da roleta</h1>
+    <p>Confira a nova tela, gire a roleta e veja a apresentação do ganhador. Esta demonstração usa dados fictícios e funciona sem banco ou servidor.</p>
+    <p><button id="preview24" class="btn" type="button">Ver com 24 números</button></p>
+    <p><button id="preview100" class="btn" type="button">Ver com 100 números</button></p>
+    <p><button id="previewResult" class="btn alt" type="button">Ver um resultado já concluído</button></p>
+  </main>
+  <script src="public/roulette.js"></script>
+  <script>
+    function abrirPrevia(total, concluido) {
+      const winner = { n: total === 100 ? 87 : 17, nome: 'Lucas M.' };
+      window.GoatskinsRoulette.open({
+        campaign: { id: 7, premio: 'AK-47 | Redline', desgaste: 'Field-Tested', ocupados: Array.from({ length: total }, (_, i) => i + 1) },
+        logoSrc: 'public/logo-marca.webp', preview: true, winner: concluido ? winner : null,
+        draw: () => new Promise(resolve => setTimeout(() => resolve(winner), 450)),
+        recover: () => Promise.resolve(null)
+      });
+    }
+    document.getElementById('preview24').addEventListener('click', () => abrirPrevia(24, false));
+    document.getElementById('preview100').addEventListener('click', () => abrirPrevia(100, false));
+    document.getElementById('previewResult').addEventListener('click', () => abrirPrevia(24, true));
+    abrirPrevia(24, false);
+  </script>
+</body>
+</html>

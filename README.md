@@ -2,8 +2,10 @@
 
 Node.js 22.13+ com **PostgreSQL** (única dependência: a biblioteca `pg`). Cada sorteio tem um **preço por número** (0 = grátis) cobrado por **Pix via Mercado Pago (Orders API)**.
 
+**Pacote de 12/10/2026:** siga [PUBLICAR_EM_CASA.md](PUBLICAR_EM_CASA.md) para aplicar os arquivos, testar no Windows e concluir Render/Cloudflare. A revisão e as limitações verificadas estão em [SEGURANCA.md](SEGURANCA.md). Abra `PREVIA_LOADING.html` e `PREVIA_ROLETA.html` localmente para visualizar o loading e a nova tela da roleta sem iniciar o servidor.
+
 ## Rodar
-1. Instale o Node.js (LTS, 22.13 ou mais novo) e rode `npm install`.
+1. Instale o Node.js (LTS, 22.13 ou mais novo) e rode `npm ci`.
 2. Tenha um PostgreSQL local. Exemplo com Docker: `docker run --name goatskins-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=goatskins -p 5432:5432 -d postgres:16`
 3. Copie `.env.example` para `.env` e confira o `DATABASE_URL` (o padrão já aponta para o Docker acima).
 4. Crie o SUPER_ADMIN: `node --no-warnings server.js criar-admin seuemail@x.com SuaSenha123 "Seu Nome"` (as tabelas são criadas automaticamente na primeira execução)
@@ -16,7 +18,7 @@ Node.js 22.13+ com **PostgreSQL** (única dependência: a biblioteca `pg`). Cada
 7. Backup: `npm run backup` (usa `pg_dump`, precisa do cliente PostgreSQL instalado).
 8. Vindo do SQLite antigo: `DATABASE_URL=... npm run migrar-sqlite -- caminho/goatskins.db` (veja "Migrar do SQLite").
 
-Sem serviço de e-mail configurado, os e-mails (confirmação, recuperação de senha) aparecem em `data/emails.log`: copie o link de lá.
+Em desenvolvimento com `EMAIL_DRIVER=console`, os e-mails aparecem em `data/emails.log`: o cadastro usa o código de seis dígitos, e a recuperação usa o link. Em produção é necessário o Resend com remetente verificado.
 
 ## Estrutura
 ```
@@ -73,7 +75,7 @@ scrypt assíncrono + sal, comparação em tempo constante, tentativa de login re
 
 ## Colocar no ar (versão gratuita e acadêmica)
 - Frontend e backend saem juntos: o próprio Node serve a pasta `public`. O banco agora é um PostgreSQL separado, então o servidor não precisa de disco persistente.
-- **Render:** Build Command `npm install`, Start Command `npm start`. Variáveis: `NODE_ENV=production`, `APP_URL=https://seu-app.onrender.com`, `TRUST_PROXY=1`, `DATABASE_URL` (Internal Database URL do PostgreSQL do Render), mais as de e-mail e Mercado Pago. Em produção o servidor se recusa a subir sem `DATABASE_URL` válida.
+- **Render:** Build Command `npm ci`, Start Command `npm start`. Variáveis: `NODE_ENV=production`, `APP_URL` com sua origem principal HTTPS, `TRUST_PROXY=1`, `DATABASE_URL` (Internal Database URL do PostgreSQL do Render), mais as de e-mail, MFA, Turnstile e Mercado Pago. A configuração completa está em `PUBLICAR_EM_CASA.md`; o servidor recusa configurações inseguras.
 - **VPS própria:** instalar Node 22+ e PostgreSQL, criar `.env`; rodar com `pm2` ou `systemd`; colocar o **Caddy** na frente (HTTPS automático); apontar o domínio para o IP.
 - Backup: use os backups do serviço de banco (confira o que o seu plano do Render inclui) e/ou `npm run backup` (`pg_dump`, arquivos em `data/backups/`). Restaurar = `pg_restore --clean --no-owner -d "<url>" arquivo.dump`.
 - Health check: `GET /healthz` (leve; responde 503 se o banco não responder). Configure-o como *Health Check Path* no Render e no UptimeRobot (aceita HEAD). Não use `/api/estado`, que é pesada.
@@ -92,4 +94,4 @@ Fluxo: escolher números → `POST /api/campanhas/:id/pedidos` (o servidor lê o
 - Teste no sandbox: crie a Order com `payer.first_name = "APRO"` (ver doc do Mercado Pago) e confira que o webhook chega.
 
 ## Antes de lançar (checklist)
-Veja `AUDITORIA.md`: resultado da auditoria, riscos que o código não resolve (autorização legal do sorteio, backups do banco, limites do sorteio verificável) e o que ainda precisa ser executado na sua máquina (`npm install`, `npm audit`, `npm run test:api`).
+Veja `SEGURANCA.md` para a revisão atual e `PUBLICAR_EM_CASA.md` para os testes e a publicação. `AUDITORIA.md` preserva o relatório histórico de 06/10/2026.

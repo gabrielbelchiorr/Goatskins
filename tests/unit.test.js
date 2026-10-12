@@ -51,8 +51,24 @@ test("config de produção: recusa configurações inseguras e aceita uma corret
   const bom = { APP_URL: "https://x.com.br", DATABASE_URL: "postgresql://u:p@h:5432/d", EMAIL_DRIVER: "resend", EMAIL_API_KEY: "k", EMAIL_FROM: "GOATSKINS <no-reply@goatskins.test>", EMAIL_CODE_SECRET: "a".repeat(64), TRUST_PROXY: "1", MFA_ENCRYPTION_KEY:"b".repeat(64), TURNSTILE_SITE_KEY:"site-fixture", TURNSTILE_SECRET_KEY:"secret-fixture" };
   const valido = config(bom); assert.equal(valido.status, 0, valido.stderr);
   for (const [ruim, esperado] of [[{ APP_URL: "http://x.com" }, /https/], [{ DATABASE_URL: "" }, /DATABASE_URL/], [{ EMAIL_DRIVER: "console" }, /EMAIL_DRIVER/],
-    [{ MP_ACCESS_TOKEN: "t" }, /MP_WEBHOOK_SECRET/], [{ EMAIL_API_KEY: "" }, /EMAIL_API_KEY/], [{ TESTE: "1" }, /TESTE/], [{ MP_TESTE_APRO: "1" }, /MP_TESTE_APRO/]]) {
+    [{ MP_ACCESS_TOKEN: "t" }, /MP_WEBHOOK_SECRET/], [{ EMAIL_API_KEY: "" }, /EMAIL_API_KEY/], [{ TESTE: "1" }, /TESTE/], [{ MP_TESTE_APRO: "1" }, /MP_TESTE_APRO/],
+    [{TURNSTILE_SITE_KEY:'1x00000000000000000000AA'}, /Chave de teste/],
+    [{TURNSTILE_SECRET_KEY:'1x0000000000000000000000000000000AA'}, /Secret de teste/],
+    [{TURNSTILE_SECRET_KEY:'2x0000000000000000000000000000000AA'}, /Secret de teste/],
+    [{TURNSTILE_SECRET_KEY:'3x0000000000000000000000000000000AA'}, /Secret de teste/],
+    [{ORIGIN_VERIFY_SECRET:'curto'}, /ORIGIN_VERIFY_SECRET/]]) {
     const r = config({ ...bom, ...ruim }); assert.equal(r.status, 1, JSON.stringify(ruim)); assert.match(r.stderr, esperado);
+  }
+});
+test('suite de CI não roda sem banco descartável nem aceita endereço de produção', () => {
+  for (const url of ['', 'postgresql://u:p@prod.example/goatskins_test', 'postgresql://u:p@localhost/goatskins',
+    'postgresql://u:p@localhost/goatskins_test?host=prod.example']) {
+    const r = spawnSync(process.execPath, ['scripts/run-ci.js'], {
+      cwd:path.join(__dirname,'..'), encoding:'utf8',
+      env:{...process.env,TEST_DATABASE_URL:url}
+    });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /obrigatório|descartável/);
   }
 });
 test("config: em produção a URL da API do Mercado Pago e o modo APRO não podem ser trocados por variável", () => {

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node --no-warnings server.js",
     "test": "node --no-warnings --test --test-concurrency=1",
+    "test:ci": "node --no-warnings scripts/run-ci.js",
     "admin": "node --no-warnings server.js criar-admin",
     "migrar-sqlite": "node --no-warnings scripts/migrar-sqlite.js",
     "backup": "node --no-warnings scripts/backup.js",

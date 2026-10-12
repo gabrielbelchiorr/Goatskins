@@ -21,6 +21,37 @@ button,input{font:inherit}button{cursor:pointer}a{color:inherit}
 h1,h2,h3,h4,p{overflow-wrap:break-word}h1,h2,h3,h4{margin:0}
 [hidden]{display:none!important}
 
+/* Loading inicial: acompanha os dados reais e não altera o layout após carregar. */
+.page-loader{display:none;position:fixed;z-index:10000;inset:0;place-items:center;padding:24px;
+  background:radial-gradient(ellipse at 50% 42%,#18304e 0%,#0c192e 45%,#06101e 100%);
+  transition:opacity .18s ease,visibility .18s ease}
+.page-loading .page-loader,.page-loader.is-leaving{display:grid}
+.page-loading body{overflow:hidden}
+.page-loading body>:not(.page-loader):not(noscript):not(script){visibility:hidden}
+.page-loader-content{width:min(100%,360px);text-align:center}
+.page-loader-mark{position:relative;display:grid;place-items:center;width:138px;height:138px;margin:0 auto 22px;
+  border:1px solid rgba(228,180,91,.12);border-radius:50%;background:rgba(6,16,30,.32);box-shadow:0 0 55px rgba(228,180,91,.07)}
+.page-loader-mark img{display:block;object-fit:contain;filter:drop-shadow(0 8px 14px rgba(0,0,0,.3))}
+.page-loader-orbit{position:absolute;inset:-3px;border:2px solid transparent;border-top-color:var(--gold);
+  border-right-color:rgba(228,180,91,.28);border-radius:50%;animation:loader-orbit 1.15s linear infinite}
+.page-loader-brand{margin:0;color:var(--cream);font-size:1.25rem;font-weight:800;letter-spacing:.15em}
+.page-loader-brand span{color:var(--gold)}
+.page-loader-message{margin:10px 0 20px;color:var(--muted);font-size:.9rem;line-height:1.6}
+.page-loader-track{height:3px;width:156px;margin:0 auto;border-radius:3px;overflow:hidden;background:rgba(228,180,91,.12)}
+.page-loader-track span{display:block;width:48%;height:100%;border-radius:inherit;
+  background:linear-gradient(90deg,transparent,var(--gold),transparent);animation:loader-track 1.4s ease-in-out infinite}
+.page-loader.is-leaving{opacity:0;visibility:hidden;pointer-events:none}
+.page-loader.is-error .page-loader-orbit{animation:none;opacity:.4}
+.page-loader.is-error .page-loader-track{display:none}
+.page-loader.is-error .btn{margin-top:4px}
+@keyframes loader-orbit{to{transform:rotate(360deg)}}
+@keyframes loader-track{from{transform:translateX(-105%)}to{transform:translateX(315%)}}
+@media(prefers-reduced-motion:reduce){
+  .page-loader{transition:none}
+  .page-loader-orbit,.page-loader-track span{animation:none}
+  .page-loader-track span{width:100%;background:var(--gold);opacity:.45}
+}
+
 /* Atmosfera só como fundo: cartões e textos sempre ficam por cima. */
 .shell{display:flex;position:relative;z-index:1;min-height:calc(100vh - 92px)}
 .shell::before{
@@ -227,10 +258,6 @@ h2.gap{margin-top:48px}
 .num.mine{background:var(--gold);box-shadow:0 0 0 2px #f8e4b8}
 .num:disabled{background:rgba(255,255,255,.08);color:#8996a8;text-decoration:line-through;cursor:not-allowed}
 .num.res{background:rgba(221,164,65,.13);color:#cfb57c;border:1px dashed var(--gold);text-decoration:none}
-.rwrap{position:relative;width:var(--rs);height:var(--rs);margin:22px auto}
-.rwheel{position:absolute;inset:0;overflow:hidden;border:6px solid var(--gold);border-radius:50%;box-shadow:0 0 0 4px #091324,0 15px 42px rgba(0,0,0,.5)}
-.rl{position:absolute;top:50%;left:50%;color:#fff;font-weight:800;text-shadow:1px 1px 0 #000}
-.rptr{position:absolute;z-index:3;top:-18px;left:50%;transform:translateX(-50%);border-left:15px solid transparent;border-right:15px solid transparent;border-top:30px solid var(--gold)}
 .qr{display:block;width:230px;max-width:100%;margin:12px auto;background:#fff;padding:8px;border-radius:12px;image-rendering:pixelated}
 .pixcode{width:100%;margin:8px 0;font-size:.77rem;font-family:monospace}
 
