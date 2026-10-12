@@ -370,3 +370,13 @@ body:has(.pending-pix:not([hidden])){padding-bottom:75px}
   .pending-pix-info small{font-size:.6rem}.pending-pix .btn{min-height:40px;padding:9px 10px;font-size:.7rem}
   body:has(.pending-pix:not([hidden])){padding-bottom:82px}
 }
+/* Somente a etapa de confirmação; preserva os layouts existentes. */
+.confirmacao-cadastro { display: grid; gap: 12px; }
+.confirmacao-cadastro p { overflow-wrap: anywhere; }
+.confirmacao-cadastro input { width: 100%; min-width: 0; text-align: center; letter-spacing: .25em; font-size: 1.4rem; }
+.confirmacao-cadastro .btn { width: 100%; white-space: normal; }
+
+/* Small security prompts; existing page layout remains unchanged. */
+dialog {color:var(--gold,#e8dfd1);background:#102440;border:1px solid #b8651f;border-radius:16px;padding:24px;max-width:min(440px,90vw);max-height:85vh;overflow:auto;}
+dialog::backdrop{background:rgba(0,0,0,.7)}
+dialog code,dialog pre{overflow-wrap:anywhere;white-space:pre-wrap;user-select:all} dialog button{margin:8px 8px 0 0}

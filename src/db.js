@@ -13,9 +13,13 @@ types.setTypeParser(20, v => Number(v));    // BIGINT / COUNT(*) / BIGSERIAL che
 types.setTypeParser(1700, v => parseFloat(v)); // NUMERIC (ex.: SUM, divisões) também como número
 
 // statement_timeout / idle_in_transaction_session_timeout: uma consulta travada ou uma transação esquecida aberta nunca segura a trava de escrita para sempre.
-const pool = new Pool({ connectionString: cfg.DATABASE_URL, max: cfg.PG_POOL_MAX, connectionTimeoutMillis: 10000, idleTimeoutMillis: 30000,
+// URL options must not silently replace our certificate verification policy.
+const databaseUrl = new URL(cfg.DATABASE_URL);
+const sslRequested = cfg.DATABASE_SSL || ['require','verify-ca','verify-full','no-verify'].includes(databaseUrl.searchParams.get('sslmode')) || databaseUrl.searchParams.get('ssl') === 'true';
+for (const key of ['sslmode','ssl','sslcert','sslkey','sslrootcert','uselibpqcompat']) databaseUrl.searchParams.delete(key);
+const pool = new Pool({ connectionString: databaseUrl.toString(), max: cfg.PG_POOL_MAX, connectionTimeoutMillis: 10000, idleTimeoutMillis: 30000,
   statement_timeout: 20000, idle_in_transaction_session_timeout: 30000, application_name: "goatskins",
-  ssl: cfg.DATABASE_SSL ? { rejectUnauthorized: false } : undefined });
+  ssl: sslRequested ? { rejectUnauthorized: true, ...(cfg.DATABASE_CA ? { ca: cfg.DATABASE_CA.replace(/\\n/g, "\n") } : {}) } : undefined });
 pool.on("error", e => console.error("[pg] erro em conexão ociosa:", e.message)); // sem isso um erro de rede derrubaria o processo
 
 const sha = t => crypto.createHash("sha256").update(t).digest("hex");
@@ -105,6 +109,30 @@ CREATE INDEX IF NOT EXISTS ix_pedidos_pending ON pedidos(expira_em) WHERE status
 /* 3: arquivo reversível de campanhas, sem excluir pedidos ou participantes. */ `
 ALTER TABLE campaigns ADD COLUMN archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1));
 CREATE INDEX IF NOT EXISTS ix_camp_archived ON campaigns(archived, status);`
+,
+/* 4: cadastro separado de users; nenhuma conta antiga é apagada ou marcada como verificada. */ `
+CREATE TABLE pending_registrations (
+ token_hash TEXT PRIMARY KEY, email TEXT NOT NULL, nome TEXT NOT NULL, telefone TEXT, aviso INTEGER NOT NULL DEFAULT 0 CHECK (aviso IN (0,1)),
+ password_hash TEXT NOT NULL, consentimento_em TEXT, user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+ codigo_hash TEXT NOT NULL, expira BIGINT NOT NULL, cadastro_expira BIGINT NOT NULL,
+ tentativas INTEGER NOT NULL DEFAULT 0 CHECK (tentativas BETWEEN 0 AND 5),
+ enviado INTEGER NOT NULL DEFAULT 0 CHECK (enviado IN (0,1)), criado_em TEXT NOT NULL
+);
+CREATE INDEX ix_pending_expira ON pending_registrations(cadastro_expira);
+CREATE INDEX ix_pending_email ON pending_registrations(email);
+CREATE TABLE auth_rate_limits(chave TEXT PRIMARY KEY, inicio BIGINT NOT NULL, n INTEGER NOT NULL,
+ proximo BIGINT NOT NULL, expira BIGINT NOT NULL);
+CREATE INDEX ix_auth_rate_expira ON auth_rate_limits(expira);
+DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE email_verificado<>1);
+DELETE FROM tokens_email WHERE tipo='VERIFICAR';`
+,
+/* 5: MFA administrativo; alteração aditiva, preserva contas e pedidos. */ `
+ALTER TABLE pedidos ADD COLUMN mp_creation_uncertain INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN mfa_until BIGINT NOT NULL DEFAULT 0;
+CREATE TABLE admin_mfa(user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ secret TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, last_step BIGINT NOT NULL DEFAULT -1,
+ pending_session TEXT, pending_expira BIGINT NOT NULL DEFAULT 0, recovery_hashes TEXT NOT NULL DEFAULT '[]');
+`
 /* próximas alterações: acrescente novos itens a este array (nunca edite os já aplicados) */
 ];
 
@@ -145,12 +173,12 @@ async function notificar(uid, titulo, texto) {
 /* Versão barata para rotas de leitura: só entra na transação (e na trava de escrita) quando existe mesmo algo vencido.
    Antes, TODA chamada a /api/estado e /api/pedidos disputava a trava global de escrita. */
 async function liberarSeVencido() {
-  if (await get("SELECT 1 FROM pedidos WHERE status='PENDING' AND mp_order_id IS NULL AND expira_em<? LIMIT 1", [Date.now()])) await tx(() => liberar());
+  if (await get("SELECT 1 FROM pedidos WHERE status='PENDING' AND mp_order_id IS NULL AND mp_creation_uncertain=0 AND expira_em<? LIMIT 1", [Date.now()])) await tx(() => liberar());
 }
 const ping = () => get("SELECT 1 ok");
 /* Libera reservas de pedidos vencidos. Chamar DENTRO de uma transação (ou via tx(() => liberar())). */
 async function liberar() {
-  await run("UPDATE pedidos SET status='EXPIRED', atualizado_em=? WHERE status='PENDING' AND mp_order_id IS NULL AND expira_em<?", [agora(), Date.now()]);
+  await run("UPDATE pedidos SET status='EXPIRED', atualizado_em=? WHERE status='PENDING' AND mp_order_id IS NULL AND mp_creation_uncertain=0 AND expira_em<?", [agora(), Date.now()]);
   await run("DELETE FROM reservas WHERE pedido_id IN (SELECT id FROM pedidos WHERE status<>'PENDING')");
 }
 module.exports = { db, tx, iniciar, fechar, liberar, liberarSeVencido, ping, sha, agora, audit, notificar, novaSemente };

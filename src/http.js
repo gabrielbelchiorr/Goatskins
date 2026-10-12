@@ -20,7 +20,9 @@ const baldes = new Map(); // chave -> { ts: [instantes], janela }
 function limite(chave, max, janelaMs) { // limitador em memória (para vários servidores, troque por Redis ou banco)
   if (cfg.TESTE) return;
   const agora = Date.now(), b = baldes.get(chave) || { ts: [], janela: janelaMs };
-  b.janela = Math.max(b.janela, janelaMs); b.ts = b.ts.filter(t => agora - t < janelaMs); b.ts.push(agora); baldes.set(chave, b);
+  b.janela = Math.max(b.janela, janelaMs); b.ts = b.ts.filter(t => agora - t < janelaMs); if (b.ts.length >= max) throw new Erro("Muitas tentativas. Aguarde alguns minutos.", 429);
+  if (!baldes.has(chave) && baldes.size >= 20000) throw new Erro("Serviço ocupado. Aguarde.", 429);
+  b.ts.push(agora); baldes.set(chave, b);
   if (b.ts.length > max) throw new Erro("Muitas tentativas. Aguarde alguns minutos.", 429);
 }
 /* Poda só o que já expirou. (Antes o mapa inteiro era zerado a cada hora: quem estava bloqueado voltava a ter tentativas de graça.) */
@@ -36,7 +38,7 @@ function cookie(req, nome) {
    Entradas mais à esquerda são forjáveis pelo cliente e nunca são usadas. */
 function ipDe(req) {
   const xff = cfg.TRUST_PROXY && req.headers["x-forwarded-for"];
-  if (xff) { const l = String(xff).split(",").map(s => s.trim()).filter(Boolean); if (l.length) return l[Math.max(0, l.length - cfg.TRUST_PROXY_HOPS)]; }
+  if (xff) { const l = String(xff).split(",").map(s => s.trim()).filter(Boolean); if (l.length >= cfg.TRUST_PROXY_HOPS) { const ip = l[l.length - cfg.TRUST_PROXY_HOPS]; if (require("node:net").isIP(ip)) return ip; } }
   return req.socket.remoteAddress;
 }
 module.exports = { Erro, RE, txt, inteiro, foto, abrev, limite, cookie, ipDe, _baldes };

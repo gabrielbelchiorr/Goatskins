@@ -29,7 +29,7 @@ async function chamar(metodo, caminho, corpo, chaveIdempotencia) {
 
   if (!r.ok) {
     // a mensagem só inclui o que o Mercado Pago respondeu (nunca o token nem os cabeçalhos enviados)
-    const e = new Error("Mercado Pago HTTP " + r.status + " " + JSON.stringify(d.errors || d.message || "").slice(0, 300));
+    const e = new Error("Mercado Pago HTTP " + r.status);
     e.status = r.status;
     throw e;
   }
@@ -75,7 +75,9 @@ function assinaturaValida(xSignature, xRequestId, dataId) {
     const k = parte.slice(0, i).trim(), v = parte.slice(i + 1).trim();
     if (k === "ts") ts = v; else if (k === "v1") v1 = v;
   }
-  if (!ts || !v1) return false;
+  if (!ts || !v1 || !/^\d{10,13}$/.test(ts) || !/^[a-f0-9]{64}$/.test(v1) || typeof xRequestId !== 'string' || !/^[a-zA-Z0-9._-]{1,150}$/.test(xRequestId)) return false;
+  const timestamp = Number(ts) * (ts.length === 10 ? 1000 : 1);
+  if (Math.abs(Date.now() - timestamp) > 15 * 60000) return false;
 
   const recebido = Buffer.from(v1);
   // A documentação manda usar o id em minúsculas; aceitamos também o id como veio, por segurança.

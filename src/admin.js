@@ -33,6 +33,7 @@ const rotas = [
     if (!["USER", "ADMIN"].includes(papel)) throw new Erro("Papel inválido.");
     if (id === ctx.user.id || alvo.role === "SUPER_ADMIN") throw new Erro("Você não pode alterar esta conta.", 403);
     await db.run("UPDATE users SET role=?, atualizado_em=? WHERE id=?", [papel, agora(), id]);
+    await db.run("DELETE FROM sessions WHERE user_id=?", [id]);
     await audit(ctx.user.id, "USUARIO_PAPEL", "usuário " + id + " -> " + papel, ctx.ip); return { ok: true };
   }, "super"],
   ["GET", /^\/api\/admin\/logs$/, () => db.all("SELECT l.quando, l.acao, l.detalhe, l.ip, u.email FROM audit_logs l LEFT JOIN users u ON u.id=l.user_id ORDER BY l.id DESC LIMIT 150"), "admin"],

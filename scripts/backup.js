@@ -8,7 +8,10 @@ const cfg = require("../src/config");
 const pasta = path.join(cfg.DATA_DIR, "backups"); fs.mkdirSync(pasta, { recursive: true, mode: 0o700 });
 const destino = path.join(pasta, "goatskins-" + new Date().toISOString().replace(/[:.]/g, "-") + ".dump");
 try {
-  execFileSync("pg_dump", ["--format=custom", "--no-owner", "--file", destino, "--dbname", cfg.DATABASE_URL], { stdio: ["ignore", "ignore", "pipe"] });
+  const u = new URL(cfg.DATABASE_URL);
+  execFileSync("pg_dump", ["--format=custom", "--no-owner", "--file", destino], { stdio: ["ignore", "ignore", "pipe"],
+    env: { ...process.env, PGHOST: u.hostname, PGPORT: u.port || "5432", PGDATABASE: decodeURIComponent(u.pathname.slice(1)),
+      PGUSER: decodeURIComponent(u.username), PGPASSWORD: decodeURIComponent(u.password), PGSSLMODE: cfg.DATABASE_SSL ? "verify-full" : "prefer" } });
 } catch (e) { // a mensagem original contém a URL do banco (com senha): não imprimir
   try { fs.unlinkSync(destino); } catch (_) { /* nada criado */ }
   console.error(e.code === "ENOENT" ? "pg_dump não encontrado: instale o cliente PostgreSQL." : "Falha no pg_dump:\n" + String(e.stderr || "").trim().replace(/postgres(ql)?:\/\/\S+/g, "[url oculta]"));

@@ -25,6 +25,13 @@ async function api(url, method, body) {
   const r = await fetch(url, { method: method || "GET", credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-Requested-With": "goatskins" }, body: body ? JSON.stringify(body) : undefined });
   const d = await r.json().catch(() => ({}));
+  if (!r.ok && d.tipo === "TURNSTILE_REQUIRED") {
+    const action = url === "/api/login" ? "login" : url === "/api/registro" ? "registro" : "recuperacao";
+    const token = await desafioSeguranca(action);
+    const retry = await fetch(url, {method: method || "GET", credentials:"same-origin", headers:{"Content-Type":"application/json","X-Requested-With":"goatskins"}, body:JSON.stringify({...body,turnstileToken:token})});
+    const result = await retry.json(); if(!retry.ok) throw new Error(result.erro || "Falha na verificação."); return result;
+  }
+  if (!r.ok && d.tipo === "MFA_REQUIRED") { await confirmarMfa(); return api(url,method,body); }
   if (!r.ok) throw new Error(d.erro || (r.status === 429 ? "Muitas tentativas. Aguarde um pouco." : r.status >= 500 ? "Erro no servidor. Tente novamente em instantes." : "Erro " + r.status));
   return d;
 }
@@ -160,8 +167,7 @@ function render() {
   $("adminBtn").hidden = !admin();
   const f = $("faixa"); f.innerHTML = "";
   f.hidden = !(S.eu && !S.eu.email_verificado);
-  if (!f.hidden) f.append(h("span", null, "Confirme seu e-mail para poder participar. Enviamos um link para " + S.eu.email + "."),
-    botao("Reenviar", "", async () => { try { await api("/api/reenviar-verificacao", "POST"); aviso("Enviado", "Confira sua caixa de entrada (e o spam)."); } catch (e) { aviso("Ops", e.message); } }));
+  if (!f.hidden) f.append(botao("Confirmar e-mail", "", verificarEmailModal));
   if (view === "detalhe") {
     const c = S.c.find(x => x.id === sorteioAtual);
     if (c) renderDetalhe(c);
@@ -252,9 +258,9 @@ function renderDetalhe(c) {
 }
 
 /* ---------- Conta: entrar, cadastrar, recuperar senha ---------- */
-function authModal(modo) {
+function authModal(modo, emailInicial = "") {
   const criar = modo === "criar", esq = modo === "esqueci", reset = modo && modo.startsWith("reset:");
-  const nome = campo("Nome completo", "text"), email = campo("E-mail", "email"), tel = campo("Telefone (opcional)", "tel");
+  const nome = campo("Nome completo", "text"), email = campo("E-mail", "email", emailInicial), tel = campo("Telefone (opcional)", "tel");
   const pw = campo(reset ? "Nova senha" : "Senha", "password"), err = h("p", "err");
   pw.i.autocomplete = criar || reset ? "new-password" : "current-password";
   const ck1 = h("input"), ck2 = h("input"); ck1.type = ck2.type = "checkbox";
@@ -263,14 +269,22 @@ function authModal(modo) {
   termos.append("Li e aceito os ", a1, " e a ", a2, "."); l1.append(ck1, h("span", null, "Tenho 18 anos ou mais.")); l2.append(ck2, termos);
   const dica = h("p", "muted", "A senha precisa ter 8 ou mais caracteres, com letras e números.");
   const ok = botao(criar ? "Criar conta" : esq ? "Enviar link" : reset ? "Salvar nova senha" : "Entrar");
-  const enviar = () => rodar(err, async () => {
-    if (esq) { await api("/api/esqueci-senha", "POST", { email: email.i.value }); return aviso("Confira seu e-mail", "Se existir uma conta com esse e-mail, enviamos um link para criar uma nova senha."); }
+  const enviar = () => {
+    if (ok.disabled) return;
+    ok.disabled = true; err.textContent = "";
+    return rodar(err, async () => {
+    if (esq) { await api("/api/esqueci-senha", "POST", { email: email.i.value }); return aviso("Confira seu e-mail", "Solicitação recebida. Se existir uma conta com esse e-mail, confira a caixa de entrada e o spam. Se não chegar, tente novamente mais tarde."); }
     if (reset) { await api("/api/redefinir-senha", "POST", { token: modo.slice(6), senha: pw.i.value }); return aviso("Senha alterada", "Agora é só entrar com a nova senha."); }
     if (criar && (!ck1.checked || !ck2.checked)) throw new Error("Confirme a idade e aceite os termos e a política de privacidade.");
-    await api(criar ? "/api/registro" : "/api/login", "POST", criar ? { nome: nome.i.value, email: email.i.value, telefone: tel.i.value, senha: pw.i.value, maior18: ck1.checked, consentimento: ck2.checked } : { email: email.i.value, senha: pw.i.value });
+    const resposta = await api(criar ? "/api/registro" : "/api/login", "POST", criar ? { nome: nome.i.value, email: email.i.value, telefone: tel.i.value, senha: pw.i.value, maior18: ck1.checked, consentimento: ck2.checked } : { email: email.i.value, senha: pw.i.value });
+    pw.i.value = "";
+    if (resposta.pendente) {
+      guardarConfirmacao({ ...resposta, email: email.i.value.trim().toLowerCase(), modo: criar ? "criar" : "entrar" });
+      return confirmarCadastroModal();
+    }
     await carregar(); closeModal();
-    if (criar) aviso("Conta criada!", "Enviamos um link de confirmação para o seu e-mail. Confirme para poder participar.");
-  });
+  }).finally(() => { ok.disabled = false; });
+  };
   ok.addEventListener("click", enviar); pw.i.addEventListener("keydown", e => { if (e.key === "Enter") enviar(); });
   const troca = h("div"); 
   if (!criar && !esq && !reset) { const a = botao("Esqueci minha senha", "link", () => authModal("esqueci")), b = botao("Criar conta", "alt", () => authModal("criar")); a.className = "link"; troca.append(a, h("br"), b); }
@@ -279,11 +293,64 @@ function authModal(modo) {
   openModal(false, h("h3", null, criar ? "Criar conta" : esq ? "Recuperar senha" : reset ? "Nova senha" : "Entrar"), ...campos, err, ok, troca);
 }
 
-function verificarEmailModal() {
-  const err = h("p", "err");
-  openModal(false, h("h3", null, "Confirme seu e-mail"), h("p", null, "Para participar, confirme o e-mail pelo link que enviamos para " + S.eu.email + "."), err,
-    botao("Reenviar link", "", () => rodar(err, async () => { await api("/api/reenviar-verificacao", "POST"); err.textContent = "Link reenviado!"; })));
+let confirmacaoPendente = null;
+try { confirmacaoPendente = JSON.parse(sessionStorage.getItem("goatskins-confirmacao") || "null"); } catch (_) { /* storage opcional */ }
+function guardarConfirmacao(dados) {
+  confirmacaoPendente = dados;
+  try { dados ? sessionStorage.setItem("goatskins-confirmacao", JSON.stringify(dados)) : sessionStorage.removeItem("goatskins-confirmacao"); } catch (_) { /* funciona sem storage */ }
 }
+function confirmarCadastroModal() {
+  const p = confirmacaoPendente;
+  if (!p || p.cadastro_expira_em <= Date.now()) { guardarConfirmacao(null); return authModal("criar"); }
+  const codigo = campo("Código de 6 dígitos", "text"), err = h("p", "err"), status = h("p", "muted");
+  codigo.i.id = "codigoCadastro"; codigo.w.querySelector("label").htmlFor = codigo.i.id;
+  codigo.i.inputMode = "numeric"; codigo.i.autocomplete = "one-time-code";
+  codigo.i.maxLength = 6; codigo.i.pattern = "[0-9]{6}";
+  codigo.i.addEventListener("input", () => { codigo.i.value = codigo.i.value.replace(/\D/g, "").slice(0, 6); });
+  err.setAttribute("role", "alert");
+  const box = h("div", "confirmacao-cadastro"); let ocupado = false;
+  const confirmar = botao("Confirmar e-mail", "", async () => {
+    if (ocupado) return;
+    if (!/^\d{6}$/.test(codigo.i.value)) { err.textContent = "Digite os seis dígitos do código."; return; }
+    ocupado = true; atualizar(); err.textContent = "";
+    try {
+      await api("/api/confirmar-cadastro", "POST", { token: p.token, codigo: codigo.i.value });
+      guardarConfirmacao(null); await carregar();
+      openModal(false, h("h3", null, "E-mail confirmado!"), h("p", null, "Sua conta está pronta. Entre com seu e-mail e senha."), botao("Entrar", "", () => authModal("entrar", p.email)));
+    } catch (e) { err.textContent = e.message; }
+    finally { ocupado = false; atualizar(); }
+  });
+  const reenviar = botao("Reenviar código", "alt", async () => {
+    if (ocupado) return;
+    ocupado = true; atualizar(); err.textContent = "";
+    try {
+      const r = await api("/api/reenviar-verificacao", "POST", { token: p.token });
+      Object.assign(p, r); guardarConfirmacao(p); codigo.i.value = "";
+      err.textContent = r.simulado ? "Modo de teste: o código está no arquivo local emails.log. Nenhum e-mail foi enviado." : "Solicitação processada. Confira seu e-mail e use apenas o código mais recente.";
+    } catch (e) { err.textContent = e.message; p.reenviar_em = Date.now() + 60000; guardarConfirmacao(p); }
+    finally { ocupado = false; atualizar(); }
+  });
+  const corrigir = botao("Corrigir e-mail / reiniciar", "link", async () => {
+    if (ocupado) return;
+    ocupado = true; atualizar();
+    try { await api("/api/cancelar-cadastro", "POST", { token: p.token }); guardarConfirmacao(null); authModal(p.modo, p.email); }
+    catch (e) { err.textContent = e.message; ocupado = false; atualizar(); }
+  });
+  function atualizar() {
+    const restante = Math.max(0, Math.ceil((p.expira_em - Date.now()) / 1000)), espera = Math.max(0, Math.ceil((p.reenviar_em - Date.now()) / 1000));
+    const acabou = p.cadastro_expira_em <= Date.now();
+    status.textContent = acabou ? "Solicitação expirada. Reinicie o cadastro." : restante ? "Código válido por " + Math.floor(restante / 60) + ":" + String(restante % 60).padStart(2, "0") + "." : "Código expirado. Solicite um novo código.";
+    confirmar.disabled = ocupado || !restante || acabou; reenviar.disabled = ocupado || espera > 0 || acabou; corrigir.disabled = ocupado;
+    reenviar.textContent = espera ? "Reenviar em " + espera + "s" : "Reenviar código";
+  }
+  codigo.i.addEventListener("keydown", e => { if (e.key === "Enter" && !confirmar.disabled) confirmar.click(); });
+  box.append(h("h3", null, "Confirme seu e-mail"), h("p", null, "Endereço informado: " + p.email),
+    h("p", "muted", p.mensagem), codigo.w, status, err, confirmar, reenviar, corrigir);
+  if (p.simulado) box.append(h("p", "muted", "TESTE LOCAL: código em data/emails.log; não há envio real."));
+  openModal(false, box); atualizar(); codigo.i.focus();
+  const timer = setInterval(() => { if (!box.isConnected || $("modal").hidden) clearInterval(timer); else atualizar(); }, 1000);
+}
+function verificarEmailModal() { return confirmacaoPendente ? confirmarCadastroModal() : authModal("entrar"); }
 
 /* ---------- Escolher números ---------- */
 function escolherNumeros(c) {
@@ -646,16 +713,17 @@ document.querySelectorAll(".nv[data-view]").forEach(b => b.addEventListener("cli
   if (mobileMQ.matches) menuAberto(false);
   navegar(b.dataset.view); if (view === "bilhetes" && !S.eu) authModal("entrar"); if (view === "bilhetes") carregarPedidos();
 }));
-$("loginBtn").addEventListener("click", async () => { if (S.eu) { await api("/api/logout", "POST"); await carregar(); } else authModal("entrar"); });
+$("loginBtn").addEventListener("click", async () => { if (S.eu) { await api("/api/logout", "POST"); await carregar(); } else if (confirmacaoPendente) confirmarCadastroModal(); else authModal("entrar"); });
 $("contaBtn").addEventListener("click", () => conta().catch(e => aviso("Ops", e.message)));
 $("adminBtn").addEventListener("click", () => painel("painel"));
 carregar().then(() => {
   const q = new URLSearchParams(location.search);
   if (q.get("msg") === "email-verificado") aviso("E-mail confirmado!", "Pronto, agora você já pode participar dos sorteios.");
-  else if (q.get("msg") === "link-invalido") aviso("Link inválido", "Este link expirou ou já foi usado. Peça um novo em 'Minha conta'.");
+  else if (q.get("msg") === "link-invalido") aviso("Link inválido", "Este link antigo não é mais válido. Entre com seu e-mail e senha para solicitar um código de confirmação.");
   else {
     const tk = q.get("redefinir") || new URLSearchParams(location.hash.slice(1)).get("redefinir");
     if (tk && /^[a-f0-9]{64}$/.test(tk)) authModal("reset:" + tk);
+    else if (confirmacaoPendente && !S.eu) confirmarCadastroModal();
   }
   // Remove somente tokens e mensagens temporárias, não a URL compartilhável ?sorteio=ID.
   const limpo = new URL(location.href);
@@ -670,3 +738,64 @@ window.addEventListener("popstate",()=>{
   else{view="sorteios";sorteioAtual=null;}
   render();
 });
+
+/* Security dialogs use the existing visual components. Passwords/secrets never enter storage. */
+let turnstileScript;
+async function desafioSeguranca(action) {
+  const config = await api('/api/seguranca');
+  if (!config.turnstileSiteKey) throw new Error('Verificação indisponível.');
+  const overlay = document.createElement('dialog'), title=h('h3',null,'Verificação de segurança'), box=h('div'), err=h('p','err');
+  overlay.append(title,box,err);document.body.append(overlay);overlay.showModal();
+  try {
+    if (!window.turnstile) {
+      if(!turnstileScript) turnstileScript=new Promise((resolve,reject)=>{
+        const script=document.createElement('script');script.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+        script.onload=resolve;script.onerror=()=>reject(new Error('Não foi possível carregar a verificação.'));document.head.append(script);
+      }).catch(e=>{turnstileScript=null;throw e;});
+      await turnstileScript;
+    }
+    return await new Promise((resolve,reject)=>{
+      let widget;
+      const finish=(e,t)=>{if(widget!==undefined)window.turnstile.remove(widget);e?reject(e):resolve(t);};
+      overlay.addEventListener('cancel',()=>finish(new Error('Verificação cancelada.')),{once:true});
+      overlay.append(botao('Cancelar','alt',()=>finish(new Error('Verificação cancelada.'))));
+      widget=window.turnstile.render(box,{sitekey:config.turnstileSiteKey,action,theme:'dark',callback:t=>finish(null,t),
+        'error-callback':()=>{err.textContent='Falha na verificação. Feche e tente novamente.';},'expired-callback':()=>window.turnstile.reset(widget)});
+    });
+  } finally {overlay.close();overlay.remove();}
+}
+let mfaPromise;
+function confirmarMfa() {
+  if(mfaPromise)return mfaPromise;
+  mfaPromise=(async()=>{
+    const status=await api('/api/mfa/status');
+    return new Promise((resolve,reject)=>{
+      const dialog=document.createElement('dialog'),pw=campo('Senha atual','password'),code=campo('Código do autenticador ou de recuperação','text'),err=h('p','err'),info=h('div');
+      code.i.autocomplete='one-time-code';pw.i.autocomplete='current-password';
+      const done=()=>{dialog.close();dialog.remove();resolve();};
+      const cancel=()=>{dialog.close();dialog.remove();reject(new Error('Verificação administrativa cancelada.'));};
+      const ok=botao(status.enabled?'Confirmar identidade':'Configurar autenticador');
+      let prepared=status.enabled;
+      ok.addEventListener('click',async()=>{
+        if(ok.disabled)return;ok.disabled=true;err.textContent='';
+        try {
+          if(!prepared){
+            const d=await api('/api/mfa/preparar','POST',{senha:pw.i.value});
+            info.replaceChildren(h('p',null,'No seu aplicativo autenticador, adicione uma conta por chave de configuração (TOTP). Chave:'),h('code',null,d.secret));
+            code.w.hidden=false;prepared=true;ok.textContent='Ativar e confirmar';
+          } else {
+            const d=await api('/api/mfa/verificar','POST',{senha:pw.i.value,codigo:code.i.value.trim()});
+            pw.i.value='';code.i.value='';info.replaceChildren();
+            if(d.recoveryCodes){
+              info.append(h('p',null,'Guarde estes códigos de recuperação em local seguro. Cada um funciona uma vez, junto com sua senha.'),h('pre',null,d.recoveryCodes.join('\n')));
+              pw.w.hidden=code.w.hidden=ok.hidden=true;info.append(botao('Guardei os códigos',null,done));
+            } else done();
+          }
+        } catch(e){err.textContent=e.message;} finally {ok.disabled=false;}
+      });
+      code.w.hidden=!status.enabled;
+      dialog.append(h('h3',null,'Segurança da administração'),pw.w,info,code.w,err,ok,botao('Cancelar','alt',cancel));
+      dialog.addEventListener('cancel',e=>{e.preventDefault();cancel();});document.body.append(dialog);dialog.showModal();
+    });
+  })().finally(()=>{mfaPromise=null;});return mfaPromise;
+}

@@ -48,7 +48,7 @@ const mp = require("../src/mercadopago"), ped = require("../src/pedidos"), mail 
 mail.enviar = (...a) => { enviados.push(a); }; // não envia nada de verdade; pedidos.js chama mail.enviar no momento do uso
 const orderPaga = (extra = {}) => ({ id: ORD, external_reference: PUB, status: "processed", status_detail: "accredited", total_amount: "2.00", total_paid_amount: "2.00",
   transactions: { payments: [{ status: "processed", status_detail: "accredited", paid_amount: "2.00" }] }, ...extra });
-const assinar = (id, reqId = "req-1", ts = "1742505638683", segredo = "segredo-de-teste") =>
+const assinar = (id, reqId = "req-1", ts = String(Date.now()), segredo = "segredo-de-teste") =>
   "ts=" + ts + ",v1=" + crypto.createHmac("sha256", segredo).update("id:" + id.toLowerCase() + ";request-id:" + reqId + ";ts:" + ts + ";").digest("hex");
 
 test("assinatura: válida com id em minúsculas no manifesto", () => assert.equal(mp.assinaturaValida(assinar(ORD), "req-1", ORD), true));

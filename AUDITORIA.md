@@ -1,3 +1,5 @@
+> Documento da entrega anterior. Para esta versão, leia LEIA_PRIMEIRO_SEGURANCA.md e AUDITORIA_SEGURANCA.md.
+
 # Auditoria pré-lançamento — GOATSKINS
 
 Data: 06/10/2026. Escopo: todos os arquivos enviados (servidor, banco, pagamentos, autenticação, painel admin, frontend, testes, scripts).

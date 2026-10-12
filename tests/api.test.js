@@ -8,10 +8,10 @@ const fs = require("node:fs"), os = require("node:os"), path = require("node:pat
 
 const TEST_URL = process.env.TEST_DATABASE_URL || "", PODE = !!TEST_URL;
 if (PODE && !/test/i.test(decodeURIComponent(new URL(TEST_URL).pathname))) throw new Error('TEST_DATABASE_URL precisa apontar para um banco cujo nome contenha "test" (o teste apaga as tabelas dele).');
-const test = (nome, fn) => _test(nome, { skip: PODE ? false : "defina TEST_DATABASE_URL (banco PostgreSQL descartável)" }, fn);
+const test = (nome, fn) => _test(nome, { timeout: 60000, skip: PODE ? false : "defina TEST_DATABASE_URL (banco PostgreSQL descartável)" }, fn);
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), "goat-")), PORT = 3300 + Math.floor(Math.random() * 500), BASE = "http://localhost:" + PORT;
 const MP_PORT = 4300 + Math.floor(Math.random() * 400), SEGREDO = "segredo-de-teste", TOKEN = "TOKEN-DE-TESTE-NAO-VAZAR";
-const env = { ...process.env, DATABASE_URL: TEST_URL, DATABASE_SSL: "0", DATA_DIR: DIR, PORT: String(PORT), TESTE: "1", EMAIL_DRIVER: "console", APP_URL: BASE, NODE_ENV: "test",
+const env = { ...process.env, DATABASE_URL: TEST_URL, DATABASE_SSL: "0", DATA_DIR: DIR, PORT: String(PORT), TESTE: "1", EMAIL_DRIVER: "console", APP_URL: BASE, NODE_ENV: "test", RENDER: "", EMAIL_CODE_SECRET: "a".repeat(64),
   MP_ACCESS_TOKEN: TOKEN, MP_WEBHOOK_SECRET: SEGREDO, MP_API_BASE: "http://localhost:" + MP_PORT, RESERVA_SEGUNDOS: "3" };
 let srv;
 /* Consulta direta ao banco de teste, de forma síncrona (processo filho com o módulo "pg"). Aceita "?" como parâmetro. */
@@ -57,7 +57,7 @@ const mpEstado = (id, status, extra = {}) => { const o = mpOrders.get(id), pg = 
 function cliente() {
   let sid = "";
   const chamar = async (metodo, url, body, extra = {}) => {
-    const r = await fetch(BASE + url, { method: metodo, redirect: "manual",
+    const r = await fetch(BASE + url, { method: metodo, redirect: "manual", signal: AbortSignal.timeout(15000),
       headers: { "Content-Type": "application/json", "X-Requested-With": "goatskins", ...(sid ? { Cookie: "sid=" + sid } : {}), ...extra },
       body: body ? JSON.stringify(body) : undefined });
     const c = r.headers.get("set-cookie"); if (c) { const m = c.match(/sid=([^;]*)/); sid = m[1]; }
@@ -67,50 +67,56 @@ function cliente() {
   return { get: u => chamar("GET", u), post: (u, b) => chamar("POST", u, b || {}), put: (u, b) => chamar("PUT", u, b || {}), del: u => chamar("DELETE", u), chamar };
 }
 const emailsDe = para => fs.readFileSync(path.join(DIR, "emails.log"), "utf8").split("=== ").filter(b => b.startsWith("para: " + para));
+const liberarEnvio = email => dbLer("DELETE FROM auth_rate_limits WHERE chave=?", "email:" + crypto.createHash("sha256").update(email).digest("hex"));
 const tokenDe = (para, padrao) => { const m = emailsDe(para).pop().match(padrao); return m[1]; };
 let seq = 0;
 async function novoUsuario(verificar = true) {
   const c = cliente(), email = "u" + (++seq) + "@teste.com";
   const r = await c.post("/api/registro", { nome: "Pessoa Teste " + seq, email, senha: "Senha1234", maior18: true, consentimento: true });
   assert.equal(r.status, 200);
-  if (verificar) { const v = await c.get("/api/verificar-email?token=" + tokenDe(email, /token=([a-f0-9]+)/)); assert.equal(v.status, 302); }
-  return { c, email };
+  if (verificar) {
+    const v = await c.post("/api/confirmar-cadastro", { token: r.dados.token, codigo: tokenDe(email, /é: (\d{6})/) }); assert.equal(v.status, 200);
+    assert.equal((await c.post("/api/login", {email, senha:"Senha1234"})).status, 200);
+  }
+  return { c, email, token: r.dados.token };
 }
 async function adminLogado() { const c = cliente(); assert.equal((await c.post("/api/login", { email: "admin@teste.com", senha: "Admin1234" })).status, 200); return c; }
 async function novoSorteio(adm, over = {}) {
   const r = await adm.post("/api/admin/campanhas", { premio: "Skin Teste", desgaste: "FT", valor: 100, fim: "2026-12-31", max: 5, max_por_usuario: 1, ...over });
-  assert.equal(r.status, 200); const e = await adm.get("/api/estado"); return e.dados.c[e.dados.c.length - 1];
+  assert.equal(r.status, 200, JSON.stringify(r.dados)); const e = await adm.get("/api/estado"); assert.equal(e.status,200,JSON.stringify(e.dados)); return e.dados.c[e.dados.c.length - 1];
 }
 
 PODE && before(() => new Promise(r => mpServer.listen(MP_PORT, r)));
 PODE && before(async () => {
-  sqlSync("DROP SCHEMA public CASCADE; CREATE SCHEMA public;"); // banco de teste limpo a cada execução
+  sqlSync("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;"); // banco de teste limpo a cada execução
   const r = spawnSync("node", ["--no-warnings", "server.js", "criar-admin", "admin@teste.com", "Admin1234", "Chefe"], { env, encoding: "utf8" });
-  assert.match(r.stdout, /SUPER_ADMIN pronto/);
-  srv = spawn("node", ["--no-warnings", "server.js"], { env, stdio: "ignore" });
+  assert.match(r.stdout, /SUPER_ADMIN pronto/, r.stderr);
+  srv = spawn("node", ["--no-warnings", "server.js"], { env, stdio: ["ignore", "ignore", "pipe"] });
+  srv.stderr.on("data", d => { if (process.env.TEST_DEBUG === "1") process.stderr.write(d); });
   for (let i = 0; i < 50; i++) { try { await fetch(BASE + "/api/estado"); return; } catch (e) { await new Promise(r => setTimeout(r, 100)); } }
   throw new Error("servidor não subiu");
 });
-PODE && after(() => { srv.kill(); mpServer.close(); fs.rmSync(DIR, { recursive: true, force: true }); });
+PODE && after(() => { if (srv) srv.kill(); mpServer.close(); fs.rmSync(DIR, { recursive: true, force: true }); });
 
 test("cadastro valida senha fraca, falta de consentimento e e-mail repetido", async () => {
   const c = cliente(), base = { nome: "Ana Teste", email: "ana@teste.com", senha: "Senha1234", maior18: true, consentimento: true };
   assert.equal((await c.post("/api/registro", { ...base, senha: "abc" })).status, 400);
   assert.equal((await c.post("/api/registro", { ...base, consentimento: false })).status, 400);
   assert.equal((await c.post("/api/registro", base)).status, 200);
-  assert.equal((await cliente().post("/api/registro", base)).status, 400);
+  assert.equal((await cliente().post("/api/registro", base)).status, 429);
 });
 
 test("senha não fica em texto puro e o e-mail de verificação é gerado", async () => {
   const { email } = await novoUsuario(false);
-  assert.match(emailsDe(email).pop(), /verificar-email\?token=/);
-  const h = dbLer("SELECT hash FROM users WHERE email=?", email)[0].hash;
+  assert.match(emailsDe(email).pop(), /é: \d{6}/);
+  assert.equal(dbLer("SELECT id FROM users WHERE email=?", email).length, 0);
+  const h = dbLer("SELECT password_hash FROM pending_registrations WHERE email=?", email)[0].password_hash;
   assert.ok(h.includes(":") && !h.includes("Senha1234"));
 });
 
 test("sem e-mail verificado não é possível escolher números", async () => {
   const adm = await adminLogado(), s = await novoSorteio(adm), { c } = await novoUsuario(false);
-  assert.equal((await c.post("/api/campanhas/" + s.id + "/numeros", { numeros: [1] })).status, 403);
+  assert.equal((await c.post("/api/campanhas/" + s.id + "/numeros", { numeros: [1] })).status, 401);
 });
 
 test("login: erro genérico e bloqueio da conta após 5 falhas", async () => {
@@ -167,6 +173,7 @@ test("sorteio verificável: só com vagas cheias, semente oculta antes e confer�
 
 test("recuperação de senha: link funciona uma vez e derruba sessões antigas", async () => {
   const { c, email } = await novoUsuario();
+  liberarEnvio(email);
   assert.equal((await cliente().post("/api/esqueci-senha", { email })).status, 200);
   assert.equal((await cliente().post("/api/esqueci-senha", { email: "ninguem@x.com" })).status, 200);
   const token = tokenDe(email, /redefinir=([a-f0-9]+)/);
@@ -187,7 +194,8 @@ test("exclusão de conta anonimiza os dados (LGPD)", async () => {
 test("admin: painel, logs de auditoria e proteção de contas de administração", async () => {
   const adm = await adminLogado(), d = (await adm.get("/api/admin/dashboard")).dados;
   assert.ok(d.usuarios > 0 && Array.isArray(d.porSorteio));
-  assert.ok((await adm.get("/api/admin/logs")).dados.some(l => l.acao === "SORTEIO"));
+  await novoSorteio(adm);
+  assert.ok((await adm.get("/api/admin/logs")).dados.some(l => l.acao === "SORTEIO_CRIADO"));
   assert.equal((await adm.put("/api/admin/usuarios/1/status", { status: "SUSPENDED" })).status, 403); // não suspende SUPER_ADMIN
 });
 
@@ -445,13 +453,14 @@ test("sorteio com Pix pendente não pode ser realizado; preço não muda após v
   assert.equal((await adm.post("/api/admin/campanhas/" + s.id + "/entregar")).status, 400);
 });
 
-test("falha do Mercado Pago ao criar o Pix libera os números e não vaza detalhes", async () => {
+test("falha ambígua do Mercado Pago preserva reserva e não vaza detalhes", async () => {
   const adm = await adminLogado(), s = await pagoSorteio(adm), { c } = await novoUsuario();
   mpServer.close(); await new Promise(r => setTimeout(r, 50));
   const r = await pedir(c, s, [1]); await new Promise(r => mpServer.listen(MP_PORT, r));
   assert.equal(r.status, 502); assert.ok(!JSON.stringify(r.dados).includes("localhost") && !JSON.stringify(r.dados).includes(TOKEN));
-  assert.deepEqual((await estadoDe(c, s)).reservados, []);
-  assert.equal((await pedir(c, s, [1])).status, 200);
+  assert.deepEqual((await estadoDe(c, s)).reservados, [1]);
+  assert.equal((await pedir(c, s, [1])).status, 409);
+  assert.equal(dbLer("SELECT mp_creation_uncertain FROM pedidos WHERE campaign_id=?",s.id)[0].mp_creation_uncertain,1);
 });
 
 
@@ -543,13 +552,15 @@ test("admin não consegue reduzir as vagas abaixo de números vendidos OU reserv
 test("usuário suspenso perde a sessão na hora e não consegue entrar", async () => {
   const adm = await adminLogado(), { c, email } = await novoUsuario();
   assert.equal((await adm.put("/api/admin/usuarios/" + idDe(email) + "/status", { status: "SUSPENDED" })).status, 200);
-  assert.equal((await c.get("/api/conta")).status, 401); assert.equal((await cliente().post("/api/login", { email, senha: "Senha1234" })).status, 403);
+  assert.equal((await c.get("/api/conta")).status, 401); assert.equal((await cliente().post("/api/login", { email, senha: "Senha1234" })).status, 401);
 });
 
 test("hierarquia: ADMIN comum não promove ninguém, não mexe em outro ADMIN nem no SUPER_ADMIN", async () => {
   const sup = await adminLogado(), a = await novoUsuario(), b = await novoUsuario(), idA = idDe(a.email), idB = idDe(b.email), idSup = idDe("admin@teste.com");
   assert.equal((await sup.put("/api/admin/usuarios/" + idA + "/papel", { role: "ADMIN" })).status, 200);
-  assert.equal((await a.c.get("/api/admin/dashboard")).status, 200);                               // o papel vale na próxima requisição
+  assert.equal((await a.c.get("/api/admin/dashboard")).status, 401); // mudança de papel revoga sessões
+  assert.equal((await a.c.post("/api/login",{email:a.email,senha:"Senha1234"})).status,200);
+  assert.equal((await a.c.get("/api/admin/dashboard")).status,200);
   assert.equal((await a.c.put("/api/admin/usuarios/" + idB + "/papel", { role: "ADMIN" })).status, 403);
   assert.equal((await a.c.put("/api/admin/usuarios/" + idSup + "/status", { status: "SUSPENDED" })).status, 403);
   assert.equal((await a.c.put("/api/admin/usuarios/" + idA + "/papel", { role: "SUPER_ADMIN" })).status, 403);
@@ -557,12 +568,14 @@ test("hierarquia: ADMIN comum não promove ninguém, não mexe em outro ADMIN ne
   assert.equal((await sup.put("/api/admin/usuarios/" + idB + "/papel", { role: "ADMIN" })).status, 200);
   assert.equal((await a.c.put("/api/admin/usuarios/" + idB + "/status", { status: "SUSPENDED" })).status, 403);     // ADMIN não suspende outro ADMIN
   assert.equal((await sup.put("/api/admin/usuarios/" + idA + "/papel", { role: "USER" })).status, 200);
-  assert.equal((await a.c.get("/api/admin/dashboard")).status, 403);                               // rebaixado: perde o acesso na hora
+  assert.equal((await a.c.get("/api/admin/dashboard")).status, 401); // rebaixado: sessão revogada
+  assert.equal((await a.c.post("/api/login",{email:a.email,senha:"Senha1234"})).status,200);
+  assert.equal((await a.c.get("/api/admin/dashboard")).status,403);
 });
 
 test("e-mail de redefinição usa fragmento (#) e e-mails de aviso são gerados (pagamento, troca de senha)", async () => {
   const adm = await adminLogado(), s = await pagoSorteio(adm), { c, email } = await novoUsuario();
-  await cliente().post("/api/esqueci-senha", { email }); assert.match(emailsDe(email).pop(), /\/#redefinir=[a-f0-9]{64}/);
+  liberarEnvio(email); await cliente().post("/api/esqueci-senha", { email }); assert.match(emailsDe(email).pop(), /\/#redefinir=[a-f0-9]{64}/);
   const p = (await pedir(c, s, [2])).dados; mpEstado(ultimoMp(), "pago"); await webhook(ultimoMp());
   assert.equal((await c.get("/api/pedidos/" + p.id)).dados.status, "PAID");
   await new Promise(r => setTimeout(r, 300)); assert.match(emailsDe(email).pop(), /Pagamento confirmado/);
@@ -584,4 +597,147 @@ test("migrações: restrições da migração 2 estão ativas no banco", () => {
   assert.equal(dbLer("SELECT COUNT(*) n FROM schema_migrations")[0].n >= 2, true);
   assert.throws(() => sqlSync("UPDATE users SET role='DONO' WHERE id=1"), /ck_users_role/);
   assert.throws(() => sqlSync("INSERT INTO tickets(campaign_id,user_id,n,criado_em) VALUES(1,1,0,'x')"), /ck_tickets_n|violates/);
+});
+
+/* Cadastro por código: invariantes de banco, concorrência e legado. */
+const codigoDe = email => tokenDe(email, /é: (\d{6})/);
+const errarCodigo = codigo => codigo === '000000' ? '000001' : '000000';
+const confirmar = (c, token, codigo) => c.post('/api/confirmar-cadastro', {token,codigo});
+const esperarReenvioNoBanco = email => dbLer('UPDATE auth_rate_limits SET proximo=0 WHERE chave=?', 'email:' + crypto.createHash('sha256').update(email).digest('hex'));
+
+test('pendente não cria users nem sessão; confirmação cria uma conta verificada, mas exige login', async()=>{
+  const p=await novoUsuario(false), codigo=codigoDe(p.email);
+  assert.equal(dbLer('SELECT id FROM users WHERE email=?',p.email).length,0);
+  assert.equal((await p.c.get('/api/estado')).dados.eu,null);
+  assert.equal((await p.c.post('/api/login',{email:p.email,senha:'Senha1234'})).status,401);
+  const row=dbLer('SELECT * FROM pending_registrations WHERE email=?',p.email)[0];
+  assert.notEqual(row.codigo_hash,codigo);assert.notEqual(row.codigo_hash,crypto.createHash('sha256').update(codigo).digest('hex'));
+  assert.ok(row.expira-Date.now()<=600000 && row.expira-Date.now()>580000);
+  assert.equal((await confirmar(p.c,p.token,codigo)).status,200);
+  assert.equal(dbLer('SELECT email_verificado FROM users WHERE email=?',p.email)[0].email_verificado,1);
+  assert.equal(dbLer('SELECT * FROM pending_registrations WHERE email=?',p.email).length,0);
+  assert.equal((await p.c.get('/api/conta')).status,401);
+  assert.equal((await confirmar(p.c,p.token,codigo)).status,400);
+  assert.equal((await p.c.post('/api/login',{email:p.email,senha:'Senha1234'})).status,200);
+});
+
+test('cinco erros são persistidos; reenvio não zera tentativas; paralelismo não burla limite',async()=>{
+  const p=await novoUsuario(false), codigo=codigoDe(p.email);
+  const rs=await Promise.all(Array.from({length:12},()=>confirmar(p.c,p.token,errarCodigo(codigo))));
+  assert.ok(rs.every(r=>r.status===400));
+  assert.equal(dbLer('SELECT tentativas FROM pending_registrations WHERE email=?',p.email)[0].tentativas,5);
+  assert.equal((await confirmar(p.c,p.token,codigo)).status,400);
+  esperarReenvioNoBanco(p.email);
+  assert.equal((await p.c.post('/api/reenviar-verificacao',{token:p.token})).status,400);
+  assert.equal(dbLer('SELECT id FROM users WHERE email=?',p.email).length,0);
+});
+
+test('código expirado é recusado; reenvio invalida anterior e mantém tentativas',async()=>{
+  const p=await novoUsuario(false), antigo=codigoDe(p.email);
+  assert.equal((await confirmar(p.c,p.token,errarCodigo(antigo))).status,400);
+  assert.equal((await p.c.post('/api/reenviar-verificacao',{token:p.token})).status,429);
+  dbLer('UPDATE pending_registrations SET expira=0 WHERE email=?',p.email);
+  assert.equal((await confirmar(p.c,p.token,antigo)).status,400);
+  esperarReenvioNoBanco(p.email);
+  assert.equal((await p.c.post('/api/reenviar-verificacao',{token:p.token})).status,200);
+  const novo=codigoDe(p.email);assert.notEqual(novo,antigo);
+  assert.equal((await confirmar(p.c,p.token,antigo)).status,400);
+  assert.equal(dbLer('SELECT tentativas FROM pending_registrations WHERE email=?',p.email)[0].tentativas,2);
+  assert.equal((await confirmar(p.c,p.token,novo)).status,200);
+});
+
+test('cinco mensagens por hora persistem mesmo em novas solicitações; reenvios concorrentes enviam uma',async()=>{
+  const p=await novoUsuario(false);
+  esperarReenvioNoBanco(p.email);
+  const rs=await Promise.all(Array.from({length:6},()=>p.c.post('/api/reenviar-verificacao',{token:p.token})));
+  assert.equal(rs.filter(r=>r.status===200).length,1);assert.equal(rs.filter(r=>r.status===429).length,5);
+  for(let i=0;i<3;i++){esperarReenvioNoBanco(p.email);assert.equal((await p.c.post('/api/reenviar-verificacao',{token:p.token})).status,200);}
+  esperarReenvioNoBanco(p.email);
+  assert.equal((await p.c.post('/api/reenviar-verificacao',{token:p.token})).status,429);
+  assert.equal((await p.c.post('/api/registro',{nome:'Outro Nome',email:p.email,senha:'OutraSenha123',maior18:true,consentimento:true})).status,429);
+});
+
+test('duas solicitações não trocam senhas; confirmação concorrente cria só um usuário',async()=>{
+  const p=await novoUsuario(false), codigo1=codigoDe(p.email);esperarReenvioNoBanco(p.email);
+  const c2=cliente(), r=await c2.post('/api/registro',{nome:'Outra Pessoa',email:p.email,senha:'OutraSenha123',maior18:true,consentimento:true}), codigo2=codigoDe(p.email);
+  assert.equal(r.status,200);
+  // Código da primeira solicitação nunca deve validar a segunda (mesmo se RNG repetir, token continua vinculado).
+  assert.equal((await confirmar(p.c,p.token,codigo1)).status,200);
+  assert.equal((await confirmar(c2,r.dados.token,codigo2)).status,400);
+  assert.equal((await p.c.post('/api/login',{email:p.email,senha:'Senha1234'})).status,200);
+  assert.equal((await c2.post('/api/login',{email:p.email,senha:'OutraSenha123'})).status,401);
+  const q=await novoUsuario(false), cod=codigoDe(q.email);
+  const rs=await Promise.all(Array.from({length:8},()=>confirmar(q.c,q.token,cod)));
+  assert.equal(rs.filter(x=>x.status===200).length,1);
+  assert.equal(dbLer('SELECT id FROM users WHERE email=?',q.email).length,1);
+});
+
+test('endereço ativo recebe resposta genérica; reenvio não revela existência e não troca conta',async()=>{
+  const p=await novoUsuario(), anterior=dbLer('SELECT id,hash,nome FROM users WHERE email=?',p.email)[0];esperarReenvioNoBanco(p.email);
+  const r=await cliente().post('/api/registro',{nome:'Tentativa Troca',email:p.email.toUpperCase(),senha:'Invadindo123',maior18:true,consentimento:true});
+  assert.equal(r.status,200);assert.equal(r.dados.pendente,true);assert.ok(r.dados.token);
+  assert.equal((await confirmar(cliente(),r.dados.token,'123456')).status,400);
+  esperarReenvioNoBanco(p.email);assert.equal((await cliente().post('/api/reenviar-verificacao',{token:r.dados.token})).status,200);
+  assert.deepEqual(dbLer('SELECT id,hash,nome FROM users WHERE email=?',p.email)[0],anterior);
+});
+
+test('conta antiga não verificada perde acesso; confirma com senha + código preservando ID e papel',async()=>{
+  const p=await novoUsuario(), u=dbLer('SELECT id,hash FROM users WHERE email=?',p.email)[0];
+  dbLer("UPDATE users SET email_verificado=0,role='ADMIN' WHERE id=?",u.id);
+  assert.equal((await p.c.get('/api/conta')).status,401);assert.equal((await p.c.get('/api/admin/dashboard')).status,401);
+  assert.equal((await cliente().post('/api/login',{email:p.email,senha:'errada123'})).status,401);
+  esperarReenvioNoBanco(p.email);
+  const c=cliente(), r=await c.post('/api/login',{email:p.email,senha:'Senha1234'});
+  assert.equal(r.dados.pendente,true);assert.equal((await c.get('/api/conta')).status,401);
+  assert.equal((await confirmar(c,r.dados.token,codigoDe(p.email))).status,200);
+  const depois=dbLer('SELECT id,hash,role,email_verificado FROM users WHERE email=?',p.email)[0];
+  assert.equal(depois.id,u.id);assert.equal(depois.hash,u.hash);assert.equal(depois.role,'ADMIN');assert.equal(depois.email_verificado,1);
+  assert.equal((await c.post('/api/login',{email:p.email,senha:'Senha1234'})).status,200);assert.equal((await c.get('/api/admin/dashboard')).status,200);
+});
+
+test('falha no envio retorna 503, persiste código desativado e não cria usuário',async()=>{
+  const arquivo=path.join(DIR,'emails.log'), backup=arquivo+'.guardado';
+  fs.renameSync(arquivo,backup);fs.mkdirSync(arquivo);
+  const email='falha-envio@teste.com';
+  try {
+    const c=cliente(), r=await c.post('/api/registro',{nome:'Falha Envio',email,senha:'Senha1234',maior18:true,consentimento:true});
+    assert.equal(r.status,503);assert.equal((await c.get('/api/conta')).status,401);
+    assert.equal(dbLer('SELECT id FROM users WHERE email=?',email).length,0);
+    assert.equal(dbLer('SELECT enviado FROM pending_registrations WHERE email=?',email)[0].enviado,0);
+  } finally {fs.rmdirSync(arquivo);fs.renameSync(backup,arquivo);}
+});
+
+test('código de envio desativado não confirma, mesmo correto; corrigir e-mail invalida solicitação',async()=>{
+  const p=await novoUsuario(false), codigo=codigoDe(p.email);
+  dbLer('UPDATE pending_registrations SET enviado=0 WHERE email=?',p.email);
+  assert.equal((await confirmar(p.c,p.token,codigo)).status,400);
+  assert.equal((await p.c.post('/api/cancelar-cadastro',{token:p.token})).status,200);
+  assert.equal(dbLer('SELECT * FROM pending_registrations WHERE email=?',p.email).length,0);
+  assert.equal((await confirmar(p.c,p.token,codigo)).status,400);
+});
+
+test('solicitação vencida não confirma e limpeza remove dados temporários',async()=>{
+  const p=await novoUsuario(false), codigo=codigoDe(p.email);
+  dbLer('UPDATE pending_registrations SET cadastro_expira=0 WHERE email=?',p.email);
+  assert.equal((await confirmar(p.c,p.token,codigo)).status,400);
+  const r=spawnSync('node',['-e',"require('./src/registration').limpar().then(()=>require('./src/db').fechar()).catch(e=>{console.error(e.message);process.exit(1)})"],{cwd:path.join(__dirname,'..'),env,encoding:'utf8'});
+  assert.equal(r.status,0,r.stderr);assert.equal(dbLer('SELECT * FROM pending_registrations WHERE email=?',p.email).length,0);
+});
+
+test('redefinir senha antiga não confirma e-mail nem abre sessão',async()=>{
+  const p=await novoUsuario();dbLer('UPDATE users SET email_verificado=0 WHERE email=?',p.email);esperarReenvioNoBanco(p.email);
+  await cliente().post('/api/esqueci-senha',{email:p.email});const token=tokenDe(p.email,/redefinir=([a-f0-9]+)/);
+  const c=cliente();assert.equal((await c.post('/api/redefinir-senha',{token,senha:'NovaSenha123'})).status,200);
+  assert.equal((await c.get('/api/conta')).status,401);assert.equal(dbLer('SELECT email_verificado FROM users WHERE email=?',p.email)[0].email_verificado,0);
+});
+
+
+test('recuperação de senha também libera o limitador persistente de login',async()=>{
+  const p=await novoUsuario();
+  for(let i=0;i<5;i++)await cliente().post('/api/login',{email:p.email,senha:'Errada123'});
+  assert.equal((await cliente().post('/api/login',{email:p.email,senha:'Senha1234'})).status,429);
+  esperarReenvioNoBanco(p.email);await cliente().post('/api/esqueci-senha',{email:p.email});
+  const token=tokenDe(p.email,/redefinir=([a-f0-9]+)/);
+  assert.equal((await cliente().post('/api/redefinir-senha',{token,senha:'NovaSenha123'})).status,200);
+  assert.equal((await cliente().post('/api/login',{email:p.email,senha:'NovaSenha123'})).status,200);
 });

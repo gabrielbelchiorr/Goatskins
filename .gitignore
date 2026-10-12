@@ -6,3 +6,8 @@ node_modules/
 *.dump
 *.log
 .DS_Store
+
+# Banco de dados local e artefatos privados
+*.db
+*.sqlite
+*.sqlite3
