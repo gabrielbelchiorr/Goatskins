@@ -1,7 +1,7 @@
 /* GOATSKINS – servidor HTTP (Node.js puro, sem dependências).
    Rodar:  node --no-warnings server.js
    Criar o primeiro SUPER_ADMIN:  node --no-warnings server.js criar-admin email@exemplo.com SuaSenha123 "Seu Nome" */
-const http = require("node:http"), fs = require("node:fs"), path = require("node:path");
+const http = require("node:http"), fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
 const cfg = require("./src/config"), { db, iniciar, fechar, agora, audit, ping, tx } = require("./src/db");
 const { Erro, ipDe, limite } = require("./src/http");
 const auth = require("./src/auth");
@@ -46,13 +46,20 @@ async function despachar(req, res, rota, body) {
 }
 
 const TIPOS = { ".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "text/javascript", ".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".ico": "image/x-icon" };
-// Lista explícita: um backup, relatório, arquivo de configuração ou código copiado
-// por engano para public/ nunca se torna um download público.
-const ARQUIVOS_PUBLICOS = new Set([
-  "index.html", "termos.html", "privacidade.html", "cookies.html",
-  "style.css", "script.js", "page-loader.js", "roulette.js", "roulette.css",
-  "logo.jpg", "logo-marca.webp", "cenario.webp", "mascote.webp"
+// Apenas arquivos explicitamente usados pelo frontend podem ser servidos.
+// Uma extensao permitida (como .js, .html) nao deve tornar um backup publico.
+const PUBLICOS = new Set([
+  'index.html','style.css','script.js','logo.jpg','logo-marca.webp','mascote.webp','cenario.webp',
+  'privacidade.html','termos.html','cookies.html','page-loader.js','roulette.js','roulette.css'
 ]);
+function segredoOrigemValido(req) {
+  if (!cfg.ORIGIN_VERIFY_SECRET) return true;
+  const fornecido = req.headers['x-goatskins-origin'];
+  if (typeof fornecido !== 'string') return false;
+  const segredo = Buffer.from(cfg.ORIGIN_VERIFY_SECRET, 'utf8');
+  const recebido = Buffer.from(fornecido, 'utf8');
+  return recebido.length === segredo.length && crypto.timingSafeEqual(recebido, segredo);
+}
 function cabecalhos(res) {
   res.setHeader("X-Content-Type-Options", "nosniff"); res.setHeader("X-Frame-Options", "DENY"); res.setHeader("Referrer-Policy", "same-origin");
   res.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'");
@@ -66,16 +73,15 @@ const server = http.createServer((req, res) => {
   req.on("error", () => { /* cliente caiu no meio do envio: nada a fazer */ });
   let url; try { url = new URL(req.url, "http://localhost"); if (url.origin !== "http://localhost") throw 0; } catch (e) { res.writeHead(400); return res.end(); } // "GET //" derrubava o servidor
   const rota = url.pathname; req.urlObj = url;
-  try { security.origem(req, rota); } catch (e) {
-    res.setHeader('Connection','close');
-    return json(res, e.code || 403, {erro:'Origem não autorizada.'});
-  }
   if (rota === "/healthz" && (req.method === "GET" || req.method === "HEAD")) { // health check do Render/UptimeRobot: leve e confere o banco
     return ping().then(() => { res.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" }); res.end(req.method === "HEAD" ? undefined : "ok"); },
       e => { console.error("[healthz] banco indisponível:", e.message); res.writeHead(503, { "Cache-Control": "no-store" }); res.end(); });
   }
-  const canonico = security.canonico(req, rota);
-  if (canonico) { res.writeHead(308, {Location:canonico, 'Cache-Control':'no-store'}); return res.end(); }
+  // Esta verificacao e opcional e exige um proxy que remova o header enviado
+  // pelo cliente e injete seu proprio segredo. Sem esse proxy, nao habilitar no Render.
+  if (!segredoOrigemValido(req)) { res.writeHead(403, { "Cache-Control": "no-store" }); return res.end(); }
+  const destinoCanonico = security.redirecionamentoWww(req, url);
+  if (destinoCanonico) { res.writeHead(308, { Location: destinoCanonico, 'Cache-Control': 'no-store' }); return res.end(); }
   if (rota.startsWith("/api/")) {
     try { limite("api:" + ipDe(req), 300, 60000); } catch (e) { return json(res, e.code, { erro: e.message }); }
     const partes = []; let tam = 0, estourou = false;
@@ -84,8 +90,12 @@ const server = http.createServer((req, res) => {
     req.on("end", async () => {
       if (estourou) return;
       try {
-        let body = {}; if (partes.length) { try { body = JSON.parse(Buffer.concat(partes).toString()); } catch (e) { throw new Erro("JSON inválido."); } }
-        if (!body || typeof body !== "object" || Array.isArray(body)) throw new Erro("O corpo da requisição precisa ser um objeto JSON.");
+        let body = {};
+        if (partes.length) {
+          try { body = JSON.parse(Buffer.concat(partes).toString()); }
+          catch (e) { throw new Erro("JSON inválido."); }
+          if (!body || typeof body !== "object" || Array.isArray(body)) throw new Erro("JSON deve ser um objeto.");
+        }
         const r = await despachar(req, res, rota, body);
         if (r && r.raw) { res.writeHead(200, { "Content-Type": r.tipo, "Cache-Control": "public, max-age=86400" }); return res.end(r.raw); }
         if (r && r.redirect) { res.writeHead(302, { Location: r.redirect }); return res.end(); }
@@ -101,15 +111,20 @@ const server = http.createServer((req, res) => {
   const PUB = path.join(cfg.raiz, "public");
   let f; try { f = path.join(PUB, decodeURIComponent(rota === "/" ? "/index.html" : rota)); } catch (e) { res.writeHead(400); return res.end(); }
   if (!f.startsWith(PUB + path.sep) || path.relative(PUB, f).split(path.sep).some(p => p.startsWith("."))) { res.writeHead(403); return res.end(); } // impede ../ e arquivos ocultos (.env, .git)
-  if (!ARQUIVOS_PUBLICOS.has(path.relative(PUB, f))) { res.writeHead(404); return res.end("Não encontrado"); }
-  // Também impede que um link simbólico com nome autorizado exponha um arquivo externo.
-  fs.realpath(f, (err, real) => {
+  // Somente a lista explicita de recursos publicos: bloquear arquivos
+  // confidenciais mesmo com extensoes como .js e .html.
+  const nome = path.relative(PUB, f).replace(/\\/g, '/');
+  if (!PUBLICOS.has(nome)) { res.writeHead(404, { "Cache-Control": "no-store" }); return res.end(); }
+  // Um symlink com nome valido pode apontar para fora da pasta publica.
+  fs.lstat(f, (err, st) => {
     if (err) { res.writeHead(404); return res.end("Não encontrado"); }
-    if (!real.startsWith(PUB + path.sep)) { res.writeHead(403); return res.end(); }
-    fs.readFile(real, (err, data) => {
+    if (st.isSymbolicLink()) { res.writeHead(403); return res.end(); }
+    if (!st.isFile()) { res.writeHead(404); return res.end(); }
+    fs.readFile(f, (err, data) => {
       if (err) { res.writeHead(404); return res.end("Não encontrado"); }
-      const ext = path.extname(f);
-      res.writeHead(200, { "Content-Type": TIPOS[ext], "Cache-Control": [".jpg", ".webp", ".png", ".ico"].includes(ext) ? "public, max-age=86400" : "no-cache" }); res.end(req.method === "HEAD" ? undefined : data);
+      const ext = path.extname(f).toLowerCase();
+      res.writeHead(200, { "Content-Type": TIPOS[ext], "Cache-Control": ext === ".jpg" ? "public, max-age=86400" : "no-cache" });
+      res.end(req.method === "HEAD" ? undefined : data);
     });
   });
 });

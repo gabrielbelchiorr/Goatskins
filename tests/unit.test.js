@@ -53,9 +53,9 @@ test("config de produção: recusa configurações inseguras e aceita uma corret
   for (const [ruim, esperado] of [[{ APP_URL: "http://x.com" }, /https/], [{ DATABASE_URL: "" }, /DATABASE_URL/], [{ EMAIL_DRIVER: "console" }, /EMAIL_DRIVER/],
     [{ MP_ACCESS_TOKEN: "t" }, /MP_WEBHOOK_SECRET/], [{ EMAIL_API_KEY: "" }, /EMAIL_API_KEY/], [{ TESTE: "1" }, /TESTE/], [{ MP_TESTE_APRO: "1" }, /MP_TESTE_APRO/],
     [{TURNSTILE_SITE_KEY:'1x00000000000000000000AA'}, /Chave de teste/],
-    [{TURNSTILE_SECRET_KEY:'1x0000000000000000000000000000000AA'}, /Secret de teste/],
-    [{TURNSTILE_SECRET_KEY:'2x0000000000000000000000000000000AA'}, /Secret de teste/],
-    [{TURNSTILE_SECRET_KEY:'3x0000000000000000000000000000000AA'}, /Secret de teste/],
+    [{TURNSTILE_SECRET_KEY:'1x0000000000000000000000000000000AA'}, /Chave de teste Turnstile/],
+    [{TURNSTILE_SECRET_KEY:'2x0000000000000000000000000000000AA'}, /Chave de teste Turnstile/],
+    [{TURNSTILE_SECRET_KEY:'3x0000000000000000000000000000000AA'}, /Chave de teste Turnstile/],
     [{ORIGIN_VERIFY_SECRET:'curto'}, /ORIGIN_VERIFY_SECRET/]]) {
     const r = config({ ...bom, ...ruim }); assert.equal(r.status, 1, JSON.stringify(ruim)); assert.match(r.stderr, esperado);
   }

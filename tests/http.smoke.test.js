@@ -180,8 +180,13 @@ test('produção manda documentos do alias para a origem principal e preserva pa
     TURNSTILE_SITE_KEY:'site-fixture',TURNSTILE_SECRET_KEY:'secret-fixture',TRUST_PROXY:'1'});
   const base=outro.base;
   try {
-    const r=await fetch(base+'/?sorteio=7',{redirect:'manual',headers:{host:'www.goatskins.com.br'}});
-    assert.equal(r.status,308);assert.equal(r.headers.get('location'),'https://goatskins.com.br/?sorteio=7');
+    // Node fetch pode ignorar 'Host' customizado; HTTP nativo testa o hostname recebido pelo servidor.
+    const r=await new Promise((resolve,reject)=>{
+      const req=require('node:http').get({hostname:'127.0.0.1',port:outro.port,path:'/?sorteio=7',headers:{Host:'www.goatskins.com.br'}},res=>{
+        res.resume();res.on('end',()=>resolve(res));
+      });req.on('error',reject);
+    });
+    assert.equal(r.statusCode,308);assert.equal(r.headers.location,'https://goatskins.com.br/?sorteio=7');
     const primary=await new Promise((resolve,reject)=>{
       const req=require('node:http').get({hostname:'127.0.0.1',port:outro.port,path:'/',headers:{Host:'goatskins.com.br'}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});
       req.on('error',reject);
