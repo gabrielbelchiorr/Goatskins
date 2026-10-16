@@ -143,7 +143,7 @@ function render() {
   const ativos = pend.filter(c => c.status === "OPEN" && !cheio(c));
   preencher("gridAtivos", "noAtivos", ativos);
   const hs = $("heroStats"); hs.innerHTML = "";
-  [[ativos.length, "sorteios ativos"], [S.c.reduce((a, c) => a + c.total, 0), "números escolhidos"], [S.c.filter(c => c.ganhador).length, "sorteios realizados"]]
+  [[ativos.length, "sorteios ativos"], [S.c.filter(c => c.ganhador).length, "sorteios realizados"]]
     .forEach(([n, t]) => { const d = h("div", "hchip"); d.append(h("b", null, String(n)), h("span", null, t)); hs.append(d); });
   preencher("gridEsgotados", "noEsgotados", pend.filter(c => c.status !== "OPEN" || cheio(c)));
 
