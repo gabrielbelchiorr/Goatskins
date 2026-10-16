@@ -134,7 +134,6 @@ body.menu-closed .side{margin-left:calc(var(--menu) * -1);visibility:hidden;tran
 .hero-emblem{display:block;width:56px;height:60px;object-fit:contain;flex:none;filter:drop-shadow(0 4px 9px rgba(0,0,0,.25))}
 .hero-txt{min-width:0}
 .hero h1{font-size:clamp(1.45rem,2.6vw,2.1rem);letter-spacing:.9px;line-height:1.12;font-weight:850;text-transform:uppercase;color:#f5eee0}
-.hero h1::first-letter{color:var(--gold)}
 .tag{margin:4px 0 0;color:#ced6e1;font-size:.9rem;line-height:1.4}
 .hero-actions{display:flex;align-items:center;justify-content:flex-end;gap:16px;flex-wrap:wrap;margin-left:auto}
 .cta{flex:none}
@@ -195,9 +194,6 @@ h2.gap{margin-top:48px}
 .btn.alt{color:#dee6f2;background:linear-gradient(155deg,rgba(49,68,91,.48),rgba(18,35,58,.75));border:1px solid rgba(200,220,244,.18);box-shadow:none}
 .btn.alt:hover:not(:disabled){background:rgba(64,84,111,.72);filter:none}
 .btn.on{background:linear-gradient(125deg,var(--copper),var(--gold));color:#131b27}
-.buy-btn::before{content:"▣";font-size:1rem}
-.sale-close-btn::before{content:"⚑";font-size:1rem}
-.sale-edit-btn::before{content:"✎";font-size:1rem}
 .burger:focus-visible,.btn:focus-visible,.nv:focus-visible,.num:focus-visible,input:focus-visible,.x:focus-visible{outline:3px solid var(--gold);outline-offset:3px}
 
 /* Mascote: pequeno, discreto, atrás dos cartões; sem consumir largura do conteúdo. */
@@ -223,7 +219,8 @@ h2.gap{margin-top:48px}
 
 /* Janela / Pix / formulários / Admin */
 .overlay{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:15px;background:rgba(1,7,17,.78);backdrop-filter:blur(7px)}
-.dialog{position:relative;width:min(100%,440px);max-height:92vh;overflow-y:auto;overflow-x:hidden;padding:25px;border:1px solid rgba(227,213,175,.23);border-radius:18px;
+body:has(.overlay:not([hidden])){overflow:hidden}
+.dialog{position:relative;width:min(100%,440px);max-height:92vh;max-height:calc(100dvh - 30px);overflow-y:auto;overflow-x:hidden;padding:25px;border:1px solid rgba(227,213,175,.23);border-radius:18px;
   background:linear-gradient(145deg,#182d49,#0d1b30);box-shadow:0 25px 70px rgba(0,0,0,.65)}
 .dialog.wide{width:min(100%,745px)}
 .dialog h3{margin:0 35px 14px 0;font-size:1.32rem;font-weight:800}
@@ -244,6 +241,8 @@ h2.gap{margin-top:48px}
 .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}.tabs .btn{padding:8px 13px;margin:0;font-size:.82rem}
 .arow{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:11px 0;border-top:1px solid var(--line);font-size:.9rem}
 .arow .btn{margin:0;padding:6px 10px;font-size:.75rem}
+.table-scroll{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
+.table-scroll .tabela{min-width:600px}
 .tabela{width:100%;border-collapse:collapse;font-size:.8rem;margin:8px 0}.tabela th{text-align:left;color:var(--gold);padding:8px}.tabela td{padding:8px;border-top:1px solid var(--line);word-break:break-word}
 .stat{display:inline-block;min-width:106px;margin:0 8px 8px 0;padding:10px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.05);font-size:.8rem}
 .stat b{display:block;color:var(--gold);font-size:1.4rem}
@@ -310,6 +309,7 @@ h2.gap{margin-top:48px}
   .info{padding:15px}
   .prize{min-height:190px;max-height:260px}
   .hrow{flex-wrap:wrap}
+  .hrow>div{min-width:0;overflow-wrap:anywhere}
   .steps{grid-template-columns:1fr}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;scroll-behavior:auto!important}}
@@ -349,7 +349,7 @@ button.prize:focus-visible{outline:3px solid var(--gold);outline-offset:-3px}
 .sale-grid .num.res{background:#473c27;border:1px dashed #b7995c;color:#e0c186;opacity:.75}
 .sale-grid .num:disabled{cursor:not-allowed}
 .sale-checkout{position:sticky;bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:15px;padding:15px 20px;border:1px solid rgba(235,199,108,.32);border-radius:16px;background:linear-gradient(130deg,#142b47,#0a1a32);box-shadow:0 8px 35px rgba(0,0,0,.55);z-index:10}
-.sale-checkout-total{display:flex;flex-direction:column;gap:1px}
+.sale-checkout-total{min-width:0;overflow-wrap:anywhere;display:flex;flex-direction:column;gap:1px}
 .sale-checkout-total small{color:#c5d2e2;font-size:.66rem;font-weight:900;letter-spacing:.08em}
 .sale-checkout-total strong{color:var(--gold);font-size:1.55rem;font-weight:950}
 .sale-pay-btn{padding:13px 23px;min-width:225px;letter-spacing:.035em}
@@ -357,13 +357,14 @@ button.prize:focus-visible{outline:3px solid var(--gold);outline-offset:-3px}
 /* Faixa persistente ao fechar Pix / navegar: referência visual, identidade própria */
 .pending-pix{position:fixed;z-index:60;bottom:0;left:0;right:0;background:linear-gradient(110deg,#09172c,#162b47);border-top:1px solid rgba(228,180,91,.38);box-shadow:0 -15px 35px rgba(0,0,0,.48);padding:12px 18px}
 .pending-pix-inner{max-width:1080px;margin:auto;display:flex;align-items:center;justify-content:space-between;gap:18px}
-.pending-pix-info{display:flex;align-items:center;gap:12px;min-width:0}
+.pending-pix-info{flex:1;display:flex;align-items:center;gap:12px;min-width:0}
 .pending-pix-icon{font-size:1.65rem;color:var(--gold);width:45px;height:45px;display:grid;place-items:center;border-radius:12px;background:rgba(228,180,91,.09)}
 .pending-pix-info>div{display:flex;flex-direction:column;min-width:0}
 .pending-pix-info small{color:var(--gold);letter-spacing:.09em;font-size:.68rem;font-weight:900}
 .pending-pix-info strong{font-size:clamp(.88rem,1.5vw,1.08rem);font-weight:900;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pending-pix .btn{flex:none;min-height:43px;font-size:.78rem}
-body:has(.pending-pix:not([hidden])){padding-bottom:75px}
+body:has(.pending-pix:not([hidden])){padding-bottom:90px}
+body:has(.pending-pix:not([hidden])) .sale-checkout{bottom:90px}
 
 /* Checkout Pix: painel central inspirado na referência, sem copiar identidade externa */
 .dialog.pix-dialog{width:min(100%,440px);padding:0;border:1px solid rgba(231,195,105,.34);border-radius:28px;background:linear-gradient(145deg,#102642,#07182f)}
@@ -377,7 +378,7 @@ body:has(.pending-pix:not([hidden])){padding-bottom:75px}
 .pix-qr{width:min(100%,262px);height:auto;aspect-ratio:1;object-fit:contain;padding:13px;border-radius:20px;background:#fffbe9;box-shadow:0 14px 28px rgba(0,0,0,.22);image-rendering:pixelated;margin:3px auto 6px}
 .pix-detail{width:100%;border:1px solid rgba(209,231,255,.14);border-radius:14px;padding:16px;text-align:left;background:rgba(255,255,255,.055)}
 .pix-detail small{display:block;color:var(--gold);font-size:.7rem;font-weight:900;letter-spacing:.09em}
-.pix-detail strong{display:block;margin-top:5px;color:#fff;font-size:1.05rem}
+.pix-detail strong{overflow-wrap:anywhere;display:block;margin-top:5px;color:#fff;font-size:1.05rem}
 .pix-detail p{color:#c8d7e8;font-size:.87rem;margin:4px 0 7px}
 .pix-total{font-size:1.35rem;color:var(--gold);font-weight:950}
 .pix-copy{width:100%;margin:0!important;min-height:52px;font-size:.87rem;letter-spacing:.02em}
@@ -395,7 +396,8 @@ body:has(.pending-pix:not([hidden])){padding-bottom:75px}
   .sale-pay-btn{min-width:0;padding:12px 13px;font-size:.75rem}
   .pending-pix{padding:10px 12px}.pending-pix-icon{display:none}.pending-pix-info strong{font-size:.85rem}
   .pending-pix-info small{font-size:.6rem}.pending-pix .btn{min-height:40px;padding:9px 10px;font-size:.7rem}
-  body:has(.pending-pix:not([hidden])){padding-bottom:82px}
+  body:has(.pending-pix:not([hidden])){padding-bottom:100px}
+  body:has(.pending-pix:not([hidden])) .sale-checkout{bottom:100px}
 }
 /* Somente a etapa de confirmação; preserva os layouts existentes. */
 .confirmacao-cadastro { display: grid; gap: 12px; }
@@ -406,4 +408,9 @@ body:has(.pending-pix:not([hidden])){padding-bottom:75px}
 /* Small security prompts; existing page layout remains unchanged. */
 dialog {color:var(--gold,#e8dfd1);background:#102440;border:1px solid #b8651f;border-radius:16px;padding:24px;max-width:min(440px,90vw);max-height:85vh;overflow:auto;}
 dialog::backdrop{background:rgba(0,0,0,.7)}
+.turnstile-dialog{width:min(380px,90vw)}
+dialog.security-dialog{width:min(440px,90vw);color:var(--cream)}
+.security-dialog h3{margin:0 0 14px;font-size:1.32rem}
+.security-dialog label{display:block;margin:12px 0 5px;color:#dce3ec;font-size:.85rem}
+.security-dialog input{display:block;width:100%;min-width:0;padding:11px 12px;border:1px solid rgba(212,226,241,.32);border-radius:10px;background:#edf0f4;color:#0c1625;font:inherit}
 dialog code,dialog pre{overflow-wrap:anywhere;white-space:pre-wrap;user-select:all} dialog button{margin:8px 8px 0 0}

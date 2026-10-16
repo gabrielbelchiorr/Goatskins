@@ -163,6 +163,7 @@ const rotas = [
     await audit(ctx.user.id, "SENHA_ALTERADA", null, ctx.ip); await avisarSenha(ctx.user.id); return { ok: true };
   }, "user"],
   ["POST", /^\/api\/conta\/excluir$/, async ctx => { // LGPD: anonimiza a conta (os bilhetes ficam para manter a integridade dos sorteios)
+    await registration.consumirLimite("excluir-conta:" + ctx.user.id, 5, BLOQUEIO_MS);
     const u = await db.get("SELECT hash, role FROM users WHERE id=?", [ctx.user.id]);
     if (u.role !== "USER") throw new Erro("Contas de administração não podem ser excluídas por aqui.", 403);
     if (!(await confere(String(ctx.body.senha || ""), u.hash))) throw new Erro("Senha incorreta.", 401);
@@ -170,7 +171,9 @@ const rotas = [
     // pedido Pix em andamento ou reembolso a receber: sem e-mail não há como confirmar nem devolver o valor
     if ((await db.get("SELECT COUNT(*) n FROM pedidos WHERE user_id=? AND status IN ('PENDING','REFUND_NEEDED')", [ctx.user.id])).n)
       throw new Erro("Você tem pedido Pix aguardando pagamento ou reembolso. Conclua isso antes de excluir a conta (ou fale com o suporte).", 409);
-    await db.run("UPDATE users SET nome='Usuário removido', contato='removido-'||id::text, email=NULL, telefone=NULL, hash='', status='DELETED', atualizado_em=? WHERE id=?", [agora(), ctx.user.id]);
+    if (!(await db.run("UPDATE users SET nome='Usuário removido', contato='removido-'||id::text, email=NULL, telefone=NULL, hash='', status='DELETED', atualizado_em=? WHERE id=? AND hash=? AND role='USER' AND status='ACTIVE'", [agora(), ctx.user.id, u.hash])).changes) throw new Erro("Sua conta mudou. Entre novamente.", 401);
+    await db.run("DELETE FROM tokens_email WHERE user_id=?", [ctx.user.id]);
+    await db.run("DELETE FROM pending_registrations WHERE user_id=?", [ctx.user.id]);
     await db.run("DELETE FROM notifications WHERE user_id=?", [ctx.user.id]); await encerrarSessoes(ctx.user.id);
     });
     await audit(ctx.user.id, "CONTA_EXCLUIDA", null, ctx.ip);

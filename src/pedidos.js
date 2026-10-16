@@ -11,6 +11,12 @@ const { db, agora, tx, audit, notificar, liberar, liberarSeVencido } = require("
 const { Erro, inteiro, limite } = require("./http");
 
 const MAX_PENDENTES = 3;                                   // pedidos Pix abertos por pessoa (evita "segurar" números sem pagar)
+// Alert only: never release a possibly payable order merely because time passed.
+function precisaRevisao(p, now = Date.now()) {
+  if (p.status !== 'PENDING') return false;
+  return (Number(p.mp_creation_uncertain) === 1 && now - Date.parse(p.criado_em) >= 5 * 60000) ||
+    (Number(p.expira_em) > 0 && now - Number(p.expira_em) >= 15 * 60000);
+}
 const centavos = v => {
   const s = String(v); if (!/^\d{1,10}(?:\.\d{1,2})?$/.test(s)) return NaN;
   const [a,b = ''] = s.split('.'); return Number(a) * 100 + Number(b.padEnd(2,'0'));
@@ -266,7 +272,8 @@ const rotas = [
   ["GET", /^\/api\/admin\/pedidos$/, async () => {
     await liberarSeVencido();
     return { receita: (await db.get("SELECT COALESCE(SUM(total_centavos),0) n FROM pedidos WHERE status='PAID'")).n / 100,
-      pedidos: await db.all("SELECT p.public_id id, p.status, (p.total_centavos/100.0)::float8 total, p.numeros, p.criado_em, p.pago_em, p.mp_order_id, c.premio, u.nome, u.email FROM pedidos p JOIN campaigns c ON c.id=p.campaign_id JOIN users u ON u.id=p.user_id ORDER BY p.id DESC LIMIT 200") };
+      pedidos: (await db.all("SELECT p.public_id id, p.status, (p.total_centavos/100.0)::float8 total, p.numeros, p.criado_em, p.pago_em, p.mp_order_id, p.mp_creation_uncertain, p.expira_em, c.premio, u.nome, u.email FROM pedidos p JOIN campaigns c ON c.id=p.campaign_id JOIN users u ON u.id=p.user_id ORDER BY CASE WHEN p.status='PENDING' THEN 0 ELSE 1 END, CASE WHEN p.status='PENDING' THEN p.id END ASC, p.id DESC LIMIT 200"))
+        .map(p => ({ ...p, revisao_pagamento: precisaRevisao(p) })) };
   }, "admin"],
   ["POST", /^\/api\/admin\/pedidos\/([a-f0-9]{32})\/reembolsado$/, async ctx => { // o admin devolve o dinheiro no painel do Mercado Pago e marca aqui
     const r = await db.run("UPDATE pedidos SET status='REFUNDED', atualizado_em=? WHERE public_id=? AND status='REFUND_NEEDED'", [agora(), ctx.params[0]]);
@@ -274,4 +281,4 @@ const rotas = [
     await audit(ctx.user.id, "PEDIDO_REEMBOLSADO", ctx.params[0], ctx.ip); return { ok: true };
   }, "admin"]
 ];
-module.exports = { rotas, aplicar, interpretar, crc16, brcodeOk, finalizarVencidos };
+module.exports = { rotas, aplicar, interpretar, crc16, brcodeOk, finalizarVencidos, precisaRevisao };

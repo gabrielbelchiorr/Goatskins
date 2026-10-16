@@ -45,6 +45,17 @@ const carregar = Module._load;
 Module._load = function (req, ...r) { return req === "pg" ? fakePg : carregar.call(this, req, ...r); };
 
 const mp = require("../src/mercadopago"), ped = require("../src/pedidos"), mail = require("../src/mail");
+test('revisão operacional alerta criação incerta e expiração prolongada sem alterar pedidos', () => {
+  const now = Date.now(), p = { status: 'PENDING', mp_creation_uncertain: 1, criado_em: new Date(now-300000).toISOString(), expira_em: now+1000 };
+  const original = { ...p };
+  assert.equal(ped.precisaRevisao(p, now), true);
+  assert.deepEqual(p, original);
+  assert.equal(ped.precisaRevisao({ ...p, criado_em: new Date(now-299999).toISOString() }, now), false);
+  assert.equal(ped.precisaRevisao({ ...p, mp_creation_uncertain: 0, expira_em: now-900000 }, now), true);
+  assert.equal(ped.precisaRevisao({ ...p, mp_creation_uncertain: 0, expira_em: now-899999 }, now), false);
+  for (const status of ['PAID','REFUND_NEEDED','REFUNDED','CANCELED','EXPIRED','FAILED'])
+    assert.equal(ped.precisaRevisao({ ...p, status }, now), false);
+});
 mail.enviar = (...a) => { enviados.push(a); }; // não envia nada de verdade; pedidos.js chama mail.enviar no momento do uso
 const orderPaga = (extra = {}) => ({ id: ORD, external_reference: PUB, status: "processed", status_detail: "accredited", total_amount: "2.00", total_paid_amount: "2.00",
   transactions: { payments: [{ status: "processed", status_detail: "accredited", paid_amount: "2.00" }] }, ...extra });

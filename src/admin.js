@@ -18,23 +18,29 @@ const rotas = [
   }, "admin"],
   ["GET", /^\/api\/admin\/usuarios$/, () => db.all("SELECT id, nome, email, role, status, email_verificado, criado_em FROM users ORDER BY id DESC LIMIT 200"), "admin"],
   ["PUT", /^\/api\/admin\/usuarios\/(\d+)\/status$/, async ctx => {
-    const id = Number(ctx.params[0]), st = ctx.body.status, alvo = await db.get("SELECT role FROM users WHERE id=?", [id]);
-    if (!alvo) throw new Erro("Usuário não encontrado.", 404);
-    if (!["ACTIVE", "SUSPENDED"].includes(st)) throw new Erro("Status inválido.");
-    if (id === ctx.user.id || alvo.role === "SUPER_ADMIN") throw new Erro("Você não pode alterar esta conta.", 403);
-    if (alvo.role === "ADMIN" && ctx.user.role !== "SUPER_ADMIN") throw new Erro("Apenas o SUPER_ADMIN altera administradores.", 403);
-    await db.run("UPDATE users SET status=?, atualizado_em=? WHERE id=? AND status!='DELETED'", [st, agora(), id]);
-    if (st === "SUSPENDED") await db.run("DELETE FROM sessions WHERE user_id=?", [id]);
-    await audit(ctx.user.id, "USUARIO_STATUS", "usuário " + id + " -> " + st, ctx.ip); return { ok: true };
+    await tx(async () => {
+      const id = Number(ctx.params[0]), st = ctx.body.status, alvo = await db.get("SELECT role FROM users WHERE id=?", [id]);
+      if (!alvo) throw new Erro("Usuário não encontrado.", 404);
+      if (!["ACTIVE", "SUSPENDED"].includes(st)) throw new Erro("Status inválido.");
+      if (id === ctx.user.id || alvo.role === "SUPER_ADMIN") throw new Erro("Você não pode alterar esta conta.", 403);
+      if (alvo.role === "ADMIN" && ctx.user.role !== "SUPER_ADMIN") throw new Erro("Apenas o SUPER_ADMIN altera administradores.", 403);
+      await db.run("UPDATE users SET status=?, atualizado_em=? WHERE id=? AND status!='DELETED'", [st, agora(), id]);
+      if (st === "SUSPENDED") await db.run("DELETE FROM sessions WHERE user_id=?", [id]);
+      await audit(ctx.user.id, "USUARIO_STATUS", "usuário " + id + " -> " + st, ctx.ip);
+    });
+    return { ok: true };
   }, "admin"],
   ["PUT", /^\/api\/admin\/usuarios\/(\d+)\/papel$/, async ctx => { // somente SUPER_ADMIN promove/rebaixa
-    const id = Number(ctx.params[0]), papel = ctx.body.role, alvo = await db.get("SELECT role FROM users WHERE id=?", [id]);
-    if (!alvo) throw new Erro("Usuário não encontrado.", 404);
-    if (!["USER", "ADMIN"].includes(papel)) throw new Erro("Papel inválido.");
-    if (id === ctx.user.id || alvo.role === "SUPER_ADMIN") throw new Erro("Você não pode alterar esta conta.", 403);
-    await db.run("UPDATE users SET role=?, atualizado_em=? WHERE id=?", [papel, agora(), id]);
-    await db.run("DELETE FROM sessions WHERE user_id=?", [id]);
-    await audit(ctx.user.id, "USUARIO_PAPEL", "usuário " + id + " -> " + papel, ctx.ip); return { ok: true };
+    await tx(async () => {
+      const id = Number(ctx.params[0]), papel = ctx.body.role, alvo = await db.get("SELECT role FROM users WHERE id=?", [id]);
+      if (!alvo) throw new Erro("Usuário não encontrado.", 404);
+      if (!["USER", "ADMIN"].includes(papel)) throw new Erro("Papel inválido.");
+      if (id === ctx.user.id || alvo.role === "SUPER_ADMIN") throw new Erro("Você não pode alterar esta conta.", 403);
+      await db.run("UPDATE users SET role=?, atualizado_em=? WHERE id=?", [papel, agora(), id]);
+      await db.run("DELETE FROM sessions WHERE user_id=?", [id]);
+      await audit(ctx.user.id, "USUARIO_PAPEL", "usuário " + id + " -> " + papel, ctx.ip);
+    });
+    return { ok: true };
   }, "super"],
   ["GET", /^\/api\/admin\/logs$/, () => db.all("SELECT l.quando, l.acao, l.detalhe, l.ip, u.email FROM audit_logs l LEFT JOIN users u ON u.id=l.user_id ORDER BY l.id DESC LIMIT 150"), "admin"],
   ["GET", /^\/api\/admin\/campanhas\/(\d+)\/participantes$/, ctx =>

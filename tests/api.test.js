@@ -1,13 +1,12 @@
 /* Testes de API ponta a ponta contra um PostgreSQL REAL e DESCARTÁVEL:  TEST_DATABASE_URL=postgresql://.../goatskins_test npm run test:api
-   ATENÇÃO: o teste APAGA todas as tabelas desse banco. Por segurança ele se recusa a rodar se o nome do banco não contiver "test"
+   ATENÇÃO: o teste APAGA todas as tabelas desse banco. Só aceita PostgreSQL local chamado goatskins_test, sem parâmetros de conexão adicionais
    (assim um .env apontando para produção nunca é tocado). Sem TEST_DATABASE_URL os testes aparecem como "skipped". */
 const { test: _test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs"), os = require("node:os"), path = require("node:path"), crypto = require("node:crypto");
 
-const TEST_URL = process.env.TEST_DATABASE_URL || "", PODE = !!TEST_URL;
-if (PODE && !/test/i.test(decodeURIComponent(new URL(TEST_URL).pathname))) throw new Error('TEST_DATABASE_URL precisa apontar para um banco cujo nome contenha "test" (o teste apaga as tabelas dele).');
+const TEST_URL = require('../scripts/banco-teste').bancoTeste(process.env.TEST_DATABASE_URL), PODE = !!TEST_URL;
 const test = (nome, fn) => _test(nome, { timeout: 60000, skip: PODE ? false : "defina TEST_DATABASE_URL (banco PostgreSQL descartável)" }, fn);
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), "goat-")), PORT = 3300 + Math.floor(Math.random() * 500), BASE = "http://localhost:" + PORT;
 const MP_PORT = 4300 + Math.floor(Math.random() * 400), SEGREDO = "segredo-de-teste", TOKEN = "TOKEN-DE-TESTE-NAO-VAZAR";

@@ -71,7 +71,9 @@ function botao(texto, cls, fn) { const b = h("button", "btn" + (cls ? " " + cls 
 function aviso(titulo, msg) { openModal(false, h("h3", null, titulo), h("p", null, msg)); }
 function tabela(cab, linhas) {
   const t = h("table", "tabela"), tr = h("tr"); cab.forEach(c => tr.append(h("th", null, c))); t.append(tr);
-  linhas.forEach(l => { const r = h("tr"); l.forEach(c => r.append(h("td", null, c == null ? "" : String(c)))); t.append(r); }); return t;
+  linhas.forEach(l => { const r = h("tr"); l.forEach(c => r.append(h("td", null, c == null ? "" : String(c)))); t.append(r); });
+  const scroll = h("div", "table-scroll"); scroll.tabIndex = 0; scroll.setAttribute("role", "region");
+  scroll.setAttribute("aria-label", "Tabela: " + cab.join(", ")); scroll.append(t); return scroll;
 }
 async function rodar(err, fn) { try { await fn(); } catch (e) { err.textContent = e.message; } }
 
@@ -191,7 +193,7 @@ function renderDetalhe(c) {
   const top = h("div", "sale-hero"), visual = h("div", "sale-art"), infos = h("div", "sale-overview");
   if (c.foto) { const im = h("img"); im.src = c.foto; im.alt = c.premio; visual.append(im); }
   else { visual.append(h("span", "sale-fallback", "✦")); visual.style.background = c.cor; }
-  infos.append(h("span", "sale-eyebrow", "✦ GOATSKINS / SORTEIO #" + c.id), h("h1", null, c.premio));
+  infos.append(h("span", "sale-eyebrow", "GOATSKINS / SORTEIO #" + c.id), h("h1", null, c.premio));
   if (c.desgaste) infos.append(h("p", "sale-wear", c.desgaste));
   if (c.descricao) infos.append(h("p", "muted", c.descricao));
   const specs = h("div", "sale-specs");
@@ -635,6 +637,17 @@ function abaSorteios(box, edit) {
 
 async function abaPedidos(box) {
   const d = await api("/api/admin/pedidos"), err = h("p", "err"), st = h("div", "stat", "Receita confirmada"); st.prepend(h("b", null, brl(d.receita))); box.append(st, err);
+  const revisao = d.pedidos.filter(p => p.revisao_pagamento);
+  if (revisao.length) {
+    box.append(h("h4", null, "Pagamentos que precisam de revisão"),
+      h("p", "muted", "As reservas continuam protegidas. Confira estes pedidos no provedor antes de qualquer intervenção; a reconciliação automática continua ativa."));
+    revisao.forEach(p => {
+      const row = h("div", "arow");
+      row.append(h("span", null, p.nome + " · " + p.premio + " · " + brl(p.total)),
+        h("p", "mono", "Referência: " + p.id + " · Order: " + (p.mp_order_id || "criação ainda não confirmada")));
+      box.append(row);
+    });
+  }
   const rb = d.pedidos.filter(p => p.status === "REFUND_NEEDED");
   if (rb.length) { box.append(h("h4", null, "Reembolsos pendentes (devolva no painel do Mercado Pago e marque aqui)")); rb.forEach(p => { const row = h("div", "arow"); row.append(h("span", null, p.nome + " · " + p.email + " · " + p.premio + " · Nº " + JSON.parse(p.numeros).join(",") + " · " + brl(p.total) + " · ref. " + (p.mp_order_id || "-")),
     botao("Marcar reembolsado", "alt", () => rodar(err, async () => { await api("/api/admin/pedidos/" + p.id + "/reembolsado", "POST"); painel("pedidos"); }))); box.append(row); }); }
@@ -738,6 +751,7 @@ async function desafioSeguranca(action) {
   const config = await api('/api/seguranca');
   if (!config.turnstileSiteKey) throw new Error('Verificação indisponível.');
   const overlay = document.createElement('dialog'), title=h('h3',null,'Verificação de segurança'), box=h('div'), err=h('p','err');
+  overlay.className = 'turnstile-dialog';
   overlay.append(title,box,err);document.body.append(overlay);overlay.showModal();
   try {
     if (!window.turnstile) {
@@ -752,7 +766,7 @@ async function desafioSeguranca(action) {
       const finish=(e,t)=>{if(widget!==undefined)window.turnstile.remove(widget);e?reject(e):resolve(t);};
       overlay.addEventListener('cancel',()=>finish(new Error('Verificação cancelada.')),{once:true});
       overlay.append(botao('Cancelar','alt',()=>finish(new Error('Verificação cancelada.'))));
-      widget=window.turnstile.render(box,{sitekey:config.turnstileSiteKey,action,theme:'dark',callback:t=>finish(null,t),
+      widget=window.turnstile.render(box,{sitekey:config.turnstileSiteKey,action,theme:'dark',size:box.getBoundingClientRect().width < 300 ? 'compact' : 'normal',callback:t=>finish(null,t),
         'error-callback':()=>{err.textContent='Falha na verificação. Feche e tente novamente.';},'expired-callback':()=>window.turnstile.reset(widget)});
     });
   } finally {overlay.close();overlay.remove();}
@@ -764,6 +778,7 @@ function confirmarMfa() {
     const status=await api('/api/mfa/status');
     return new Promise((resolve,reject)=>{
       const dialog=document.createElement('dialog'),pw=campo('Senha atual','password'),code=campo('Código do autenticador ou de recuperação','text'),err=h('p','err'),info=h('div');
+      dialog.className = 'security-dialog';
       code.i.autocomplete='one-time-code';pw.i.autocomplete='current-password';
       const done=()=>{dialog.close();dialog.remove();resolve();};
       const cancel=()=>{dialog.close();dialog.remove();reject(new Error('Verificação administrativa cancelada.'));};

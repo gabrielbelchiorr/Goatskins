@@ -1,7 +1,6 @@
 /* Real HTTP + SQL. Use only disposable TEST_DATABASE_URL; this test resets public schema. */
 const {test}=require('node:test'),assert=require('node:assert/strict'),{spawn}=require('node:child_process'),crypto=require('node:crypto');
-const url=process.env.TEST_DATABASE_URL;
-if(url&&!/test/i.test(new URL(url).pathname))throw Error('Banco de teste obrigatório');
+const url=require('../scripts/banco-teste').bancoTeste(process.env.TEST_DATABASE_URL);
 test('MFA: enrollment, encrypted secret, admin enforcement, rotation, replay and recovery',{skip:!url,timeout:60000},async()=>{
  const {Pool}=require('pg'),pool=new Pool({connectionString:url,connectionTimeoutMillis:5000,query_timeout:5000}),schema='public';
  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');

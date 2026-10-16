@@ -1,7 +1,6 @@
 /* Migração em schema isolado de um banco descartável. Nunca aponta para produção. */
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
-const url=process.env.TEST_DATABASE_URL;
-if(url&&!/test/i.test(decodeURIComponent(new URL(url).pathname))) throw Error('Use um banco descartável com test no nome');
+const url=require('../scripts/banco-teste').bancoTeste(process.env.TEST_DATABASE_URL);
 test('migrações 4 e 5 preservam dados e adicionam MFA sem ativar privilégios',{skip:!url},async()=>{
  const {Pool}=require('pg'),pool=new Pool({connectionString:url}),c=await pool.connect(),schema='mig_'+require('node:crypto').randomBytes(8).toString('hex');
  const src=fs.readFileSync(path.join(__dirname,'../src/db.js'),'utf8');
