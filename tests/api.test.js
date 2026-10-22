@@ -57,6 +57,9 @@ const mpEstado = (id, status, extra = {}) => { const o = mpOrders.get(id), pg = 
 function cliente() {
   let sid = "";
   const chamar = async (metodo, url, body, extra = {}) => {
+    // Os cenários de e-mail usam um celular válido; validação tem suíte própria.
+    if (url === '/api/registro' && body && typeof body === 'object' && !('telefone' in body))
+      body = { ...body, telefone: '119' + String(crypto.randomInt(100000000)).padStart(8,'0') };
     const r = await fetch(BASE + url, { method: metodo, redirect: "manual", signal: AbortSignal.timeout(15000),
       headers: { "Content-Type": "application/json", "X-Requested-With": "goatskins", ...(sid ? { Cookie: "sid=" + sid } : {}), ...extra },
       body: body ? JSON.stringify(body) : undefined });
@@ -97,6 +100,15 @@ PODE && before(async () => {
   throw new Error("servidor não subiu");
 });
 PODE && after(() => { if (srv) srv.kill(); mpServer.close(); fs.rmSync(DIR, { recursive: true, force: true }); });
+
+test("cadastro exige celular brasileiro, normaliza E.164 e preserva verificação de e-mail", async () => {
+  const c=cliente(),base={nome:'Celular Teste',email:'celular-cadastro@teste.com',senha:'Senha1234',maior18:true,consentimento:true};
+  for(const telefone of [null,'','1133334444','20999999999','+11999999999'])
+    assert.equal((await c.post('/api/registro',{...base,telefone})).status,400);
+  const r=await c.post('/api/registro',{...base,telefone:'(11) 99999-9999'});assert.equal(r.status,200);
+  assert.equal(dbLer('SELECT telefone FROM pending_registrations WHERE email=?',base.email)[0].telefone,'+5511999999999');
+  assert.equal(dbLer('SELECT 1 FROM users WHERE email=?',base.email).length,0);
+});
 
 test("cadastro valida senha fraca, falta de consentimento e e-mail repetido", async () => {
   const c = cliente(), base = { nome: "Ana Teste", email: "ana@teste.com", senha: "Senha1234", maior18: true, consentimento: true };
@@ -188,6 +200,8 @@ test("exclusão de conta anonimiza os dados (LGPD)", async () => {
   const { c, email } = await novoUsuario();
   assert.equal((await c.post("/api/conta/excluir", { senha: "errada123" })).status, 401);
   assert.equal((await c.post("/api/conta/excluir", { senha: "Senha1234" })).status, 200);
+  const removed=dbLer("SELECT celular,celular_verificado,telefone FROM users WHERE email IS NULL AND status='DELETED' ORDER BY id DESC LIMIT 1")[0];
+  assert.deepEqual(removed,{celular:null,celular_verificado:0,telefone:null});
   assert.equal((await cliente().post("/api/login", { email, senha: "Senha1234" })).status, 401);
 });
 

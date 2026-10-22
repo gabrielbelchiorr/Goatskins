@@ -38,6 +38,7 @@ async function api(url, method, body) {
 async function carregar() {
   S = await api("/api/estado"); render();
   window.GoatskinsLoading?.finish();
+  if (S.eu && !S.eu.celular_preenchido && !admin()) return celularModal();
   await atualizarPendente();
 }
 
@@ -65,7 +66,9 @@ function openModal(wide, ...nodes) {
 function closeModal() { $("modal").hidden = true; }
 function campo(rotulo, tipo, valor) {
   const i = h("input"); i.type = tipo; if (tipo !== "file" && valor != null) i.value = valor;
-  const w = h("div"); w.append(h("label", null, rotulo), i); return { w, i };
+  i.id = 'campo-' + crypto.randomUUID();
+  const label = h('label', null, rotulo); label.htmlFor = i.id;
+  const w = h("div"); w.append(label, i); return { w, i };
 }
 function botao(texto, cls, fn) { const b = h("button", "btn" + (cls ? " " + cls : ""), texto); b.type = "button"; if (fn) b.addEventListener("click", fn); return b; }
 function aviso(titulo, msg) { openModal(false, h("h3", null, titulo), h("p", null, msg)); }
@@ -181,7 +184,7 @@ function render() {
     else { sorteioAtual = null; view = "sorteios"; }
   }
   document.querySelectorAll(".view").forEach(v => { v.hidden = v.dataset.view !== view; });
-  $("inicio").hidden = view !== "sorteios"; document.body.classList.toggle("sem-hero", view !== "sorteios");
+  $("inicio").hidden = false; document.body.classList.remove("sem-hero");
   document.querySelectorAll(".nv[data-view]").forEach(b => b.classList.toggle("on", b.dataset.view === view));
 }
 
@@ -269,8 +272,9 @@ function renderDetalhe(c) {
 /* ---------- Conta: entrar, cadastrar, recuperar senha ---------- */
 function authModal(modo, emailInicial = "") {
   const criar = modo === "criar", esq = modo === "esqueci", reset = modo && modo.startsWith("reset:");
-  const nome = campo("Nome completo", "text"), email = campo("E-mail", "email", emailInicial), tel = campo("Telefone (opcional)", "tel");
+  const nome = campo("Nome completo", "text"), email = campo("E-mail", "email", emailInicial), tel = campo("Celular com DDD", "tel");
   const pw = campo(reset ? "Nova senha" : "Senha", "password"), err = h("p", "err");
+  mascaraCelular(tel.i);
   pw.i.autocomplete = criar || reset ? "new-password" : "current-password";
   const ck1 = h("input"), ck2 = h("input"); ck1.type = ck2.type = "checkbox";
   const l1 = h("label", "check"), l2 = h("label", "check"), termos = h("span"), a1 = h("a", null, "Termos de uso"), a2 = h("a", null, "Política de privacidade");
@@ -291,7 +295,7 @@ function authModal(modo, emailInicial = "") {
       guardarConfirmacao({ ...resposta, email: email.i.value.trim().toLowerCase(), modo: criar ? "criar" : "entrar" });
       return confirmarCadastroModal();
     }
-    await carregar(); closeModal();
+    closeModal(); await carregar();
   }).finally(() => { ok.disabled = false; });
   };
   ok.addEventListener("click", enviar); pw.i.addEventListener("keydown", e => { if (e.key === "Enter") enviar(); });
@@ -325,7 +329,7 @@ function confirmarCadastroModal() {
     try {
       await api("/api/confirmar-cadastro", "POST", { token: p.token, codigo: codigo.i.value });
       guardarConfirmacao(null); await carregar();
-      openModal(false, h("h3", null, "E-mail confirmado!"), h("p", null, "Sua conta está pronta. Entre com seu e-mail e senha."), botao("Entrar", "", () => authModal("entrar", p.email)));
+      openModal(false, h("h3", null, "E-mail confirmado!"), h("p", null, "Entre com seu e-mail e senha para participar."), botao("Entrar", "", () => authModal("entrar", p.email)));
     } catch (e) { err.textContent = e.message; }
     finally { ocupado = false; atualizar(); }
   });
@@ -544,7 +548,10 @@ async function prova(c) {
 
 /* ---------- Minha conta ---------- */
 async function conta() {
-  const p = await api("/api/conta"), nome = campo("Nome", "text", p.nome), tel = campo("Telefone", "tel", p.telefone || ""), err = h("p", "err");
+  if (!S.eu.celular_preenchido) return celularModal();
+  const p = await api("/api/conta"), nome = campo("Nome", "text", p.nome), tel = campo("Celular com DDD", "tel", p.telefone || ""), err = h("p", "err");
+  tel.i.value = (p.celular || p.telefone || "").replace(/^\+55/, "");
+  mascaraCelular(tel.i); tel.i.dispatchEvent(new Event("input"));
   const atual = campo("Senha atual", "password"), nova = campo("Nova senha", "password"), err2 = h("p", "err"), del = campo("Senha para confirmar a exclusão", "password"), err3 = h("p", "err");
   const notas = h("div"); const ns = await api("/api/notificacoes");
   if (!ns.length) notas.append(h("p", "muted", "Nenhuma notificação."));
@@ -806,4 +813,28 @@ function confirmarMfa() {
       dialog.addEventListener('cancel',e=>{e.preventDefault();cancel();});document.body.append(dialog);dialog.showModal();
     });
   })().finally(()=>{mfaPromise=null;});return mfaPromise;
+}
+function mascaraCelular(input) {
+  input.required = true; input.autocomplete = 'tel-national'; input.maxLength = 16;
+  input.addEventListener('input', () => {
+    const n = input.value.replace(/\D/g, '').slice(0,11);
+    input.value = n.length > 2 ? '('+n.slice(0,2)+') '+n.slice(2,7)+(n.length>7?'-'+n.slice(7):'') : n;
+  });
+}
+// A altura varia com a largura, o banner e o título configurados no painel.
+new ResizeObserver(entries => {
+  document.documentElement.style.setProperty('--header-height', entries[0].target.getBoundingClientRect().height + 'px');
+}).observe($('inicio'));
+
+async function celularModal() {
+  const p=await api('/api/celular'),tel=campo('Celular com DDD','tel',(p.celular||'').replace(/^\+55/,''));
+  mascaraCelular(tel.i);tel.i.dispatchEvent(new Event('input'));
+  const err=h('p','err');err.setAttribute('role','alert');
+  const save=botao('Salvar celular','',()=>rodar(err,async()=>{
+    save.disabled=true;
+    try {await api('/api/celular','POST',{telefone:tel.i.value});closeModal();await carregar();}
+    finally {save.disabled=false;}
+  }));
+  openModal(false,h('h3',null,'Concluir cadastro'),h('p','muted','Informe um celular brasileiro com DDD para participar.'),tel.w,err,save,
+    botao('Sair','alt',()=>rodar(err,async()=>{await api('/api/logout','POST',{});closeModal();await carregar();})));
 }

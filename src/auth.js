@@ -39,8 +39,13 @@ async function abrirSessao(ctx, uid, hashEsperado) {
 async function encerrarSessoes(uid) { await db.run("DELETE FROM sessions WHERE user_id=?", [uid]); }
 async function usuarioDaSessao(req) {
   const t = cookie(req, "sid"); if (!t) return null;
-  return (await db.get(`SELECT u.id, u.nome, u.email, u.role, u.email_verificado, s.mfa_until FROM sessions s JOIN users u ON u.id=s.user_id
-    WHERE s.token=? AND s.expira>? AND u.status='ACTIVE' AND u.email_verificado=1`, [sha(t), Date.now()])) || null;
+  const u = await db.get(`SELECT u.id, u.nome, u.email, u.role, u.email_verificado, u.celular_verificado, u.celular, u.telefone, s.mfa_until FROM sessions s JOIN users u ON u.id=s.user_id
+    WHERE s.token=? AND s.expira>? AND u.status='ACTIVE' AND u.email_verificado=1`, [sha(t), Date.now()]);
+  if (!u) return null;
+  const phone = require('./phone');
+  u.celular_preenchido = phone.valid(u.celular) || phone.valid(u.telefone);
+  delete u.celular; delete u.telefone;
+  return u;
 }
 setInterval(() => {
   Promise.all([db.run("DELETE FROM sessions WHERE expira<?", [Date.now()]), db.run("DELETE FROM tokens_email WHERE expira<?", [Date.now()])])
@@ -61,13 +66,12 @@ async function consumirToken(t, tipo) {
   return r.user_id;
 }
 
-const perfil = id => db.get("SELECT id, nome, email, telefone, email_verificado, role, criado_em FROM users WHERE id=?", [id]);
-const telefoneOk = v => { if (v == null || v === "") return null; const d = txt(String(v), 25).replace(/[^\d+]/g, ""); if (d.replace(/\D/g, "").length < 8 || d.length > 16) throw new Erro("Telefone inválido."); return d; };
+const perfil = id => db.get("SELECT id, nome, email, telefone, celular, email_verificado, celular_verificado, role, criado_em FROM users WHERE id=?", [id]);
 
 const rotas = [
   ["POST", /^\/api\/registro$/, async ctx => {
     const b = ctx.body, ip = ctx.ip; limite("reg:" + ip, 10, 36e5);
-    const nome = txt(b.nome, 80, 2), email = txt(b.email, 120, 5).toLowerCase(), tel = telefoneOk(b.telefone);
+    const nome = txt(b.nome, 80, 2), email = txt(b.email, 120, 5).toLowerCase(), tel = require("./phone").normalize(b.telefone);
     if (!RE.email.test(email)) throw new Erro("E-mail inválido.");
     if (!senhaOk(b.senha)) throw new Erro(SENHA_MSG);
     if (b.maior18 !== true || b.consentimento !== true) throw new Erro("Confirme que tem 18 anos ou mais e aceite os termos e a política de privacidade.");
@@ -144,8 +148,12 @@ const rotas = [
     await avisarSenha(uid); return { ok: true };
   }],
   ["GET", /^\/api\/conta$/, ctx => perfil(ctx.user.id), "user"],
-  ["PUT", /^\/api\/conta$/, async ctx => { // só nome e telefone: papel, e-mail e status nunca vêm do navegador
-    await db.run("UPDATE users SET nome=?, telefone=?, atualizado_em=? WHERE id=?", [txt(ctx.body.nome, 80, 2), telefoneOk(ctx.body.telefone), agora(), ctx.user.id]);
+  ["PUT", /^\/api\/conta$/, async ctx => { // Dados cadastrais; formato do celular não comprova posse.
+    const nome=txt(ctx.body.nome,80,2);
+    await tx(async()=>{
+      if (ctx.body.telefone !== undefined) await require("./phone").save(ctx);
+      await db.run("UPDATE users SET nome=?, atualizado_em=? WHERE id=?", [nome, agora(), ctx.user.id]);
+    });
     await audit(ctx.user.id, "PERFIL_ATUALIZADO", null, ctx.ip); return perfil(ctx.user.id);
   }, "user"],
   ["POST", /^\/api\/conta\/senha$/, async ctx => {
@@ -171,7 +179,8 @@ const rotas = [
     // pedido Pix em andamento ou reembolso a receber: sem e-mail não há como confirmar nem devolver o valor
     if ((await db.get("SELECT COUNT(*) n FROM pedidos WHERE user_id=? AND status IN ('PENDING','REFUND_NEEDED')", [ctx.user.id])).n)
       throw new Erro("Você tem pedido Pix aguardando pagamento ou reembolso. Conclua isso antes de excluir a conta (ou fale com o suporte).", 409);
-    if (!(await db.run("UPDATE users SET nome='Usuário removido', contato='removido-'||id::text, email=NULL, telefone=NULL, hash='', status='DELETED', atualizado_em=? WHERE id=? AND hash=? AND role='USER' AND status='ACTIVE'", [agora(), ctx.user.id, u.hash])).changes) throw new Erro("Sua conta mudou. Entre novamente.", 401);
+    if (!(await db.run("UPDATE users SET nome='Usuário removido', contato='removido-'||id::text, email=NULL, telefone=NULL, celular=NULL, celular_verificado=0, hash='', status='DELETED', atualizado_em=? WHERE id=? AND hash=? AND role='USER' AND status='ACTIVE'", [agora(), ctx.user.id, u.hash])).changes) throw new Erro("Sua conta mudou. Entre novamente.", 401);
+    await db.run("DELETE FROM phone_verifications WHERE user_id=?", [ctx.user.id]);
     await db.run("DELETE FROM tokens_email WHERE user_id=?", [ctx.user.id]);
     await db.run("DELETE FROM pending_registrations WHERE user_id=?", [ctx.user.id]);
     await db.run("DELETE FROM notifications WHERE user_id=?", [ctx.user.id]); await encerrarSessoes(ctx.user.id);

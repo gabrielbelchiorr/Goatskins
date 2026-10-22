@@ -2,6 +2,8 @@
 
 Node.js 22.13+ com **PostgreSQL** (única dependência: a biblioteca `pg`). Cada sorteio tem um **preço por número** (0 = grátis) cobrado por **Pix via Mercado Pago (Orders API)**.
 
+O cadastro exige celular brasileiro com DDD (normalizado para E.164) e confirmação de e-mail. **Não há SMS nem dependência de Twilio**; preencher um celular não verifica sua posse e números repetidos são permitidos. Veja [as regras e a configuração no Render](SMS_RENDER.md). Contas antigas podem entrar e completar o celular antes de participar; a migração 7 preserva os dados e remove apenas a exclusividade anterior do celular.
+
 **Pacote de 12/10/2026:** siga [PUBLICAR_EM_CASA.md](PUBLICAR_EM_CASA.md) para aplicar os arquivos, testar no Windows e concluir Render/Cloudflare. A revisão e as limitações verificadas estão em [SEGURANCA.md](SEGURANCA.md). Abra `PREVIA_LOADING.html` e `PREVIA_ROLETA.html` localmente para visualizar o loading e a nova tela da roleta sem iniciar o servidor.
 
 ## Rodar

@@ -35,6 +35,7 @@ async function limpar() {
   const now = Date.now();
   await db.run('DELETE FROM pending_registrations WHERE cadastro_expira<=?', [now]);
   await db.run('DELETE FROM auth_rate_limits WHERE expira<=?', [now]);
+  await db.run('DELETE FROM phone_verifications WHERE expira<=?', [now]);
 }
 async function entregar(p, codigo, avisoConta = false) {
   try {
@@ -108,12 +109,13 @@ async function confirmar(ctx) {
         VALUES(?,?,?,?,?,'USER',1,?,?,?) ON CONFLICT DO NOTHING RETURNING id`, [p.nome, p.email, p.email, p.telefone, p.password_hash, now, now, p.consentimento_em]);
       if (!r) return false;
       uid = r.id;
+      await db.run('UPDATE users SET celular=? WHERE id=?', [p.telefone,uid]);
       await audit(uid, 'CONTA_CRIADA', 'após confirmação do e-mail', ctx.ip);
     }
     await db.run('DELETE FROM pending_registrations WHERE email=?', [p.email]);
     await db.run('DELETE FROM sessions WHERE user_id=?', [uid]);
     await audit(uid, 'EMAIL_VERIFICADO', null, ctx.ip);
-    await notificar(uid, 'E-mail confirmado', 'Sua conta está pronta. Entre para participar dos sorteios.');
+    await notificar(uid, 'E-mail confirmado', 'Entre para concluir o cadastro e participar dos sorteios.');
     return true;
   });
   if (!resultado) throw invalido();

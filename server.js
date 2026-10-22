@@ -23,7 +23,7 @@ process.on("unhandledRejection", e => console.error("[rejeição não tratada]",
 process.on("uncaughtException", e => { console.error("[erro fatal]", e && (e.code || e.name)); process.exit(1); }); // o gerenciador (pm2/systemd) reinicia
 
 const security = require("./src/security"), mfa = require("./src/mfa");
-const ROTAS = [...security.rotas, ...mfa.rotas, ...auth.rotas, ...require("./src/rifas").rotas, ...require("./src/pedidos").rotas, ...require("./src/admin").rotas];
+const ROTAS = [...security.rotas, ...mfa.rotas, ...auth.rotas, ...require("./src/phone").rotas, ...require("./src/rifas").rotas, ...require("./src/pedidos").rotas, ...require("./src/admin").rotas];
 const PAPEIS_ADMIN = ["ADMIN", "SUPER_ADMIN"];
 
 async function despachar(req, res, rota, body) {
@@ -39,6 +39,8 @@ async function despachar(req, res, rota, body) {
       if (!user) throw new Erro("Entre na sua conta.", 401);
       if ((guarda === "admin" && !PAPEIS_ADMIN.includes(user.role)) || (guarda === "super" && user.role !== "SUPER_ADMIN")) throw new Erro("Acesso negado.", 403);
     }
+    if (metodo === 'POST' && /^\/api\/campanhas\/\d+\/(numeros|pedidos)$/.test(rota))
+      require('./src/phone').exigir(user);
     if (guarda === "admin" || guarda === "super") mfa.exigir(user);
     return fn({ req, res, body, user, ip: ipDe(req), params: m.slice(1), query: Object.fromEntries(req.urlObj.searchParams) });
   }

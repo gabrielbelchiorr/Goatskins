@@ -133,6 +133,20 @@ CREATE TABLE admin_mfa(user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE
  secret TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, last_step BIGINT NOT NULL DEFAULT -1,
  pending_session TEXT, pending_expira BIGINT NOT NULL DEFAULT 0, recovery_hashes TEXT NOT NULL DEFAULT '[]');
 `
+,
+/* 6: celular; migração aditiva, sem confirmar números antigos. */ `
+ALTER TABLE users ADD COLUMN celular TEXT;
+ALTER TABLE users ADD COLUMN celular_verificado INTEGER NOT NULL DEFAULT 0 CHECK(celular_verificado IN (0,1));
+ALTER TABLE users ADD CONSTRAINT ck_celular_confirmado CHECK(celular_verificado=0 OR (celular IS NOT NULL AND celular ~ '^[+]55[0-9]{2}9[0-9]{8}$'));
+CREATE UNIQUE INDEX ux_users_celular_confirmado ON users(celular) WHERE celular_verificado=1 AND status='ACTIVE';
+CREATE TABLE phone_verifications(user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ celular TEXT NOT NULL, provider_sid TEXT NOT NULL, expira BIGINT NOT NULL, reenviar_em BIGINT NOT NULL);
+CREATE INDEX ix_phone_expira ON phone_verifications(expira);
+`
+,
+/* 7: celular informado não comprova posse nem reserva exclusividade. Preserva dados. */ `
+DROP INDEX IF EXISTS ux_users_celular_confirmado;
+`
 /* próximas alterações: acrescente novos itens a este array (nunca edite os já aplicados) */
 ];
 

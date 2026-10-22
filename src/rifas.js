@@ -83,7 +83,7 @@ const rotas = [
   ["GET", /^\/api\/estado$/, ctx => estado(ctx.user)],
   ["POST", /^\/api\/campanhas\/(\d+)\/numeros$/, async ctx => {
     const u = ctx.user, id = Number(ctx.params[0]); limite("claim:" + u.id, 30, 6e4);
-    if (!u.email_verificado) throw new Erro("Confirme seu e-mail para participar.", 403);
+    require("./phone").exigir(u);
     const nums = ctx.body.numeros;
     if (!Array.isArray(nums) || !nums.length || nums.length > 100) throw new Erro("Escolha pelo menos um número.");
     const lista = [...new Set(nums.map(n => inteiro(n, 1, 100)))];

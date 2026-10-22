@@ -28,5 +28,18 @@ test('migrações 4 e 5 preservam dados e adicionam MFA sem ativar privilégios'
   assert.equal((await c.query('SELECT mp_creation_uncertain FROM pedidos')).rows[0].mp_creation_uncertain,0);
   assert.equal(Number((await c.query('SELECT mfa_until FROM sessions')).rows[0].mfa_until),0);
   assert.equal((await c.query('SELECT * FROM admin_mfa')).rows.length,0);
+  await c.query(migrations[5]);
+  const migrated=(await c.query('SELECT * FROM users ORDER BY id')).rows;
+  for(let i=0;i<migrated.length;i++){
+    const {celular,celular_verificado,...old}=migrated[i];
+    assert.deepEqual(old,antes[i]);assert.equal(celular,null);assert.equal(celular_verificado,0);
+  }
+  await c.query("UPDATE users SET celular='+5511999999999',celular_verificado=1 WHERE id=71");
+  const before7=(await c.query('SELECT * FROM users ORDER BY id')).rows;
+  await c.query(migrations[6]);
+  assert.deepEqual((await c.query('SELECT * FROM users ORDER BY id')).rows,before7);
+  assert.equal((await c.query("SELECT 1 FROM pg_indexes WHERE schemaname=current_schema() AND indexname='ux_users_celular_confirmado'")).rows.length,0);
+  await c.query("UPDATE users SET celular='+5511999999999',celular_verificado=1 WHERE id=72");
+  assert.equal((await c.query('SELECT * FROM tickets')).rows.length,1);
  } finally {await c.query('ROLLBACK');c.release();await pool.end();}
 });

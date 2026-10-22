@@ -168,7 +168,7 @@ const rotas = [
   ["POST", /^\/api\/campanhas\/(\d+)\/pedidos$/, async ctx => {
     const u = ctx.user, campId = Number(ctx.params[0]); limite("pedido:" + u.id, 10, 6e5);
     if (!mp.configurado()) throw new Erro("Pagamentos indisponíveis no momento.", 503);
-    if (!u.email_verificado) throw new Erro("Confirme seu e-mail para participar.", 403);
+    require("./phone").exigir(u);
     finalizarVencidos().catch(e => console.error("[pix] varredura:", e.message)); // cancelamento fora da resposta do cliente
     const nums = ctx.body.numeros;
     if (!Array.isArray(nums) || !nums.length || nums.length > 100) throw new Erro("Escolha pelo menos um número.");
