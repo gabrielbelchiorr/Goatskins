@@ -10,7 +10,7 @@ Contas antigas preservam login, senha, papel e histórico. Celulares brasileiros
 
 ## Render e banco
 
-Não é preciso contratar, configurar ou pagar por SMS. Variáveis `TWILIO_*` e `SMS_*` antigas podem ser removidas do painel do Render: a aplicação não as lê. Mantenha as configurações existentes de PostgreSQL, Resend, Turnstile, proxy/HTTPS e MFA.
+Não é preciso contratar, configurar ou pagar por SMS. Variáveis `TWILIO_*` e `SMS_*` antigas podem ser removidas do painel do Render: a aplicação não as lê. Mantenha as configurações existentes de PostgreSQL, Resend, Turnstile, proxy/HTTPS e MFA. Girar a roleta exige sessão de administrador, sem confirmação MFA adicional; as demais rotas administrativas continuam com MFA.
 
 As migrações anteriores permanecem intactas. A nova migração **7** remove somente o índice de exclusividade do celular confirmado. Não remove usuários, colunas, registros de verificação ou histórico; não confirma celulares automaticamente. As colunas e a tabela antigas ficam preservadas, sem fluxo SMS ativo.
 

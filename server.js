@@ -41,7 +41,9 @@ async function despachar(req, res, rota, body) {
     }
     if (metodo === 'POST' && /^\/api\/campanhas\/\d+\/(numeros|pedidos)$/.test(rota))
       require('./src/phone').exigir(user);
-    if (guarda === "admin" || guarda === "super") mfa.exigir(user);
+    // Girar a roleta exige sessão e papel administrativo, sem confirmação MFA adicional.
+    const girarRoleta = metodo === 'POST' && /^\/api\/admin\/campanhas\/\d+\/sortear$/.test(rota);
+    if ((guarda === "admin" || guarda === "super") && !girarRoleta) mfa.exigir(user);
     return fn({ req, res, body, user, ip: ipDe(req), params: m.slice(1), query: Object.fromEntries(req.urlObj.searchParams) });
   }
   throw new Erro("Rota não encontrada.", 404);

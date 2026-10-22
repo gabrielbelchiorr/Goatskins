@@ -1,5 +1,5 @@
 /* TOTP (RFC 6238, SHA-1/6 digits/30 seconds). Secrets encrypted with AES-256-GCM.
-   A password-only session cannot call any administrative route. */
+   Administrative routes require MFA, except drawing a raffle (authenticated admin role still required). */
 const crypto = require('node:crypto'), cfg = require('./config');
 const {db,tx,sha,audit}=require('./db');
 const {Erro,cookie}=require('./http');

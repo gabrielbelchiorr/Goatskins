@@ -3,7 +3,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),{spawn}=r
 const url=require('../scripts/banco-teste').bancoTeste(process.env.TEST_DATABASE_URL);
 test('MFA: enrollment, encrypted secret, admin enforcement, rotation, replay and recovery',{skip:!url,timeout:60000},async()=>{
  const {Pool}=require('pg'),pool=new Pool({connectionString:url,connectionTimeoutMillis:5000,query_timeout:5000}),schema='public';
- await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+ await pool.query('DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public');
  const dbUrl=new URL(url);
  const port=5200+crypto.randomInt(500),base='http://127.0.0.1:'+port;
  const env={...process.env,NODE_ENV:'test',RENDER:'',TESTE:'1',DATABASE_URL:dbUrl.toString(),DATABASE_SSL:'0',PG_POOL_MAX:'1',PORT:String(port),APP_URL:base,EMAIL_DRIVER:'console',MFA_ENCRYPTION_KEY:crypto.randomBytes(32).toString('hex'),TURNSTILE_SITE_KEY:'',TURNSTILE_SECRET_KEY:'',MP_ACCESS_TOKEN:'',MP_WEBHOOK_SECRET:'',ORIGIN_VERIFY_SECRET:''};
@@ -16,6 +16,22 @@ test('MFA: enrollment, encrypted secret, admin enforcement, rotation, replay and
   let cookie='';const req=async(path,body,customCookie)=>{const r=await fetch(base+path,{signal:AbortSignal.timeout(5000),method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Requested-With':'goatskins',Cookie:customCookie===undefined?cookie:customCookie},body:body?JSON.stringify(body):undefined});const c=r.headers.get('set-cookie');if(c)cookie=c.split(';')[0];return {status:r.status,d:await r.json()};};
   assert.equal((await req('/api/login',{email:'mfa@teste.com',senha:'Admin1234'})).status,200);
   const old=cookie;
+  assert.equal((await req('/api/admin/dashboard')).d.tipo,'MFA_REQUIRED');
+  // A roleta dispensa MFA; sessão, papel, CSRF e regras do sorteio continuam obrigatórios.
+  const draw=await pool.query("INSERT INTO campaigns(premio,fim,max,max_por_usuario,status,seed,commit_hash) VALUES('Roleta fixture','',1,1,'OPEN',$1,$2) RETURNING id",['a'.repeat(64),crypto.createHash('sha256').update('a'.repeat(64)).digest('hex')]);
+  const drawPath='/api/admin/campanhas/'+draw.rows[0].id+'/sortear';
+  assert.equal((await req(drawPath,{},'')).status,401);
+  await pool.query("INSERT INTO users(nome,contato,hash,email_verificado) VALUES('Participante','participante-fixture','fixture',1)");
+  await pool.query("INSERT INTO sessions(token,user_id,expira) SELECT $1,id,$2 FROM users WHERE contato='participante-fixture'",[crypto.createHash('sha256').update('fixture-user-session').digest('hex'),Date.now()+60000]);
+  assert.equal((await req(drawPath,{},'sid=fixture-user-session')).status,403);
+  const empty=await req(drawPath,{});assert.equal(empty.status,400);assert.match(empty.d.erro,/Ninguém participou/);assert.equal(empty.d.tipo,undefined);
+  await pool.query("UPDATE users SET role='ADMIN' WHERE email='mfa@teste.com'");
+  await pool.query("INSERT INTO tickets(campaign_id,user_id,n,criado_em) SELECT $1,id,1,'' FROM users WHERE contato='participante-fixture'",[draw.rows[0].id]);
+  const csrf=await fetch(base+drawPath,{method:'POST',headers:{'Content-Type':'application/json',Cookie:cookie},body:'{}'});assert.equal(csrf.status,403);
+  const drawn=await req(drawPath,{});assert.equal(drawn.status,200);assert.equal(drawn.d.n,1);
+  assert.equal((await req(drawPath,{})).status,400);
+  assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM audit_logs WHERE acao='SORTEIO'")).rows[0].n),1);
+  await pool.query("UPDATE users SET role='SUPER_ADMIN' WHERE email='mfa@teste.com'");
   assert.equal((await req('/api/admin/dashboard')).d.tipo,'MFA_REQUIRED');
   assert.equal((await req('/api/mfa/preparar',{senha:'errada'})).status,401);
   const prepared=await req('/api/mfa/preparar',{senha:'Admin1234'});assert.equal(prepared.status,200);assert.match(prepared.d.secret,/^[A-Z2-7]{32}$/);

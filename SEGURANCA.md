@@ -1,5 +1,7 @@
 # Segurança, loading, roleta e Cloudflare — GOATSKINS
 
+Atualização de 22/10/2026: por escolha do responsável, somente a ação de girar a roleta dispensa MFA adicional. Ela mantém sessão válida, papel ADMIN/SUPER_ADMIN, CSRF, regras do sorteio e auditoria. As demais rotas administrativas seguem protegidas por MFA. A revisão histórica abaixo descreve a configuração anterior.
+
 Revisão de 12/10/2026, a partir do commit `089b9ea`.
 Referência enviada: [vídeo de Murilo Miguel](https://www.tiktok.com/@murilomiguelba/video/7694727532301569332).
 O vídeo foi aberto e suas legendas examinadas; as recomendações foram adaptadas ao projeto Node.js/PostgreSQL.
