@@ -707,13 +707,13 @@ function menuAberto(aberto, guardar) {
   document.body.classList.toggle("menu-closed", !aberto);
   $("menuBtn").setAttribute("aria-expanded", String(aberto));
   $("scrim").hidden = !(aberto && mobileMQ.matches);
-  if (guardar && !mobileMQ.matches) { try { localStorage.setItem("menu", aberto ? "1" : "0"); } catch (e) { /* sem storage: tudo bem */ } }
+  if (guardar && !mobileMQ.matches && window.GoatskinsCookies?.allowsPreferences()) { try { localStorage.setItem("menu", aberto ? "1" : "0"); } catch (e) { /* sem storage: tudo bem */ } }
 }
 $("menuBtn").addEventListener("click", () => menuAberto(document.body.classList.contains("menu-closed"), true));
 $("scrim").addEventListener("click", () => menuAberto(false));
 document.addEventListener("keydown", e => { if (e.key === "Escape" && mobileMQ.matches && !document.body.classList.contains("menu-closed")) menuAberto(false); });
 mobileMQ.addEventListener("change", () => menuAberto(!mobileMQ.matches));
-(() => { let pref = null; try { pref = localStorage.getItem("menu"); } catch (e) { /* ignora */ } menuAberto(mobileMQ.matches ? false : pref !== "0"); })();
+(() => { let pref = null; try { if (window.GoatskinsCookies?.allowsPreferences()) pref = localStorage.getItem("menu"); } catch (e) { /* ignora */ } menuAberto(mobileMQ.matches ? false : pref !== "0"); })();
 
 /* ---------- Início ---------- */
 $("closeBtn").addEventListener("click", closeModal);

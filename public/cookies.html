@@ -15,15 +15,19 @@
     <p>O cookie essencial <b>sid</b> identifica sua sessão após o login. Ele não contém sua senha. Em produção, é enviado por HTTPS, não pode ser lido por JavaScript e usa proteção SameSite. A sessão comum dura até 7 dias; após a confirmação administrativa, até 8 horas. O acesso às funções administrativas exige nova confirmação com o autenticador após 15 minutos.</p>
     <p>Ao sair da conta, a sessão é invalidada no servidor e o cookie é removido. Bloquear este cookie impede manter o login.</p>
     <h2>Preferência do menu</h2>
-    <p>O armazenamento local guarda apenas a preferência de abrir ou fechar o menu no computador, na chave <b>menu</b>. Essa preferência fica no navegador até você limpar os dados do site e não identifica sua conta.</p>
+    <p>Se você escolher “Aceitar cookies”, o armazenamento local pode guardar a preferência de abrir ou fechar o menu no computador, na chave <b>menu</b>. Em “Somente essenciais”, essa preferência não é lida nem salva e um valor anterior é removido. O menu continua funcionando.</p>
+    <h2>Sua escolha</h2>
+    <p>No primeiro acesso, o aviso permite aceitar o armazenamento da preferência do menu ou manter somente os recursos essenciais. A escolha fica na chave local <b>goatskins-cookies</b> até você limpar os dados do site ou rever a decisão em “Preferências de cookies”. Login, confirmação do cadastro e segurança continuam disponíveis nas duas opções. Se o navegador bloquear o armazenamento, a escolha vale apenas na página atual e o aviso pode reaparecer.</p>
     <h2>Confirmação de cadastro</h2>
     <p>O armazenamento da sessão da aba pode guardar a solicitação de confirmação do cadastro na chave <b>goatskins-confirmacao</b>, para continuar a etapa de confirmação. Não guardamos sua senha nem o código do e-mail nesse armazenamento. A solicitação tem prazo de validade no servidor e é removida da aba quando o processo termina ou é cancelado.</p>
     <h2>Proteção contra bots</h2>
     <p>A verificação Cloudflare Turnstile pode tratar dados técnicos do navegador e da conexão para combater automação. Seus dados de verificação seguem a <a href="https://www.cloudflare.com/privacypolicy/" rel="noopener">política de privacidade da Cloudflare</a>. As proteções de infraestrutura também podem utilizar identificadores técnicos conforme a configuração do provedor.</p>
     <h2>Análise de audiência e publicidade</h2>
-    <p>Esta versão não instala Google Analytics, pixels de publicidade ou cookies opcionais de rastreamento. Não exibimos uma solicitação de consentimento para rastreadores que não estão presentes. Se forem adicionados no futuro, a política e os controles de escolha deverão ser atualizados antes de sua ativação.</p>
+    <p>Esta versão não instala Google Analytics, pixels de publicidade ou cookies opcionais de rastreamento. “Aceitar cookies” permite apenas a preferência funcional descrita acima. Se rastreadores forem adicionados no futuro, a política e os controles de escolha deverão ser atualizados antes de sua ativação.</p>
     <h2>Como limpar os dados</h2>
     <p>Você pode remover os cookies e o armazenamento da GOATSKINS nas configurações de privacidade do navegador. Isso encerra o acesso neste navegador e apaga preferências locais; não exclui sua conta nem registros do servidor. A exclusão da conta fica em “Minha conta”.</p>
+    <button type="button" class="cookie-settings" data-cookie-settings>Preferências de cookies</button>
   </main>
+  <script src="cookie-consent.js?v=1"></script>
 </body>
 </html>

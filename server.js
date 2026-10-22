@@ -52,7 +52,7 @@ const TIPOS = { ".html": "text/html; charset=utf-8", ".css": "text/css", ".js": 
 // Uma extensao permitida (como .js, .html) nao deve tornar um backup publico.
 const PUBLICOS = new Set([
   'index.html','style.css','script.js','logo.jpg','logo-marca.webp','mascote.webp','cenario.webp',
-  'privacidade.html','termos.html','cookies.html','page-loader.js','roulette.js','roulette.css'
+  'privacidade.html','termos.html','cookies.html','page-loader.js','roulette.js','roulette.css','cookie-consent.js'
 ]);
 function segredoOrigemValido(req) {
   if (!cfg.ORIGIN_VERIFY_SECRET) return true;

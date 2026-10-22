@@ -132,7 +132,7 @@ test("backups, configurações e código copiados para public não ficam acessí
   } finally {
     for (const nome of nomes) fs.rmSync(path.join(RAIZ,'public',nome), {force:true});
   }
-  for (const nome of ['page-loader.js','roulette.js','roulette.css','cookies.html','style.css','logo-marca.webp'])
+  for (const nome of ['page-loader.js','roulette.js','roulette.css','cookies.html','cookie-consent.js','style.css','logo-marca.webp'])
     assert.equal((await fetch(BASE + '/' + nome)).status, 200, nome);
 });
 test("um nome público autorizado não pode apontar para um arquivo externo", {skip:process.platform === 'win32'}, async () => {

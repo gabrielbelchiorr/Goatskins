@@ -423,6 +423,22 @@ body { overflow-x: clip; }
 .whatsapp-group { display: inline-flex; align-items: center; gap: 8px; color: #fff; text-decoration: none; padding: 9px 12px; border: 1px solid #25d366; border-radius: 9px; background: #12352d; flex-shrink: 0; }
 .whatsapp-group svg { color: #25d366; flex-shrink: 0; }
 .whatsapp-group:focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
+/* Escolha de armazenamento, abaixo de modais e acima das barras fixas. */
+.cookie-banner { position:fixed; bottom:0; left:0; right:0; z-index:65; display:flex; align-items:center; gap:24px; padding:20px clamp(16px,4vw,52px); max-height:50dvh; overflow:auto; background:#0c1b2e; color:var(--cream); border-top:1px solid var(--gold); box-shadow:0 -8px 30px #0006; }
+.cookie-banner h2 { margin:0 0 6px; font-size:1rem; text-transform:none; }
+.cookie-banner h2::before { display:none; }
+.cookie-banner p { margin:0; max-width:800px; font-size:.88rem; }
+.cookie-banner a { color:var(--gold); text-decoration:underline; }
+.cookie-actions { display:flex; gap:10px; flex-shrink:0; }
+.cookie-actions .btn { min-height:44px; white-space:nowrap; }
+.cookie-settings { border:0; padding:3px; background:none; color:inherit; font:inherit; text-decoration:underline; cursor:pointer; }
+body { padding-bottom:var(--cookie-banner-height,0px); }
+.pending-pix { bottom:var(--cookie-banner-height,0px); }
+.sale-checkout { bottom:calc(12px + var(--cookie-banner-height,0px)); }
+body:has(.pending-pix:not([hidden])) { --pending-offset:90px; padding-bottom:calc(var(--pending-offset) + var(--cookie-banner-height,0px)); }
+body:has(.pending-pix:not([hidden])) .sale-checkout { bottom:calc(var(--pending-offset) + var(--cookie-banner-height,0px)); }
+@media(max-width:820px) { .cookie-banner { flex-direction:column; align-items:stretch; gap:12px; padding:16px; } .cookie-actions { flex-wrap:wrap; } .cookie-actions .btn { flex:1; } }
+@media(max-width:520px) { body:has(.pending-pix:not([hidden])) { --pending-offset:100px; } }
 @media(max-width:820px) {
   .hero { flex-wrap: nowrap; gap: 8px; min-height: 76px; padding-top: 8px; padding-bottom: 8px; }
   .hero-identity { min-width: 0; gap: 8px; }
