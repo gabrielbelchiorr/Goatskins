@@ -114,16 +114,23 @@ function abrirSorteio(id) {
 function cardSorteio(c) {
   const pct = Math.round(Math.min(100, c.total / c.max * 100)), restante = c.max_por_usuario - c.meus.length, fechado = c.status !== "OPEN" || cheio(c);
   const card = h("article", "card"), prize = h("button", "prize");
-  prize.type = "button"; prize.setAttribute("aria-label", "Ver sorteio " + c.premio);
-  prize.addEventListener("click", () => abrirSorteio(c.id));
+  prize.type = "button"; prize.setAttribute("aria-label", (c.ganhador ? "Ver resultado de " : "Ver sorteio ") + c.premio);
+  prize.addEventListener("click", () => c.ganhador ? roleta(c) : abrirSorteio(c.id));
   if (c.foto) { prize.classList.add("photo"); const im = h("img"); im.src = c.foto; im.alt = c.premio; im.loading = "lazy"; prize.append(im); }
   else { prize.textContent = c.premio; prize.style.backgroundColor = c.cor; }
   if (c.valor) prize.append(h("span", "chip", "Skin " + brl(c.valor)));
-  if (fechado) prize.append(h("span", "badge", cheio(c) ? "100% preenchido" : "Inscrições encerradas"));
+  if (fechado) prize.append(h("span", "badge", c.ganhador ? "Sorteio realizado" : cheio(c) ? "100% preenchido" : "Inscrições encerradas"));
   const info = h("div", "info");
   info.append(h("h3", null, c.premio));
   if (c.desgaste) info.append(h("p", "muted", c.desgaste));
   if (c.descricao) info.append(h("p", "muted", c.descricao));
+  if (c.ganhador) {
+    const w = c.ganhador;
+    info.append(h("p", null, "Ganhador(a): " + w.nome + " · Nº " + w.n + (w.eu ? " (você!)" : "")),
+      h("p", "muted", "Realizado em " + fmt(w.data)),
+      botao("Ver resultado", "alt buy-btn", () => roleta(c)));
+    card.append(prize, info); return card;
+  }
   if (c.preco > 0) info.append(h("p", "price", "Cada número: " + brl(c.preco)));
   const bar = h("div", "bar"), fill = h("span"); fill.style.width = pct + "%"; bar.append(fill);
   info.append(bar, h("p", "muted", c.total + " de " + c.max + " números " + (c.preco > 0 ? "vendidos" : "escolhidos") + " · " + pct + "%" + (c.reservados.length ? " · " + c.reservados.length + " reservado(s)" : "")));
@@ -143,15 +150,17 @@ function preencher(gid, nid, lista) {
 function render() {
   aplicarAparencia();
   const pend = S.c.filter(c => !c.ganhador);
+  const realizados = S.c.filter(c => c.ganhador).sort((a, b) => b.ganhador.data.localeCompare(a.ganhador.data) || b.id - a.id);
   const ativos = pend.filter(c => c.status === "OPEN" && !cheio(c));
   preencher("gridAtivos", "noAtivos", ativos);
   const hs = $("heroStats"); hs.innerHTML = "";
   [[ativos.length, "sorteios ativos"], [S.c.filter(c => c.ganhador).length, "sorteios realizados"]]
     .forEach(([n, t]) => { const d = h("div", "hchip"); d.append(h("b", null, String(n)), h("span", null, t)); hs.append(d); });
   preencher("gridEsgotados", "noEsgotados", pend.filter(c => c.status !== "OPEN" || cheio(c)));
+  preencher("gridRealizados", "noRealizados", realizados);
 
   const hl = $("histList"); hl.innerHTML = "";
-  S.c.filter(c => c.ganhador).reverse().forEach(c => {
+  realizados.forEach(c => {
     const w = c.ganhador, li = h("li", "hrow");
     if (c.foto) { const im = h("img"); im.src = c.foto; im.alt = ""; li.append(im); }
     const t = h("div");
