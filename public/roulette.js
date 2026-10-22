@@ -81,9 +81,8 @@
     winnerText.append(node("p", "roulette-eyebrow", "GANHADOR(A)"), winnerName, winnerPrize);
     result.append(winningNumber, winnerText);
     const actions = node("div", "roulette-actions"), go = button("GIRAR ROLETA", "roulette-go", start);
-    const proof = button("Ver prova do sorteio", "roulette-secondary", () => { dismiss(); options.onProof(); });
     const history = button("Ver no Histórico", "roulette-go", () => { dismiss(); options.onHistory(); });
-    proof.hidden = history.hidden = true; actions.append(go, history, proof);
+    history.hidden = true; actions.append(go, history);
     const message = node("p", "roulette-message", "Confira os números participantes antes de iniciar.");
     message.setAttribute("role", "status"); message.setAttribute("aria-live", "polite");
     const error = node("p", "roulette-error"); error.hidden = true; error.setAttribute("role", "alert");
@@ -102,7 +101,7 @@
     participants.append(summary, list);
     const foot = node("p", "roulette-footnote", options.preview ?
       "Prévia visual. Não conecta ao servidor nem grava um ganhador." :
-      "O resultado fica disponível no Histórico, com a prova do sorteio.");
+      "O resultado fica disponível no Histórico.");
     inner.append(header, intro, stage, participants, foot); screen.append(inner);
 
     function setPhase(value) { phase = value; screen.dataset.phase = value; }
@@ -139,7 +138,6 @@
       winningNumber.replaceChildren(node("small", null, "NÚMERO"), node("strong", null, number(w.n)));
       winnerName.textContent = w.nome; winnerPrize.textContent = "Levou " + c.premio;
       message.textContent = options.preview ? "Resultado ilustrativo desta prévia." : "Parabéns! O resultado deste sorteio está registrado.";
-      proof.hidden = options.preview || typeof options.onProof !== "function";
       history.hidden = typeof options.onHistory !== "function";
       list.querySelectorAll(".roulette-number").forEach(e => {
         const won = Number(e.dataset.number) === w.n;

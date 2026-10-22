@@ -157,7 +157,7 @@ function render() {
     const t = h("div");
     t.append(h("b", null, c.premio), h("p", "muted", (c.valor ? brl(c.valor) + " · " : "") + fmt(w.data) + " · " + w.total + " participantes"),
       h("p", null, "Ganhador(a): " + w.nome + " · Nº " + w.n + (w.eu ? " (você!)" : "")),
-      botao("Ver resultado", "alt", () => roleta(c)), botao("Ver prova", "alt", () => prova(c)));
+      botao("Ver resultado", "alt", () => roleta(c)));
     li.append(t); hl.append(li);
   });
   $("noHist").hidden = S.c.some(c => c.ganhador);
@@ -517,33 +517,9 @@ function roleta(c) {
       draw: () => demoLocal ? Promise.resolve({ n: NUMERO_ESCOLHIDO_TESTE, nome: NOME_GANHADOR_TESTE }) : api("/api/admin/campanhas/" + c.id + "/sortear", "POST"),
       recover: async () => { S = await api("/api/estado"); render(); return S.c.find(x => x.id === c.id)?.ganhador || null; },
       onComplete: () => { if (!demoLocal) return carregar(); },
-      onHistory: () => navegar("historico"), onProof: () => prova(S.c.find(x => x.id === c.id) || c)
+      onHistory: () => navegar("historico")
     });
   } catch (e) { aviso("Não foi possível abrir a roleta", e.message); }
-}
-
-/* ---------- Prova do sorteio (qualquer pessoa confere no próprio navegador) ---------- */
-const hex = b => Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, "0")).join("");
-const sha256 = async t => hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)));
-async function hmac(chave, msg) {
-  const k = await crypto.subtle.importKey("raw", new TextEncoder().encode(chave), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  return hex(await crypto.subtle.sign("HMAC", k, new TextEncoder().encode(msg)));
-}
-async function prova(c) {
-  try {
-    const v = await api("/api/campanhas/" + c.id + "/verificacao"), res = h("div");
-    const linha = (t, val) => [h("h4", null, t), h("p", "mono", String(val))];
-    const conferir = botao("Conferir no meu navegador", "", async () => {
-      const snap = await sha256(v.numeros.join(",")), n = v.numeros[Number(BigInt("0x" + await hmac(v.seed, snap)) % BigInt(v.numeros.length))];
-      const okSeed = (await sha256(v.seed)) === v.commit_hash, okVenc = n === v.vencedor && snap === v.snapshot_hash;
-      res.textContent = (okSeed ? "✔ A semente bate com o compromisso publicado. " : "✘ Semente diferente do compromisso! ") + (okVenc ? "✔ O vencedor recalculado é o Nº " + n + "." : "✘ O vencedor não confere!");
-      res.className = okSeed && okVenc ? "ok" : "ruim";
-    });
-    openModal(true, h("h3", null, "Prova: " + c.premio),
-      h("p", "muted", "O compromisso (hash da semente) é publicado quando o sorteio é criado. Depois do sorteio, a semente é revelada e qualquer pessoa refaz a conta: vencedor = números[HMAC-SHA256(semente, sha256(números)) mod N]."),
-      ...linha("Compromisso (publicado antes)", v.commit_hash), ...linha("Semente (revelada depois)", v.seed), ...linha("Números que participaram", v.numeros.join(", ")),
-      ...linha("Hash dos números", v.snapshot_hash), ...linha("Número vencedor", v.vencedor), conferir, res);
-  } catch (e) { aviso("Ops", e.message); }
 }
 
 /* ---------- Minha conta ---------- */
