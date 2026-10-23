@@ -11,7 +11,7 @@
     "migrar-sqlite": "node --no-warnings scripts/migrar-sqlite.js",
     "backup": "node --no-warnings scripts/backup.js",
     "test:unit": "node --no-warnings --test tests/pagamentos.test.js tests/unit.test.js tests/mail.test.js",
-    "test:api": "node --no-warnings --test --test-concurrency=1 tests/api.test.js tests/migrations.test.js tests/mfa.api.test.js",
+    "test:api": "node --no-warnings --test --test-concurrency=1 tests/api.test.js tests/migrations.test.js tests/admin-auth.api.test.js",
     "audit": "npm audit --omit=dev"
   },
   "dependencies": {

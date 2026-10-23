@@ -79,9 +79,6 @@ if (cfgProd.PRODUCAO) {
     console.warn("[config] TRUST_PROXY=1 não está ligado: atrás do proxy do Render todos os usuários pareceriam ter o mesmo IP (limites de tentativa e logs ficam errados).");
   }
 
-  if (!/^[a-f0-9]{64}$/i.test(e.MFA_ENCRYPTION_KEY || "")) {
-    erros.push("MFA_ENCRYPTION_KEY precisa ter 32 bytes aleatórios em hexadecimal");
-  }
 
   if (!e.TURNSTILE_SITE_KEY || !e.TURNSTILE_SECRET_KEY) {
     erros.push("Configure TURNSTILE_SITE_KEY e TURNSTILE_SECRET_KEY em produção");
@@ -118,7 +115,6 @@ module.exports = {
   PORT,
   DATA_DIR,
 
-  MFA_ENCRYPTION_KEY: e.MFA_ENCRYPTION_KEY || "",
   TURNSTILE_SITE_KEY: e.TURNSTILE_SITE_KEY || "",
   TURNSTILE_SECRET_KEY: e.TURNSTILE_SECRET_KEY || "",
 

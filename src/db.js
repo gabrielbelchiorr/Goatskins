@@ -147,6 +147,11 @@ CREATE INDEX ix_phone_expira ON phone_verifications(expira);
 /* 7: celular informado não comprova posse nem reserva exclusividade. Preserva dados. */ `
 DROP INDEX IF EXISTS ux_users_celular_confirmado;
 `
+,
+/* 8: remove a autenticacao administrativa em duas etapas. */ `
+DROP TABLE IF EXISTS admin_mfa;
+ALTER TABLE sessions DROP COLUMN IF EXISTS mfa_until;
+`
 /* próximas alterações: acrescente novos itens a este array (nunca edite os já aplicados) */
 ];
 

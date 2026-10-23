@@ -1,3 +1,5 @@
+Atualização de 22/10/2026: a autenticação em duas etapas da administração foi removida. O painel exige login por senha e permissões de administrador. MFA_ENCRYPTION_KEY não é mais usada. A migração 8 remove os segredos e campos antigos ao iniciar o servidor. Referências abaixo ao MFA do painel são históricas.
+
 # GOATSKINS — o que fazer quando chegar em casa
 
 Este pacote contém o projeto completo atualizado, incluindo as alterações da revisão anterior. O site publicado não foi alterado. Os arquivos vieram do GitHub no commit `089b9ea`; preserve qualquer alteração local feita depois dele.

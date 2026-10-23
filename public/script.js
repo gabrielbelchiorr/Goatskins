@@ -31,7 +31,6 @@ async function api(url, method, body) {
     const retry = await fetch(url, {method: method || "GET", credentials:"same-origin", signal:AbortSignal.timeout(20000), headers:{"Content-Type":"application/json","X-Requested-With":"goatskins"}, body:JSON.stringify({...body,turnstileToken:token})});
     const result = await retry.json(); if(!retry.ok) throw new Error(result.erro || "Falha na verificação."); return result;
   }
-  if (!r.ok && d.tipo === "MFA_REQUIRED") { await confirmarMfa(); return api(url,method,body); }
   if (!r.ok) throw new Error(d.erro || (r.status === 429 ? "Muitas tentativas. Aguarde um pouco." : r.status >= 500 ? "Erro no servidor. Tente novamente em instantes." : "Erro " + r.status));
   return d;
 }
@@ -762,42 +761,6 @@ async function desafioSeguranca(action) {
         'error-callback':()=>{err.textContent='Falha na verificação. Feche e tente novamente.';},'expired-callback':()=>window.turnstile.reset(widget)});
     });
   } finally {overlay.close();overlay.remove();}
-}
-let mfaPromise;
-function confirmarMfa() {
-  if(mfaPromise)return mfaPromise;
-  mfaPromise=(async()=>{
-    const status=await api('/api/mfa/status');
-    return new Promise((resolve,reject)=>{
-      const dialog=document.createElement('dialog'),pw=campo('Senha atual','password'),code=campo('Código do autenticador ou de recuperação','text'),err=h('p','err'),info=h('div');
-      dialog.className = 'security-dialog';
-      code.i.autocomplete='one-time-code';pw.i.autocomplete='current-password';
-      const done=()=>{dialog.close();dialog.remove();resolve();};
-      const cancel=()=>{dialog.close();dialog.remove();reject(new Error('Verificação administrativa cancelada.'));};
-      const ok=botao(status.enabled?'Confirmar identidade':'Configurar autenticador');
-      let prepared=status.enabled;
-      ok.addEventListener('click',async()=>{
-        if(ok.disabled)return;ok.disabled=true;err.textContent='';
-        try {
-          if(!prepared){
-            const d=await api('/api/mfa/preparar','POST',{senha:pw.i.value});
-            info.replaceChildren(h('p',null,'No seu aplicativo autenticador, adicione uma conta por chave de configuração (TOTP). Chave:'),h('code',null,d.secret));
-            code.w.hidden=false;prepared=true;ok.textContent='Ativar e confirmar';
-          } else {
-            const d=await api('/api/mfa/verificar','POST',{senha:pw.i.value,codigo:code.i.value.trim()});
-            pw.i.value='';code.i.value='';info.replaceChildren();
-            if(d.recoveryCodes){
-              info.append(h('p',null,'Guarde estes códigos de recuperação em local seguro. Cada um funciona uma vez, junto com sua senha.'),h('pre',null,d.recoveryCodes.join('\n')));
-              pw.w.hidden=code.w.hidden=ok.hidden=true;info.append(botao('Guardei os códigos',null,done));
-            } else done();
-          }
-        } catch(e){err.textContent=e.message;} finally {ok.disabled=false;}
-      });
-      code.w.hidden=!status.enabled;
-      dialog.append(h('h3',null,'Segurança da administração'),pw.w,info,code.w,err,ok,botao('Cancelar','alt',cancel));
-      dialog.addEventListener('cancel',e=>{e.preventDefault();cancel();});document.body.append(dialog);dialog.showModal();
-    });
-  })().finally(()=>{mfaPromise=null;});return mfaPromise;
 }
 function mascaraCelular(input) {
   input.required = true; input.autocomplete = 'tel-national'; input.maxLength = 16;

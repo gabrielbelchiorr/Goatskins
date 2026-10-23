@@ -1,3 +1,5 @@
+Atualização de 22/10/2026: a autenticação em duas etapas da administração foi removida. O painel exige login por senha e permissões de administrador. MFA_ENCRYPTION_KEY não é mais usada. A migração 8 remove os segredos e campos antigos ao iniciar o servidor. Referências abaixo ao MFA do painel são históricas.
+
 # Celular obrigatório, sem SMS
 
 Este documento substitui as instruções anteriores de Twilio. **Twilio não é necessário:** não há provedor SMS, códigos, reenvio, confirmação de posse ou variáveis de credenciais SMS.

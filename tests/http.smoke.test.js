@@ -9,7 +9,7 @@ const ENV_HTTP = {
   NODE_ENV: "test", RENDER: "", TESTE: "1", FALHAR_PING: "",
   DATABASE_URL: "postgresql://fixture:fixture@localhost/goatskins_test", DATABASE_SSL: "0", DATABASE_CA: "", PG_POOL_MAX: "1",
   EMAIL_DRIVER: "console", EMAIL_API_KEY: "", EMAIL_FROM: "GOATSKINS <no-reply@goatskins.test>", EMAIL_CODE_SECRET: "a".repeat(64),
-  MFA_ENCRYPTION_KEY: "", TURNSTILE_SITE_KEY: "", TURNSTILE_SECRET_KEY: "", TURNSTILE_HOSTNAMES: "", ORIGIN_VERIFY_SECRET: "",
+  TURNSTILE_SITE_KEY: "", TURNSTILE_SECRET_KEY: "", TURNSTILE_HOSTNAMES: "", ORIGIN_VERIFY_SECRET: "",
   TRUST_PROXY: "0", TRUST_PROXY_HOPS: "1", MP_ACCESS_TOKEN: "", MP_WEBHOOK_SECRET: "", MP_TESTE_APRO: "",
   MP_API_BASE: "https://api.mercadopago.com", PIX_MINUTOS: "30", RESERVA_SEGUNDOS: ""
 };
@@ -176,8 +176,7 @@ test('proteção de origem exige o segredo antes de servir página, API ou webho
 test('produção manda documentos do alias para a origem principal e preserva parâmetros e APIs',async()=>{
   const outro=await subir({NODE_ENV:'production',TESTE:'',APP_URL:'https://goatskins.com.br',
     DATABASE_URL:'postgresql://u:p@localhost/goatskins_test',EMAIL_DRIVER:'resend',EMAIL_API_KEY:'fixture',
-    EMAIL_FROM:'GOATSKINS <no-reply@goatskins.test>',EMAIL_CODE_SECRET:'a'.repeat(64),MFA_ENCRYPTION_KEY:'b'.repeat(64),
-    TURNSTILE_SITE_KEY:'site-fixture',TURNSTILE_SECRET_KEY:'secret-fixture',TRUST_PROXY:'1'});
+    EMAIL_FROM:'GOATSKINS <no-reply@goatskins.test>',EMAIL_CODE_SECRET:'a'.repeat(64),TURNSTILE_SITE_KEY:'site-fixture',TURNSTILE_SECRET_KEY:'secret-fixture',TRUST_PROXY:'1'});
   const base=outro.base;
   try {
     // Node fetch pode ignorar 'Host' customizado; HTTP nativo testa o hostname recebido pelo servidor.

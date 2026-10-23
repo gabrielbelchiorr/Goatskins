@@ -77,7 +77,7 @@ scrypt assíncrono + sal, comparação em tempo constante, tentativa de login re
 
 ## Colocar no ar (versão gratuita e acadêmica)
 - Frontend e backend saem juntos: o próprio Node serve a pasta `public`. O banco agora é um PostgreSQL separado, então o servidor não precisa de disco persistente.
-- **Render:** Build Command `npm ci`, Start Command `npm start`. Variáveis: `NODE_ENV=production`, `APP_URL` com sua origem principal HTTPS, `TRUST_PROXY=1`, `DATABASE_URL` (Internal Database URL do PostgreSQL do Render), mais as de e-mail, MFA, Turnstile e Mercado Pago. A configuração completa está em `PUBLICAR_EM_CASA.md`; o servidor recusa configurações inseguras.
+- **Render:** Build Command `npm ci`, Start Command `npm start`. Variáveis: `NODE_ENV=production`, `APP_URL` com sua origem principal HTTPS, `TRUST_PROXY=1`, `DATABASE_URL` (Internal Database URL do PostgreSQL do Render), mais as de e-mail, Turnstile e Mercado Pago. A configuração completa está em `PUBLICAR_EM_CASA.md`; o servidor recusa configurações inseguras.
 - **VPS própria:** instalar Node 22+ e PostgreSQL, criar `.env`; rodar com `pm2` ou `systemd`; colocar o **Caddy** na frente (HTTPS automático); apontar o domínio para o IP.
 - Backup: use os backups do serviço de banco (confira o que o seu plano do Render inclui) e/ou `npm run backup` (`pg_dump`, arquivos em `data/backups/`). Restaurar = `pg_restore --clean --no-owner -d "<url>" arquivo.dump`.
 - Health check: `GET /healthz` (leve; responde 503 se o banco não responder). Configure-o como *Health Check Path* no Render e no UptimeRobot (aceita HEAD). Não use `/api/estado`, que é pesada.

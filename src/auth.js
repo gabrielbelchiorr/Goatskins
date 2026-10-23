@@ -39,7 +39,7 @@ async function abrirSessao(ctx, uid, hashEsperado) {
 async function encerrarSessoes(uid) { await db.run("DELETE FROM sessions WHERE user_id=?", [uid]); }
 async function usuarioDaSessao(req) {
   const t = cookie(req, "sid"); if (!t) return null;
-  const u = await db.get(`SELECT u.id, u.nome, u.email, u.role, u.email_verificado, u.celular_verificado, u.celular, u.telefone, s.mfa_until FROM sessions s JOIN users u ON u.id=s.user_id
+  const u = await db.get(`SELECT u.id, u.nome, u.email, u.role, u.email_verificado, u.celular_verificado, u.celular, u.telefone FROM sessions s JOIN users u ON u.id=s.user_id
     WHERE s.token=? AND s.expira>? AND u.status='ACTIVE' AND u.email_verificado=1`, [sha(t), Date.now()]);
   if (!u) return null;
   const phone = require('./phone');

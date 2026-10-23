@@ -1,3 +1,5 @@
+Atualização de 22/10/2026: a autenticação em duas etapas da administração foi removida. O painel exige login por senha e permissões de administrador. MFA_ENCRYPTION_KEY não é mais usada. A migração 8 remove os segredos e campos antigos ao iniciar o servidor. Referências abaixo ao MFA do painel são históricas.
+
 # Segurança, loading, roleta e Cloudflare — GOATSKINS
 
 Atualização de 22/10/2026: por escolha do responsável, somente a ação de girar a roleta dispensa MFA adicional. Ela mantém sessão válida, papel ADMIN/SUPER_ADMIN, CSRF, regras do sorteio e auditoria. As demais rotas administrativas seguem protegidas por MFA. A revisão histórica abaixo descreve a configuração anterior.

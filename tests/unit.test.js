@@ -48,7 +48,7 @@ test("validação de entrada: txt, inteiro, foto, abrev", () => {
 const config = env => spawnSync(process.execPath, ["--no-warnings", "-e", "require('./src/config')"], { cwd: path.join(__dirname, ".."), encoding: "utf8",
   env: { ...process.env, ...ambienteTeste, NODE_ENV: "production", ...env } });
 test("config de produção: recusa configurações inseguras e aceita uma correta", () => {
-  const bom = { APP_URL: "https://x.com.br", DATABASE_URL: "postgresql://u:p@h:5432/d", EMAIL_DRIVER: "resend", EMAIL_API_KEY: "k", EMAIL_FROM: "GOATSKINS <no-reply@goatskins.test>", EMAIL_CODE_SECRET: "a".repeat(64), TRUST_PROXY: "1", MFA_ENCRYPTION_KEY:"b".repeat(64), TURNSTILE_SITE_KEY:"site-fixture", TURNSTILE_SECRET_KEY:"secret-fixture" };
+  const bom = { APP_URL: "https://x.com.br", DATABASE_URL: "postgresql://u:p@h:5432/d", EMAIL_DRIVER: "resend", EMAIL_API_KEY: "k", EMAIL_FROM: "GOATSKINS <no-reply@goatskins.test>", EMAIL_CODE_SECRET: "a".repeat(64), TRUST_PROXY: "1", TURNSTILE_SITE_KEY:"site-fixture", TURNSTILE_SECRET_KEY:"secret-fixture" };
   const valido = config(bom); assert.equal(valido.status, 0, valido.stderr);
   for (const [ruim, esperado] of [[{ APP_URL: "http://x.com" }, /https/], [{ DATABASE_URL: "" }, /DATABASE_URL/], [{ EMAIL_DRIVER: "console" }, /EMAIL_DRIVER/],
     [{ MP_ACCESS_TOKEN: "t" }, /MP_WEBHOOK_SECRET/], [{ EMAIL_API_KEY: "" }, /EMAIL_API_KEY/], [{ TESTE: "1" }, /TESTE/], [{ MP_TESTE_APRO: "1" }, /MP_TESTE_APRO/],
@@ -73,7 +73,7 @@ test('suite de CI não roda sem banco descartável nem aceita endereço de produ
 });
 test("config: em produção a URL da API do Mercado Pago e o modo APRO não podem ser trocados por variável", () => {
   const r = spawnSync(process.execPath, ["-e", "const c=require('./src/config');process.stdout.write(c.MP_API_BASE + ' ' + String(c.MP_TESTE_APRO))"], { cwd: path.join(__dirname, ".."), encoding: "utf8",
-    env: { ...process.env, ...ambienteTeste, NODE_ENV: "production", APP_URL: "https://x.com.br", DATABASE_URL: "postgresql://u:p@h/d", EMAIL_DRIVER: "resend", EMAIL_API_KEY: "k", EMAIL_FROM: "GOATSKINS <no-reply@goatskins.test>", EMAIL_CODE_SECRET: "a".repeat(64), MFA_ENCRYPTION_KEY:"b".repeat(64), TURNSTILE_SITE_KEY:"site-fixture", TURNSTILE_SECRET_KEY:"secret-fixture", MP_API_BASE: "http://evil.local" } });
+    env: { ...process.env, ...ambienteTeste, NODE_ENV: "production", APP_URL: "https://x.com.br", DATABASE_URL: "postgresql://u:p@h/d", EMAIL_DRIVER: "resend", EMAIL_API_KEY: "k", EMAIL_FROM: "GOATSKINS <no-reply@goatskins.test>", EMAIL_CODE_SECRET: "a".repeat(64), TURNSTILE_SITE_KEY:"site-fixture", TURNSTILE_SECRET_KEY:"secret-fixture", MP_API_BASE: "http://evil.local" } });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout.trim(), "https://api.mercadopago.com false");
 });

@@ -409,10 +409,6 @@ body:has(.pending-pix:not([hidden])) .sale-checkout{bottom:90px}
 dialog {color:var(--gold,#e8dfd1);background:#102440;border:1px solid #b8651f;border-radius:16px;padding:24px;max-width:min(440px,90vw);max-height:85vh;overflow:auto;}
 dialog::backdrop{background:rgba(0,0,0,.7)}
 .turnstile-dialog{width:min(380px,90vw)}
-dialog.security-dialog{width:min(440px,90vw);color:var(--cream)}
-.security-dialog h3{margin:0 0 14px;font-size:1.32rem}
-.security-dialog label{display:block;margin:12px 0 5px;color:#dce3ec;font-size:.85rem}
-.security-dialog input{display:block;width:100%;min-width:0;padding:11px 12px;border:1px solid rgba(212,226,241,.32);border-radius:10px;background:#edf0f4;color:#0c1625;font:inherit}
 dialog code,dialog pre{overflow-wrap:anywhere;white-space:pre-wrap;user-select:all} dialog button{margin:8px 8px 0 0}
 
 /* Cabeçalho compartilhado e acesso ao grupo. */

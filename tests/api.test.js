@@ -12,7 +12,7 @@ const DIR = fs.mkdtempSync(path.join(os.tmpdir(), "goat-")), PORT = 3300 + Math.
 const MP_PORT = 4300 + Math.floor(Math.random() * 400), SEGREDO = "segredo-de-teste", TOKEN = "TOKEN-DE-TESTE-NAO-VAZAR";
 const env = { ...process.env, DATABASE_URL: TEST_URL, DATABASE_SSL: "0", DATA_DIR: DIR, PORT: String(PORT), TESTE: "1", EMAIL_DRIVER: "console", APP_URL: BASE, NODE_ENV: "test", RENDER: "", EMAIL_CODE_SECRET: "a".repeat(64),
   MP_ACCESS_TOKEN: TOKEN, MP_WEBHOOK_SECRET: SEGREDO, MP_API_BASE: "http://localhost:" + MP_PORT, RESERVA_SEGUNDOS: "3",
-  ORIGIN_VERIFY_SECRET:'', TURNSTILE_SITE_KEY:'', TURNSTILE_SECRET_KEY:'', TURNSTILE_HOSTNAMES:'', MFA_ENCRYPTION_KEY:'' };
+  ORIGIN_VERIFY_SECRET:'', TURNSTILE_SITE_KEY:'', TURNSTILE_SECRET_KEY:'', TURNSTILE_HOSTNAMES:'', };
 let srv;
 /* Consulta direta ao banco de teste, de forma síncrona (processo filho com o módulo "pg"). Aceita "?" como parâmetro. */
 function sqlSync(sql, params = []) {

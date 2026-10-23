@@ -41,5 +41,9 @@ test('migrações 4 e 5 preservam dados e adicionam MFA sem ativar privilégios'
   assert.equal((await c.query("SELECT 1 FROM pg_indexes WHERE schemaname=current_schema() AND indexname='ux_users_celular_confirmado'")).rows.length,0);
   await c.query("UPDATE users SET celular='+5511999999999',celular_verificado=1 WHERE id=72");
   assert.equal((await c.query('SELECT * FROM tickets')).rows.length,1);
+  await c.query(migrations[7]);
+  assert.equal((await c.query("SELECT to_regclass('admin_mfa') AS tabela")).rows[0].tabela,null);
+  assert.equal((await c.query("SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='sessions' AND column_name='mfa_until'")).rows.length,0);
+  assert.deepEqual((await c.query('SELECT token FROM sessions')).rows,[{token:'sessao-ok'}]);
  } finally {await c.query('ROLLBACK');c.release();await pool.end();}
 });
