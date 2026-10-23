@@ -229,6 +229,9 @@ body:has(.overlay:not([hidden])){overflow:hidden}
 .x:hover{background:#844e38}
 .dialog label{display:block;margin:12px 0 5px;color:#dce3ec;font-size:.85rem}
 .dialog input[type=text],.dialog input[type=email],.dialog input[type=tel],.dialog input[type=password],.dialog input[type=number],.dialog input[type=date]{width:100%;padding:11px 12px;border:1px solid rgba(212,226,241,.32);border-radius:10px;background:#edf0f4;color:#0c1625}
+.password-field{display:flex;align-items:stretch;gap:8px}
+.password-field input{min-width:0;flex:1}
+.password-field .password-toggle{flex-shrink:0;padding:8px 12px;margin:0}
 .dialog input[type=color]{height:42px;width:100%;padding:3px;border:0;border-radius:10px;background:#e5eaf1}
 .dialog input[type=file]{max-width:100%;font-size:.85rem;color:#fff}
 .dialog .btn{margin-top:13px}
@@ -427,7 +430,7 @@ body { overflow-x: clip; }
 .cookie-banner a { color:var(--gold); text-decoration:underline; }
 .cookie-actions { display:flex; gap:10px; flex-shrink:0; }
 .cookie-actions .btn { min-height:44px; white-space:nowrap; }
-.cookie-settings { border:0; padding:3px; background:none; color:inherit; font:inherit; text-decoration:underline; cursor:pointer; }
+.cookie-settings { border:0; padding:3px; background:none; color:var(--gold); font:inherit; text-decoration:underline; cursor:pointer; }
 body { padding-bottom:var(--cookie-banner-height,0px); }
 .pending-pix { bottom:var(--cookie-banner-height,0px); }
 .sale-checkout { bottom:calc(12px + var(--cookie-banner-height,0px)); }

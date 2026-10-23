@@ -67,7 +67,28 @@ function campo(rotulo, tipo, valor) {
   const i = h("input"); i.type = tipo; if (tipo !== "file" && valor != null) i.value = valor;
   i.id = 'campo-' + crypto.randomUUID();
   const label = h('label', null, rotulo); label.htmlFor = i.id;
-  const w = h("div"); w.append(label, i); return { w, i };
+  const w = h("div"); w.append(label);
+  if (tipo === "password") {
+    const controle = h("div", "password-field");
+    const mostrar = botao("Mostrar", "password-toggle", () => {
+      const visivel = i.type === "password";
+      i.type = visivel ? "text" : "password";
+      mostrar.textContent = visivel ? "Ocultar" : "Mostrar";
+      mostrar.setAttribute("aria-label", (visivel ? "Ocultar senha: " : "Mostrar senha: ") + rotulo);
+      mostrar.setAttribute("aria-pressed", String(visivel));
+    });
+    mostrar.setAttribute("aria-controls", i.id);
+    mostrar.setAttribute("aria-label", "Mostrar senha: " + rotulo);
+    mostrar.setAttribute("aria-pressed", "false");
+    controle.append(i, mostrar); w.append(controle);
+  } else w.append(i);
+  return { w, i };
+}
+async function sairDaConta() {
+  if (!confirm("Tem certeza de que deseja sair da sua conta?")) return;
+  await api("/api/logout", "POST");
+  closeModal();
+  await carregar();
 }
 function botao(texto, cls, fn) { const b = h("button", "btn" + (cls ? " " + cls : ""), texto); b.type = "button"; if (fn) b.addEventListener("click", fn); return b; }
 function aviso(titulo, msg) { openModal(false, h("h3", null, titulo), h("p", null, msg)); }
@@ -641,7 +662,7 @@ async function abaPedidos(box) {
   }
   const rb = d.pedidos.filter(p => p.status === "REFUND_NEEDED");
   if (rb.length) { box.append(h("h4", null, "Reembolsos pendentes (devolva no painel do Mercado Pago e marque aqui)")); rb.forEach(p => { const row = h("div", "arow"); row.append(h("span", null, p.nome + " · " + p.email + " · " + p.premio + " · Nº " + JSON.parse(p.numeros).join(",") + " · " + brl(p.total) + " · ref. " + (p.mp_order_id || "-")),
-    botao("Marcar reembolsado", "alt", () => rodar(err, async () => { await api("/api/admin/pedidos/" + p.id + "/reembolsado", "POST"); painel("pedidos"); }))); box.append(row); }); }
+    botao("Marcar reembolsado", "alt", () => rodar(err, async () => { if (!confirm("Confirma que o reembolso já foi realizado no Mercado Pago?")) return; await api("/api/admin/pedidos/" + p.id + "/reembolsado", "POST"); painel("pedidos"); }))); box.append(row); }); }
   box.append(h("h4", null, "Pedidos"), tabela(["Quando", "Sorteio", "Pessoa", "Números", "Total", "Status"], d.pedidos.map(p => [dataHora(p.criado_em), p.premio, p.nome, JSON.parse(p.numeros).join(","), brl(p.total), STATUS_PEDIDO[p.status] || p.status])));
 }
 
@@ -649,7 +670,7 @@ async function abaEntregas(box) {
   const gs = await api("/api/admin/ganhadores"), err = h("p", "err"); box.append(err);
   if (!gs.length) box.append(h("p", "muted", "Nenhum sorteio realizado ainda."));
   gs.forEach(g => { const row = h("div", "arow"); row.append(h("span", null, g.premio + " · Nº " + g.n + " · " + g.nome + " · " + (g.email || "sem e-mail") + (g.telefone ? " · " + g.telefone : "") + (g.entregue_em ? " · ENTREGUE em " + dataHora(g.entregue_em) : " · a entregar")));
-    if (!g.entregue_em) row.append(botao("Marcar entregue", "alt", () => rodar(err, async () => { await api("/api/admin/campanhas/" + g.id + "/entregar", "POST"); painel("entregas"); }))); box.append(row); });
+    if (!g.entregue_em) row.append(botao("Marcar entregue", "alt", () => rodar(err, async () => { if (!confirm("Confirma que o prêmio de " + g.nome + " já foi entregue?")) return; await api("/api/admin/campanhas/" + g.id + "/entregar", "POST"); painel("entregas"); }))); box.append(row); });
 }
 
 async function abaUsuarios(box) {
@@ -659,8 +680,8 @@ async function abaUsuarios(box) {
     row.append(h("span", null, u.nome + " · " + (u.email || "sem e-mail") + " · " + u.role + " · " + u.status + (u.email_verificado ? "" : " · e-mail pendente")));
     if (u.role !== "SUPER_ADMIN" && u.id !== S.eu.id && u.status !== "DELETED") {
       const alvo = u.status === "ACTIVE" ? "SUSPENDED" : "ACTIVE";
-      bt.append(botao(alvo === "SUSPENDED" ? "Suspender" : "Reativar", "alt", () => rodar(err, async () => { await api("/api/admin/usuarios/" + u.id + "/status", "PUT", { status: alvo }); painel("usuarios"); })));
-      if (S.eu.role === "SUPER_ADMIN") bt.append(" ", botao(u.role === "ADMIN" ? "Tornar usuário" : "Tornar admin", "alt", () => rodar(err, async () => { await api("/api/admin/usuarios/" + u.id + "/papel", "PUT", { role: u.role === "ADMIN" ? "USER" : "ADMIN" }); painel("usuarios"); })));
+      bt.append(botao(alvo === "SUSPENDED" ? "Suspender" : "Reativar", "alt", () => rodar(err, async () => { if (!confirm("Tem certeza de que deseja " + (alvo === "SUSPENDED" ? "suspender" : "reativar") + " a conta de " + u.nome + "?")) return; await api("/api/admin/usuarios/" + u.id + "/status", "PUT", { status: alvo }); painel("usuarios"); })));
+      if (S.eu.role === "SUPER_ADMIN") bt.append(" ", botao(u.role === "ADMIN" ? "Tornar usuário" : "Tornar admin", "alt", () => rodar(err, async () => { if (!confirm("Tem certeza de que deseja " + (u.role === "ADMIN" ? "remover as permissões de administrador de " : "conceder permissões de administrador a ") + u.nome + "?")) return; await api("/api/admin/usuarios/" + u.id + "/papel", "PUT", { role: u.role === "ADMIN" ? "USER" : "ADMIN" }); painel("usuarios"); })));
     }
     row.append(bt); box.append(row);
   });
@@ -682,7 +703,7 @@ function abaVisual(box) {
     if (banner !== undefined) d.banner = banner; await api("/api/admin/visual", "PUT", d); await carregar(); painel("visual");
   });
   box.append(t.w, sub.w, ban.w, par(cor.gold, cor.copper), par(cor.slate, cor.navy), err,
-    botao("Salvar aparência", "", () => { const file = ban.i.files[0]; file ? lerFoto(file, salvar) : salvar(undefined); }), " ", botao("Remover banner", "alt", () => salvar("")));
+    botao("Salvar aparência", "", () => { const file = ban.i.files[0]; file ? lerFoto(file, salvar) : salvar(undefined); }), " ", botao("Remover banner", "alt", () => { if (confirm("Tem certeza de que deseja remover o banner?")) salvar(""); }));
 }
 
 /* ---------- Menu lateral (botão de 3 barras) ---------- */
@@ -701,13 +722,11 @@ mobileMQ.addEventListener("change", () => menuAberto(!mobileMQ.matches));
 
 /* ---------- Início ---------- */
 $("closeBtn").addEventListener("click", closeModal);
-document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("modal").hidden) closeModal(); });
-$("modal").addEventListener("click", e => { if (e.target === $("modal")) closeModal(); });
 document.querySelectorAll(".nv[data-view]").forEach(b => b.addEventListener("click", () => {
   if (mobileMQ.matches) menuAberto(false);
   navegar(b.dataset.view); if (view === "bilhetes" && !S.eu) authModal("entrar"); if (view === "bilhetes") carregarPedidos();
 }));
-$("loginBtn").addEventListener("click", async () => { if (S.eu) { await api("/api/logout", "POST"); await carregar(); } else if (confirmacaoPendente) confirmarCadastroModal(); else authModal("entrar"); });
+$("loginBtn").addEventListener("click", async () => { if (S.eu) { try { await sairDaConta(); } catch (e) { aviso("Não foi possível sair", e.message); } } else if (confirmacaoPendente) confirmarCadastroModal(); else authModal("entrar"); });
 $("contaBtn").addEventListener("click", () => conta().catch(e => aviso("Ops", e.message)));
 $("adminBtn").addEventListener("click", () => painel("painel"));
 carregar().then(() => {
@@ -755,8 +774,10 @@ async function desafioSeguranca(action) {
     return await new Promise((resolve,reject)=>{
       let widget;
       const finish=(e,t)=>{if(widget!==undefined)window.turnstile.remove(widget);e?reject(e):resolve(t);};
-      overlay.addEventListener('cancel',()=>finish(new Error('Verificação cancelada.')),{once:true});
-      overlay.append(botao('Cancelar','alt',()=>finish(new Error('Verificação cancelada.'))));
+      overlay.addEventListener('cancel',e=>e.preventDefault());
+      const fechar = botao('X','alt',()=>finish(new Error('Verificação cancelada.')));
+      fechar.setAttribute('aria-label','Fechar verificação de segurança');
+      overlay.append(fechar);
       widget=window.turnstile.render(box,{sitekey:config.turnstileSiteKey,action,theme:'dark',size:box.getBoundingClientRect().width < 300 ? 'compact' : 'normal',callback:t=>finish(null,t),
         'error-callback':()=>{err.textContent='Falha na verificação. Feche e tente novamente.';},'expired-callback':()=>window.turnstile.reset(widget)});
     });
@@ -784,5 +805,5 @@ async function celularModal() {
     finally {save.disabled=false;}
   }));
   openModal(false,h('h3',null,'Concluir cadastro'),h('p','muted','Informe um celular brasileiro com DDD para participar.'),tel.w,err,save,
-    botao('Sair','alt',()=>rodar(err,async()=>{await api('/api/logout','POST',{});closeModal();await carregar();})));
+    botao('Sair','alt',()=>rodar(err,sairDaConta)));
 }
