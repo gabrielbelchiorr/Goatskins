@@ -15,8 +15,11 @@ async function criarAdmin() { // usa o banco do DATABASE_URL (em produção: rod
   if (await db.get("SELECT 1 FROM users WHERE email=? OR contato=?", [e, e])) await db.run("UPDATE users SET hash=?, role='SUPER_ADMIN', status='ACTIVE', email_verificado=1, atualizado_em=? WHERE email=? OR contato=?", [h, now, e, e]);
   else await db.run("INSERT INTO users(nome,contato,email,hash,role,email_verificado,criado_em,atualizado_em) VALUES(?,?,?,?,'SUPER_ADMIN',1,?,?)", [nome || "Admin", e, e, h, now, now]);
   await db.run("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE email=? OR contato=?)", [e,e]);
+  await db.run("DELETE FROM password_recovery_jobs WHERE email IN (SELECT lower(email) FROM users WHERE email=? OR contato=?)", [e,e]);
+  await db.run("DELETE FROM tokens_email WHERE tipo='REDEFINIR' AND user_id IN (SELECT id FROM users WHERE email=? OR contato=?)", [e,e]);
+  await audit(null, "ADMIN_CRIADO_PELO_TERMINAL", e);
   });
-  await audit(null, "ADMIN_CRIADO_PELO_TERMINAL", e); console.log("SUPER_ADMIN pronto:", e); await fechar(); process.exit(0);
+  console.log("SUPER_ADMIN pronto:", e); await fechar(); process.exit(0);
 }
 
 process.on("unhandledRejection", e => console.error("[rejeição não tratada]", e && (e.code || e.name)));
@@ -131,12 +134,14 @@ const server = http.createServer((req, res) => {
 });
 /* O balanceador do Render mantém conexões abertas por ~60 s; se o Node fechar antes (padrão 5 s) surgem 502 esporádicos. */
 server.keepAliveTimeout = 65e3; server.headersTimeout = 66e3; server.requestTimeout = 120e3;
+let pararRecuperacao = async () => {};
 async function main() {
   if (process.argv[2] === "criar-admin") return criarAdmin();
   await iniciar(); // cria/atualiza as tabelas no PostgreSQL antes de aceitar requisições
   const registration = require("./src/registration");
   await registration.limpar();
   setInterval(() => registration.limpar().catch(() => console.error("[cadastro] falha na limpeza")), 60000).unref();
+  pararRecuperacao = require("./src/recovery").iniciarProcessador();
   console.log("[e-mail] driver=" + cfg.EMAIL_DRIVER + (cfg.EMAIL_DRIVER === "console" ? " (SIMULADO; sem entrega real)" : " (Resend; confira entrega no painel)"));
   server.listen(cfg.PORT, () => console.log("GOATSKINS rodando em " + cfg.APP_URL));
 }
@@ -147,6 +152,7 @@ let encerrando = false;
 for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, () => {
   if (encerrando) return; encerrando = true; console.log("[" + sig + "] encerrando com calma...");
   setTimeout(() => process.exit(1), 15e3).unref();
-  server.close(async () => { try { await fechar(); } catch (e) { /* já fechado */ } process.exit(0); });
+  const parado = pararRecuperacao();
+  server.close(async () => { try { await parado; await fechar(); } catch (e) { /* já fechado */ } process.exit(0); });
   server.closeIdleConnections();
 });

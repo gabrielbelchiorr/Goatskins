@@ -1,13 +1,14 @@
 /* Envio transacional pelo Resend. Aceito pelo provedor NÃO significa entregue na caixa de entrada. */
 const fs = require("node:fs"), path = require("node:path"), cfg = require("./config");
-async function enviarObrigatorio(para, assunto, texto) {
+async function enviarObrigatorio(para, assunto, texto, opcoes = {}) {
   if (cfg.EMAIL_DRIVER === "resend") {
     let r;
     try {
       r = await fetch("https://api.resend.com/emails", { method: "POST",
-        headers: { Authorization: "Bearer " + cfg.EMAIL_API_KEY, "Content-Type": "application/json" },
+        headers: { Authorization: "Bearer " + cfg.EMAIL_API_KEY, "Content-Type": "application/json",
+          ...(opcoes.idempotencyKey ? { "Idempotency-Key": opcoes.idempotencyKey } : {}) },
         signal: AbortSignal.timeout(10000),
-        body: JSON.stringify({ from: cfg.EMAIL_FROM, to: [para], subject: assunto, text: texto }) });
+        body: JSON.stringify({ from: opcoes.from || cfg.EMAIL_FROM, to: [para], subject: assunto, text: texto }) });
     } catch (_) { throw new Error("RESEND_REDE_OU_TIMEOUT"); }
     const d = await r.json().catch(() => ({}));
     if (!r.ok) {

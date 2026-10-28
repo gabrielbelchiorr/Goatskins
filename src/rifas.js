@@ -55,6 +55,10 @@ async function sortear(id, adminId, ip) {
   const r = await tx(async () => {
     const c = await db.get("SELECT * FROM campaigns WHERE id=?", [id]); if (!c) throw new Erro("Sorteio não encontrado.", 404);
     if (c.status === "DRAWN") throw new Erro("Este sorteio já foi realizado.");
+    // Falha segura diante de semente ausente/corrompida: nunca publica uma prova que contradiz o compromisso.
+    if (typeof c.seed !== 'string' || !/^[a-f0-9]{64}$/.test(c.seed) ||
+        typeof c.commit_hash !== 'string' || !/^[a-f0-9]{64}$/.test(c.commit_hash) || sha(c.seed) !== c.commit_hash)
+      throw new Erro("O compromisso deste sorteio está inconsistente. Procure o suporte antes de continuar.", 409);
     await liberar(); if ((await db.get("SELECT COUNT(*) n FROM reservas WHERE campaign_id=?", [id])).n) throw new Erro("Há pagamentos Pix pendentes neste sorteio. Aguarde serem confirmados ou expirarem.");
     const nums = (await db.all("SELECT n FROM tickets WHERE campaign_id=? ORDER BY n", [id])).map(x => x.n);
     if (!nums.length) throw new Erro("Ninguém participou deste sorteio.");

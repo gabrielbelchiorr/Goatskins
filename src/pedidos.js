@@ -24,6 +24,8 @@ const centavos = v => {
 const RE_PUBLIC = /^[a-f0-9]{32}$/, RE_MP_ID = /^ORD[A-Za-z0-9]{10,60}$/;
 const HOST_OK = /^https:\/\/([a-z0-9-]+\.)*(mercadopago\.com(\.br)?|mercadolibre\.com)\//i;
 const B64 = /^[A-Za-z0-9+/]+=*$/;
+// JSON keeps attacker-controlled webhook fields inside one record, without logging headers or bodies.
+const logWebhook = (nivel, evento, campos = {}) => console[nivel](JSON.stringify({area:'webhook', evento, ...campos}));
 /* BR Code do Pix termina em "6304" + CRC16-CCITT (poli 0x1021, inicial 0xFFFF) calculado sobre todo o texto anterior, inclusive o "6304". */
 function crc16(txt) { let c = 0xFFFF; for (const b of Buffer.from(txt, "utf8")) { c ^= b << 8; for (let i = 0; i < 8; i++) c = (c & 0x8000) ? ((c << 1) ^ 0x1021) & 0xFFFF : (c << 1) & 0xFFFF; } return c.toString(16).toUpperCase().padStart(4, "0"); }
 const brcodeOk = q => typeof q === "string" && q.length > 20 && q.startsWith("000201") && q.slice(-8, -4) === "6304" && crc16(q.slice(0, -4)) === q.slice(-4).toUpperCase();
@@ -241,21 +243,20 @@ const rotas = [
 
   /* Webhook do Mercado Pago: sem sessão e sem CSRF; a autenticidade vem da ASSINATURA */
   ["POST", /^\/api\/webhooks\/mercadopago$/, async ctx => {
-    console.log("[webhook] requisição POST chegou (antes de validar)"); // se isto não aparece no Render, a requisição não chegou neste código
-    if (!mp.configurado()) { console.error("[webhook] recusado 503: faltam MP_ACCESS_TOKEN e/ou MP_WEBHOOK_SECRET no ambiente"); throw new Erro("Indisponível.", 503); }
+    logWebhook('log', 'requisicao_recebida');
+    if (!mp.configurado()) { logWebhook('error', 'configuracao_indisponivel'); throw new Erro("Indisponível.", 503); }
     limite("wh:" + ctx.ip, 600, 6e4);
     const h = ctx.req.headers, corpo = ctx.body && typeof ctx.body === "object" ? ctx.body : {};
     // Documentação: o id vem em ?data.id=ORD...&type=order. O corpo JSON ({type, data:{id}}) serve de reserva.
     const dataId = String(ctx.query["data.id"] || (corpo.data && corpo.data.id) || "");
     const tipo = String(ctx.query.type || corpo.type || "");
     if (!mp.assinaturaValida(h["x-signature"], h["x-request-id"], dataId)) {
-      // log sem segredos: só diz o que chegou, para achar no Render por que foi recusado (segredo errado costuma ser a causa)
-      console.warn("[webhook] REJEITADO 401 | x-signature:" + !!h["x-signature"] + " x-request-id:" + !!h["x-request-id"] + " data.id:" + !!dataId + " tipo:" + tipo.slice(0, 20));
+      logWebhook('warn', 'assinatura_rejeitada', {assinatura_presente:!!h['x-signature'], request_id_presente:!!h['x-request-id'], id_presente:!!dataId, tipo:tipo.slice(0,20)});
       await audit(null, "WEBHOOK_REJEITADO", "assinatura inválida", ctx.ip); throw new Erro("Assinatura inválida.", 401);
     }
-    console.log("[webhook] recebido tipo=" + tipo.slice(0, 20) + " acao=" + String(corpo.action || "").slice(0, 40) + " id=" + dataId.slice(0, 40));
+    logWebhook('log', 'notificacao_recebida', {tipo:tipo.slice(0,20), acao:String(corpo.action || '').slice(0,40), id:dataId.slice(0,40)});
     if (tipo !== "order" || !RE_MP_ID.test(dataId)) return { ok: true };   // outros tópicos (e a "simulação" do painel): ignorados com 200
-    let o; try { o = await mp.buscarOrder(dataId); } catch (e) { console.error("webhook: consulta MP falhou:", e.message); throw new Erro("Falha ao consultar.", 502); } // 5xx = o MP tenta de novo
+    let o; try { o = await mp.buscarOrder(dataId); } catch (e) { logWebhook('error', 'consulta_falhou', {status:Number.isInteger(e.status)?e.status:null}); throw new Erro("Falha ao consultar.", 502); } // 5xx = o MP tenta de novo
     let p = await db.get("SELECT id, mp_order_id FROM pedidos WHERE mp_order_id=?", [dataId]);
     if (!p && o && RE_PUBLIC.test(String(o.external_reference || ""))) {
       // O webhook pode chegar antes de gravarmos o mp_order_id (ou se essa gravação falhou). A referência é o nosso public_id aleatório.
@@ -264,7 +265,7 @@ const rotas = [
     }
     if (!p) { await audit(null, "WEBHOOK_PEDIDO_DESCONHECIDO", dataId.slice(0, 40), ctx.ip); return { ok: true }; }
     const status = await aplicar(p.id, o);
-    console.log("[webhook] pedido " + p.id + " -> " + status);
+    logWebhook('log', 'pedido_reconciliado', {pedido_id:p.id, status});
     return { ok: true };
   }, "webhook"],
 
@@ -276,9 +277,12 @@ const rotas = [
         .map(p => ({ ...p, revisao_pagamento: precisaRevisao(p) })) };
   }, "admin"],
   ["POST", /^\/api\/admin\/pedidos\/([a-f0-9]{32})\/reembolsado$/, async ctx => { // o admin devolve o dinheiro no painel do Mercado Pago e marca aqui
-    const r = await db.run("UPDATE pedidos SET status='REFUNDED', atualizado_em=? WHERE public_id=? AND status='REFUND_NEEDED'", [agora(), ctx.params[0]]);
-    if (!r.changes) throw new Erro("Pedido não está aguardando reembolso.");
-    await audit(ctx.user.id, "PEDIDO_REEMBOLSADO", ctx.params[0], ctx.ip); return { ok: true };
+    await tx(async () => {
+      const r = await db.run("UPDATE pedidos SET status='REFUNDED', atualizado_em=? WHERE public_id=? AND status='REFUND_NEEDED'", [agora(), ctx.params[0]]);
+      if (!r.changes) throw new Erro("Pedido não está aguardando reembolso.");
+      await audit(ctx.user.id, "PEDIDO_REEMBOLSADO", ctx.params[0], ctx.ip);
+    });
+    return { ok: true };
   }, "admin"]
 ];
 module.exports = { rotas, aplicar, interpretar, crc16, brcodeOk, finalizarVencidos, precisaRevisao };

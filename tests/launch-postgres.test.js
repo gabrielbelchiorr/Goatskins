@@ -26,7 +26,7 @@ test('real database: account deletion rejects concurrent password, role or statu
     // Update on another connection after the credential read, before scrypt/transaction.
     store.db.get = async (sql, args) => {
       const row = await originalGet(sql, args);
-      if (!changed && sql === 'SELECT hash, role FROM users WHERE id=?' && args[0] === account.id) {
+      if (!changed && sql === 'SELECT hash, role, email FROM users WHERE id=?' && args[0] === account.id) {
         changed = true;
         await store.db.run('UPDATE users SET ' + field + '=? WHERE id=?', [value, account.id]);
       }

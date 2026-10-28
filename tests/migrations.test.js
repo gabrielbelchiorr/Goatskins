@@ -1,7 +1,7 @@
 /* Migração em schema isolado de um banco descartável. Nunca aponta para produção. */
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const url=require('../scripts/banco-teste').bancoTeste(process.env.TEST_DATABASE_URL);
-test('migrações 4 e 5 preservam dados e adicionam MFA sem ativar privilégios',{skip:!url},async()=>{
+test('migrações preservam dados antigos e adicionam a fila de recuperação sem órfãos',{skip:!url},async()=>{
  const {Pool}=require('pg'),pool=new Pool({connectionString:url}),c=await pool.connect(),schema='mig_'+require('node:crypto').randomBytes(8).toString('hex');
  const src=fs.readFileSync(path.join(__dirname,'../src/db.js'),'utf8');
  const migrations=vm.runInNewContext(src.slice(src.indexOf('const MIGRACOES ='),src.indexOf('async function migrar()'))+';MIGRACOES');
@@ -45,5 +45,16 @@ test('migrações 4 e 5 preservam dados e adicionam MFA sem ativar privilégios'
   assert.equal((await c.query("SELECT to_regclass('admin_mfa') AS tabela")).rows[0].tabela,null);
   assert.equal((await c.query("SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='sessions' AND column_name='mfa_until'")).rows.length,0);
   assert.deepEqual((await c.query('SELECT token FROM sessions')).rows,[{token:'sessao-ok'}]);
+  const before9={};
+  for(const table of ['users','sessions','tokens_email','tickets','pedidos'])
+    before9[table]=(await c.query('SELECT * FROM '+table+' ORDER BY 1')).rows;
+  await c.query(migrations[8]);
+  assert.equal((await c.query('SELECT * FROM password_recovery_jobs')).rows.length,0);
+  for(const table of Object.keys(before9))
+    assert.deepEqual((await c.query('SELECT * FROM '+table+' ORDER BY 1')).rows,before9[table]);
+  await c.query(`INSERT INTO password_recovery_jobs(id,email,criado_em,expira,proximo,token_hash)
+    VALUES($1,'antigo@teste.com',1,9999999999999,1,'recuperacao')`,['a'.repeat(64)]);
+  await c.query("DELETE FROM tokens_email WHERE token_hash='recuperacao'");
+  assert.equal((await c.query('SELECT * FROM password_recovery_jobs')).rows.length,0,'FK revoga o job junto do token');
  } finally {await c.query('ROLLBACK');c.release();await pool.end();}
 });

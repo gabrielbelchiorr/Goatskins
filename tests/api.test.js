@@ -72,6 +72,16 @@ function cliente() {
 const emailsDe = para => fs.readFileSync(path.join(DIR, "emails.log"), "utf8").split("=== ").filter(b => b.startsWith("para: " + para));
 const liberarEnvio = email => dbLer("DELETE FROM auth_rate_limits WHERE chave=?", "email:" + crypto.createHash("sha256").update(email).digest("hex"));
 const tokenDe = (para, padrao) => { const m = emailsDe(para).pop().match(padrao); return m[1]; };
+// Recuperação agora confirma a persistência da intenção; a entrega acontece pelo worker.
+async function tokenDeRecuperacao(para) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const mensagem = emailsDe(para).findLast(texto => /redefinir=([a-f0-9]{64})/.test(texto));
+    if (mensagem) return mensagem.match(/redefinir=([a-f0-9]{64})/)[1];
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error('O worker não gerou a mensagem de recuperação no prazo do teste.');
+}
 let seq = 0;
 async function novoUsuario(verificar = true) {
   const c = cliente(), email = "u" + (++seq) + "@teste.com";
@@ -188,7 +198,7 @@ test("recuperação de senha: link funciona uma vez e derruba sessões antigas",
   liberarEnvio(email);
   assert.equal((await cliente().post("/api/esqueci-senha", { email })).status, 200);
   assert.equal((await cliente().post("/api/esqueci-senha", { email: "ninguem@x.com" })).status, 200);
-  const token = tokenDe(email, /redefinir=([a-f0-9]+)/);
+  const token = await tokenDeRecuperacao(email);
   assert.equal((await cliente().post("/api/redefinir-senha", { token, senha: "fraca" })).status, 400);
   assert.equal((await cliente().post("/api/redefinir-senha", { token, senha: "NovaSenha99" })).status, 200);
   assert.equal((await cliente().post("/api/redefinir-senha", { token, senha: "OutraSenha99" })).status, 400);
@@ -589,7 +599,8 @@ test("hierarquia: ADMIN comum não promove ninguém, não mexe em outro ADMIN ne
 
 test("e-mail de redefinição usa fragmento (#) e e-mails de aviso são gerados (pagamento, troca de senha)", async () => {
   const adm = await adminLogado(), s = await pagoSorteio(adm), { c, email } = await novoUsuario();
-  liberarEnvio(email); await cliente().post("/api/esqueci-senha", { email }); assert.match(emailsDe(email).pop(), /\/#redefinir=[a-f0-9]{64}/);
+  liberarEnvio(email); await cliente().post("/api/esqueci-senha", { email }); await tokenDeRecuperacao(email);
+  assert.match(emailsDe(email).pop(), /\/#redefinir=[a-f0-9]{64}/);
   const p = (await pedir(c, s, [2])).dados; mpEstado(ultimoMp(), "pago"); await webhook(ultimoMp());
   assert.equal((await c.get("/api/pedidos/" + p.id)).dados.status, "PAID");
   await new Promise(r => setTimeout(r, 300)); assert.match(emailsDe(email).pop(), /Pagamento confirmado/);
@@ -740,7 +751,7 @@ test('solicitação vencida não confirma e limpeza remove dados temporários',a
 
 test('redefinir senha antiga não confirma e-mail nem abre sessão',async()=>{
   const p=await novoUsuario();dbLer('UPDATE users SET email_verificado=0 WHERE email=?',p.email);esperarReenvioNoBanco(p.email);
-  await cliente().post('/api/esqueci-senha',{email:p.email});const token=tokenDe(p.email,/redefinir=([a-f0-9]+)/);
+  await cliente().post('/api/esqueci-senha',{email:p.email});const token=await tokenDeRecuperacao(p.email);
   const c=cliente();assert.equal((await c.post('/api/redefinir-senha',{token,senha:'NovaSenha123'})).status,200);
   assert.equal((await c.get('/api/conta')).status,401);assert.equal(dbLer('SELECT email_verificado FROM users WHERE email=?',p.email)[0].email_verificado,0);
 });
@@ -751,7 +762,7 @@ test('recuperação de senha também libera o limitador persistente de login',as
   for(let i=0;i<5;i++)await cliente().post('/api/login',{email:p.email,senha:'Errada123'});
   assert.equal((await cliente().post('/api/login',{email:p.email,senha:'Senha1234'})).status,429);
   esperarReenvioNoBanco(p.email);await cliente().post('/api/esqueci-senha',{email:p.email});
-  const token=tokenDe(p.email,/redefinir=([a-f0-9]+)/);
+  const token=await tokenDeRecuperacao(p.email);
   assert.equal((await cliente().post('/api/redefinir-senha',{token,senha:'NovaSenha123'})).status,200);
   assert.equal((await cliente().post('/api/login',{email:p.email,senha:'NovaSenha123'})).status,200);
 });

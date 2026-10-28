@@ -26,6 +26,17 @@ test('Resend: timeout, rede e sucesso sem ID não são tratados como sucesso',as
   await assert.rejects(carregar(async()=>{throw new Error('secret');}).enviarObrigatorio('a','b','c'),/TIMEOUT/);
   await assert.rejects(carregar(async()=>({ok:true,json:async()=>({})})).enviarObrigatorio('a','b','c'),/RESPOSTA_INVALIDA/);
 });
+
+test('Resend: recuperação preserva remetente e Idempotency-Key entre retentativas',async()=>{
+  const requests=[];
+  const m=carregar(async(url,options)=>{requests.push({url,options});return {ok:true,json:async()=>({id:'id-retry'})};});
+  const opts={from:'GOATSKINS <recovery@goatskins.test>',idempotencyKey:'password-recovery/fixture'};
+  for(let n=0;n<2;n++)await m.enviarObrigatorio('fixture@goatskins.test','Recuperação','Mesmo texto',opts);
+  assert.equal(requests[0].options.headers['Idempotency-Key'],opts.idempotencyKey);
+  assert.equal(JSON.parse(requests[0].options.body).from,opts.from);
+  assert.equal(requests[0].options.body,requests[1].options.body);
+  assert.equal(requests[1].options.headers['Idempotency-Key'],opts.idempotencyKey);
+});
 test('console nunca envia em produção; driver desconhecido não cai em simulação',async()=>{
   for(const extra of [{EMAIL_DRIVER:'console',PRODUCAO:true},{EMAIL_DRIVER:'typo'}])
     await assert.rejects(carregar(()=>{throw Error('não deveria chamar');},extra).enviarObrigatorio('a','b','c'),/DRIVER_INVALIDO/);

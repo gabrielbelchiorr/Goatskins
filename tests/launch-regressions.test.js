@@ -22,7 +22,7 @@ test('account deletion rate limit runs before password verification or database 
 function deletion(changes){
  const hash='salt:'+Buffer.alloc(64,1).toString('hex'),calls=[];
  const crypto={scrypt:(s,salt,n,cb)=>cb(null,Buffer.alloc(64,1)),timingSafeEqual:require('node:crypto').timingSafeEqual};
- const mod=load('auth.js',{'node:crypto':crypto,'./registration':{consumirLimite:async()=>{}},'./config':{},'./mail':{},'./http':{Erro,RE:{}},'./db':{db:{get:async sql=>sql.includes('SELECT hash, role')?{hash,role:'USER'}:{n:0},run:async(sql,args)=>{calls.push({sql,args});return {changes};}},tx:fn=>fn(),agora:()=>'',audit:async()=>{}}});
+ const mod=load('auth.js',{'node:crypto':crypto,'./registration':{consumirLimite:async()=>{}},'./recovery':{cancelar:async()=>{}},'./config':{},'./mail':{},'./http':{Erro,RE:{}},'./db':{db:{get:async sql=>sql.includes('SELECT hash, role')?{hash,role:'USER',email:'fixture@goatskins.test'}:{n:0},run:async(sql,args)=>{calls.push({sql,args});return {changes};}},tx:fn=>fn(),agora:()=>'',audit:async()=>{}}});
  return {route:mod.rotas.find(r=>r[1].test('/api/conta/excluir'))[2],calls,hash,ctx:{user:{id:7},body:{senha:'password'},res:{setHeader(){}}}};
 }
 test('deletion rejects password/role/status changes during password verification',async()=>{

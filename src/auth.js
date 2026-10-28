@@ -28,10 +28,11 @@ async function avisarSenha(uid) {
 /* ----- Sessões ----- */
 async function abrirSessao(ctx, uid, hashEsperado) {
   const t = crypto.randomBytes(32).toString("hex");
-  // A condição é avaliada no INSERT: uma troca de senha/suspensão durante o login impede abrir a sessão.
-  const r = await db.get(`INSERT INTO sessions(token,user_id,expira)
+  // Participa da mesma trava transacional das revogações, inclusive quando chamada após /conta/senha.
+  // Sem tx, o MVCC poderia ler o hash anterior de um reset ainda sem commit e criar uma sessão após seu DELETE.
+  const r = await tx(() => db.get(`INSERT INTO sessions(token,user_id,expira)
     SELECT ?,id,? FROM users WHERE id=? AND status='ACTIVE' AND email_verificado=1 AND hash=? RETURNING user_id`,
-    [sha(t), Date.now() + SESSAO_MS, uid, hashEsperado]);
+    [sha(t), Date.now() + SESSAO_MS, uid, hashEsperado]));
   if (!r) throw new Erro("Não foi possível entrar. Tente novamente.", 401);
   const seguro = cfg.PRODUCAO || ctx.req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
   ctx.res.setHeader("Set-Cookie", "sid=" + t + "; HttpOnly; SameSite=Lax; Path=/; Max-Age=" + SESSAO_MS / 1000 + seguro);
@@ -53,11 +54,6 @@ setInterval(() => {
 }, 36e5).unref();
 
 /* ----- Tokens de e-mail (verificação e redefinição). Só o hash fica no banco. ----- */
-async function gerarToken(uid, tipo, horas) {
-  const t = crypto.randomBytes(32).toString("hex");
-  await db.run("INSERT INTO tokens_email(token_hash,user_id,tipo,expira,usado) VALUES(?,?,?,?,0)", [sha(t), uid, tipo, Date.now() + horas * 36e5]);
-  return t;
-}
 async function consumirToken(t, tipo) {
   const r = await db.get("SELECT * FROM tokens_email WHERE token_hash=? AND tipo=? AND usado=0 AND expira>?", [sha(String(t || "")), tipo, Date.now()]);
   if (!r) throw new Erro("Link inválido ou expirado.");
@@ -121,24 +117,28 @@ const rotas = [
     limite("esq:" + ctx.ip, 5, 36e5);
     const email = String(ctx.body.email || "").trim().toLowerCase();
     if (!RE.email.test(email) || email.length > 120) throw new Erro("E-mail inválido.");
-    await tx(() => registration.limiteEnvio(email, ctx.ip));
-    const u = await db.get("SELECT id, nome, email FROM users WHERE lower(email)=? AND status='ACTIVE'", [email]);
-    if (u) {
-      const t = await gerarToken(u.id, "REDEFINIR", 1); await audit(u.id, "SENHA_RECUPERACAO_PEDIDA", null, ctx.ip);
-      const entrega = await mail.enviar(u.email, "Redefinição de senha - GOATSKINS", "Olá, " + u.nome + "!\n\nPara criar uma nova senha, acesse:\n" + cfg.APP_URL + "/#redefinir=" + t + "\n\nO link vale por 1 hora. Se não foi você, ignore.");
-      if (!entrega) await db.run("DELETE FROM tokens_email WHERE token_hash=?", [sha(t)]);
-    }
-    return { ok: true }; // mesma resposta exista ou não o e-mail (não revela cadastros)
+    // Mesmo trabalho para qualquer endereço válido: nenhum SELECT de usuário ou envio nesta resposta.
+    // Só confirma após o COMMIT; a fila sobrevive a reinícios e falhas do provedor.
+    await tx(async () => {
+      await registration.limiteEnvio(email, ctx.ip);
+      await require("./recovery").enfileirar(email, ctx.ip);
+    });
+    return { ok: true };
   }],
   ["POST", /^\/api\/redefinir-senha$/, async ctx => {
     limite("red:" + ctx.ip, 10, 36e5);
     if (!senhaOk(ctx.body.senha)) throw new Erro(SENHA_MSG);
+    // Rejeita capacidades inválidas antes do scrypt. O consumo é revalidado atomicamente na tx abaixo.
+    if (typeof ctx.body.token !== "string" || !/^[a-f0-9]{64}$/.test(ctx.body.token) ||
+        !(await db.get("SELECT token_hash FROM tokens_email WHERE token_hash=? AND tipo='REDEFINIR' AND usado=0 AND expira>?", [sha(ctx.body.token), Date.now()])))
+      throw new Erro("Link inválido ou expirado.");
     const hash = await hashSenha(ctx.body.senha);
     const uid = await tx(async () => {
       const id = await consumirToken(ctx.body.token, "REDEFINIR");
       if (!(await db.run("UPDATE users SET hash=?, falhas=0, bloqueado_ate=0, atualizado_em=? WHERE id=? AND status='ACTIVE'", [hash, agora(), id])).changes) throw new Erro("Link inválido ou expirado.");
       await encerrarSessoes(id);
       const conta = await db.get("SELECT email,contato FROM users WHERE id=?", [id]);
+      await require("./recovery").cancelar(conta.email);
       for (const valor of [conta.email, conta.contato]) if (valor) await db.run("DELETE FROM auth_rate_limits WHERE chave=?", ["login-email:" + sha(valor.trim().toLowerCase())]);
       await db.run("DELETE FROM tokens_email WHERE user_id=? AND tipo='REDEFINIR'", [id]);
       await db.run("DELETE FROM pending_registrations WHERE user_id=?", [id]);
@@ -153,26 +153,29 @@ const rotas = [
     await tx(async()=>{
       if (ctx.body.telefone !== undefined) await require("./phone").save(ctx);
       await db.run("UPDATE users SET nome=?, atualizado_em=? WHERE id=?", [nome, agora(), ctx.user.id]);
+      await audit(ctx.user.id, "PERFIL_ATUALIZADO", null, ctx.ip);
     });
-    await audit(ctx.user.id, "PERFIL_ATUALIZADO", null, ctx.ip); return perfil(ctx.user.id);
+    return perfil(ctx.user.id);
   }, "user"],
   ["POST", /^\/api\/conta\/senha$/, async ctx => {
     limite("pw:" + ctx.user.id, 10, 36e5);
-    const u = await db.get("SELECT hash FROM users WHERE id=?", [ctx.user.id]);
+    const u = await db.get("SELECT hash,email FROM users WHERE id=?", [ctx.user.id]);
     if (!(await confere(String(ctx.body.atual || ""), u.hash))) throw new Erro("Senha atual incorreta.", 401);
     if (!senhaOk(ctx.body.nova)) throw new Erro(SENHA_MSG);
     const novoHash = await hashSenha(ctx.body.nova);
     await tx(async () => {
       if (!(await db.run("UPDATE users SET hash=?, atualizado_em=? WHERE id=? AND hash=? AND status='ACTIVE' AND email_verificado=1", [novoHash, agora(), ctx.user.id, u.hash])).changes) throw new Erro("Sua conta mudou. Entre novamente.", 401);
       await encerrarSessoes(ctx.user.id);
+      await require("./recovery").cancelar(u.email);
       await db.run("DELETE FROM tokens_email WHERE user_id=? AND tipo='REDEFINIR'", [ctx.user.id]);
+      await audit(ctx.user.id, "SENHA_ALTERADA", null, ctx.ip);
     });
     await abrirSessao(ctx, ctx.user.id, novoHash); // derruba outros dispositivos
-    await audit(ctx.user.id, "SENHA_ALTERADA", null, ctx.ip); await avisarSenha(ctx.user.id); return { ok: true };
+    await avisarSenha(ctx.user.id); return { ok: true };
   }, "user"],
   ["POST", /^\/api\/conta\/excluir$/, async ctx => { // LGPD: anonimiza a conta (os bilhetes ficam para manter a integridade dos sorteios)
     await registration.consumirLimite("excluir-conta:" + ctx.user.id, 5, BLOQUEIO_MS);
-    const u = await db.get("SELECT hash, role FROM users WHERE id=?", [ctx.user.id]);
+    const u = await db.get("SELECT hash, role, email FROM users WHERE id=?", [ctx.user.id]);
     if (u.role !== "USER") throw new Erro("Contas de administração não podem ser excluídas por aqui.", 403);
     if (!(await confere(String(ctx.body.senha || ""), u.hash))) throw new Erro("Senha incorreta.", 401);
     await tx(async () => {
@@ -181,11 +184,12 @@ const rotas = [
       throw new Erro("Você tem pedido Pix aguardando pagamento ou reembolso. Conclua isso antes de excluir a conta (ou fale com o suporte).", 409);
     if (!(await db.run("UPDATE users SET nome='Usuário removido', contato='removido-'||id::text, email=NULL, telefone=NULL, celular=NULL, celular_verificado=0, hash='', status='DELETED', atualizado_em=? WHERE id=? AND hash=? AND role='USER' AND status='ACTIVE'", [agora(), ctx.user.id, u.hash])).changes) throw new Erro("Sua conta mudou. Entre novamente.", 401);
     await db.run("DELETE FROM phone_verifications WHERE user_id=?", [ctx.user.id]);
+    await require("./recovery").cancelar(u.email);
     await db.run("DELETE FROM tokens_email WHERE user_id=?", [ctx.user.id]);
     await db.run("DELETE FROM pending_registrations WHERE user_id=?", [ctx.user.id]);
     await db.run("DELETE FROM notifications WHERE user_id=?", [ctx.user.id]); await encerrarSessoes(ctx.user.id);
-    });
     await audit(ctx.user.id, "CONTA_EXCLUIDA", null, ctx.ip);
+    });
     ctx.res.setHeader("Set-Cookie", "sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0" + (cfg.PRODUCAO ? "; Secure" : "")); return { ok: true };
   }, "user"],
   ["GET", /^\/api\/notificacoes$/, ctx => db.all("SELECT id, titulo, texto, lida, criado_em FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 30", [ctx.user.id]), "user"],

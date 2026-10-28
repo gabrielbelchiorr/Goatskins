@@ -152,6 +152,21 @@ DROP INDEX IF EXISTS ux_users_celular_confirmado;
 DROP TABLE IF EXISTS admin_mfa;
 ALTER TABLE sessions DROP COLUMN IF EXISTS mfa_until;
 `
+,
+/* 9: solicitações duráveis de recuperação, iguais para endereços existentes ou não.
+   Não contém token em claro. PII temporária expira em uma hora; FK revoga entregas preparadas junto do token. */ `
+CREATE TABLE password_recovery_jobs(
+ id TEXT PRIMARY KEY CHECK(id ~ '^[a-f0-9]{64}$'),
+ email TEXT NOT NULL CHECK(length(email) BETWEEN 5 AND 120), ip TEXT,
+ criado_em BIGINT NOT NULL, expira BIGINT NOT NULL, proximo BIGINT NOT NULL,
+ lease_ate BIGINT NOT NULL DEFAULT 0, dono TEXT,
+ tentativas INTEGER NOT NULL DEFAULT 0 CHECK(tentativas BETWEEN 0 AND 5),
+ token_hash TEXT REFERENCES tokens_email(token_hash) ON DELETE CASCADE, contexto TEXT
+);
+CREATE INDEX ix_recovery_due ON password_recovery_jobs(proximo,lease_ate);
+CREATE INDEX ix_recovery_email ON password_recovery_jobs(email);
+CREATE INDEX ix_recovery_expira ON password_recovery_jobs(expira);
+`
 /* próximas alterações: acrescente novos itens a este array (nunca edite os já aplicados) */
 ];
 

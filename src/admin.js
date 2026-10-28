@@ -47,9 +47,12 @@ const rotas = [
     db.all("SELECT t.n, t.criado_em, u.nome, u.email FROM tickets t JOIN users u ON u.id=t.user_id WHERE t.campaign_id=? ORDER BY t.n", [Number(ctx.params[0])]), "admin"],
   ["POST", /^\/api\/admin\/campanhas$/, async ctx => {
     const d = corpoCampanha(ctx.body, false), s = novaSemente(); // o compromisso (hash da semente) já nasce público
-    await db.run("INSERT INTO campaigns(premio,desgaste,descricao,valor,cor,fim,max,max_por_usuario,foto,seed,commit_hash,criado_por,criado_em,preco_centavos) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      [d.premio, d.desgaste, d.descricao, d.valor, d.cor, d.fim, d.max, d.max_por_usuario, d.foto, s.seed, s.commit, ctx.user.id, agora(), d.preco_centavos]);
-    await audit(ctx.user.id, "SORTEIO_CRIADO", d.premio, ctx.ip); return { ok: true };
+    await tx(async () => {
+      await db.run("INSERT INTO campaigns(premio,desgaste,descricao,valor,cor,fim,max,max_por_usuario,foto,seed,commit_hash,criado_por,criado_em,preco_centavos) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [d.premio, d.desgaste, d.descricao, d.valor, d.cor, d.fim, d.max, d.max_por_usuario, d.foto, s.seed, s.commit, ctx.user.id, agora(), d.preco_centavos]);
+      await audit(ctx.user.id, "SORTEIO_CRIADO", d.premio, ctx.ip);
+    });
+    return { ok: true };
   }, "admin"],
   ["PUT", /^\/api\/admin\/campanhas\/(\d+)$/, async ctx => {
     const id = Number(ctx.params[0]), d = corpoCampanha(ctx.body, true);
@@ -120,21 +123,35 @@ const rotas = [
     return { ok: true };
   }, "admin"],
   ["POST", /^\/api\/admin\/campanhas\/(\d+)\/encerrar$/, async ctx => {
-    const id = Number(ctx.params[0]), r = await db.run("UPDATE campaigns SET status='CLOSED' WHERE id=? AND status='OPEN'", [id]);
-    if (!r.changes) throw new Erro("Só é possível encerrar sorteios abertos."); await audit(ctx.user.id, "SORTEIO_ENCERRADO", "campanha " + id, ctx.ip); return { ok: true };
+    const id = Number(ctx.params[0]);
+    // Mesma trava de inscrições e reservas: o fechamento não ultrapassa uma compra em andamento.
+    await tx(async () => {
+      const r = await db.run("UPDATE campaigns SET status='CLOSED' WHERE id=? AND status='OPEN'", [id]);
+      if (!r.changes) throw new Erro("Só é possível encerrar sorteios abertos.");
+      await audit(ctx.user.id, "SORTEIO_ENCERRADO", "campanha " + id, ctx.ip);
+    });
+    return { ok: true };
   }, "admin"],
   ["POST", /^\/api\/admin\/campanhas\/(\d+)\/sortear$/, ctx => sortear(Number(ctx.params[0]), ctx.user.id, ctx.ip), "admin"],
   ["GET", /^\/api\/admin\/ganhadores$/, () => db.all("SELECT w.campaign_id id, c.premio, w.n, w.sorteado_em, w.entregue_em, u.nome, u.email, u.telefone FROM winners w JOIN campaigns c ON c.id=w.campaign_id JOIN users u ON u.id=w.user_id ORDER BY w.sorteado_em DESC NULLS LAST, w.campaign_id DESC LIMIT 100"), "admin"],
   ["POST", /^\/api\/admin\/campanhas\/(\d+)\/entregar$/, async ctx => {
-    const id = Number(ctx.params[0]), r = await db.run("UPDATE winners SET entregue_em=?, entregue_por=? WHERE campaign_id=? AND entregue_em IS NULL", [agora(), ctx.user.id, id]);
-    if (!r.changes) throw new Erro("Sorteio sem ganhador ou já entregue."); await audit(ctx.user.id, "PREMIO_ENTREGUE", "campanha " + id, ctx.ip); return { ok: true };
+    const id = Number(ctx.params[0]);
+    await tx(async () => {
+      const r = await db.run("UPDATE winners SET entregue_em=?, entregue_por=? WHERE campaign_id=? AND entregue_em IS NULL", [agora(), ctx.user.id, id]);
+      if (!r.changes) throw new Erro("Sorteio sem ganhador ou já entregue.");
+      await audit(ctx.user.id, "PREMIO_ENTREGUE", "campanha " + id, ctx.ip);
+    });
+    return { ok: true };
   }, "admin"],
   ["PUT", /^\/api\/admin\/visual$/, async ctx => {
     const b = ctx.body, ant = await visual(), cores = {};
     ["gold", "copper", "slate", "navy"].forEach(k => { if (!RE.hex.test(b.cores && b.cores[k])) throw new Erro("Cor inválida."); cores[k] = b.cores[k]; });
     const v = { titulo: txt(b.titulo, 80, 1), sub: txt(b.sub || "", 200), cores, banner: b.banner === undefined ? ant.banner : foto(b.banner, 3e6) };
-    await db.run("INSERT INTO settings(k,v) VALUES('visual',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", [JSON.stringify(v)]);
-    await audit(ctx.user.id, "VISUAL_ATUALIZADO", null, ctx.ip); return { ok: true };
+    await tx(async () => {
+      await db.run("INSERT INTO settings(k,v) VALUES('visual',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", [JSON.stringify(v)]);
+      await audit(ctx.user.id, "VISUAL_ATUALIZADO", null, ctx.ip);
+    });
+    return { ok: true };
   }, "admin"]
 ];
 module.exports = { rotas };

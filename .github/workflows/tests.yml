@@ -48,5 +48,7 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Verificar dependencias de producao
         run: npm audit --omit=dev --audit-level=high
+      - name: Procurar formatos conhecidos de segredos sem exibir valores
+        run: node scripts/verificar-segredos.js
       - name: Executar suite completa com PostgreSQL real
         run: npm run test:ci
