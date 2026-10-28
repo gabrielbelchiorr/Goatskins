@@ -1,14 +1,14 @@
-/* GOATSKINS – tela (conversa com o servidor pela API) */
+/* Interface GOATSKINS */
 let S = { eu: null, naoLidas: 0, s: { titulo: "", sub: "", banner: "", cores: { gold: "#d4aa55", copper: "#b8651f", slate: "#102440", navy: "#0e1a33" } }, c: [] };
 let view = "sorteios";
 let sorteioAtual = null, pedidoPendente = null, buscandoPendente = false, pedidoPoll = null;
 const sorteioURL = Number(new URLSearchParams(location.search).get("sorteio"));
 if (Number.isInteger(sorteioURL) && sorteioURL > 0) { view = "detalhe"; sorteioAtual = sorteioURL; }
 
-// DEMONSTRAÇÃO LOCAL (faculdade): null = sorteio normal; número = animação simulada.
+// Prévia local: null usa o sorteio real; um número simula a animação.
 // Só funciona em localhost e em sorteios gratuitos; nunca grava vencedor no servidor.
 const NUMERO_ESCOLHIDO_TESTE = null;
-// Nome que aparece como ganhador na animação de teste (troque pelo nome do seu amigo).
+// Nome exibido somente na prévia local.
 const NOME_GANHADOR_TESTE = "Fulano";
 
 const IMG_MAX = 900; // largura máxima das fotos enviadas (px)
@@ -20,7 +20,7 @@ const dataHora = iso => new Date(iso).toLocaleString("pt-BR", { dateStyle: "shor
 const brl = v => "R$ " + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2 });
 const admin = () => !!S.eu && (S.eu.role === "ADMIN" || S.eu.role === "SUPER_ADMIN");
 
-/* Fala com o servidor. O cabeçalho X-Requested-With é uma proteção contra ataques CSRF. */
+/* Requisições à API com o cabeçalho exigido pela proteção CSRF. */
 async function api(url, method, body) {
   const r = await fetch(url, { method: method || "GET", credentials: "same-origin", signal: AbortSignal.timeout(20000),
     headers: { "Content-Type": "application/json", "X-Requested-With": "goatskins" }, body: body ? JSON.stringify(body) : undefined });
@@ -58,16 +58,43 @@ function lerFoto(file, cb) {
 }
 
 /* ---------- Janela (modal) e campos ---------- */
+let modalOpener = null;
+const modalBackground = new Map();
 function openModal(wide, ...nodes) {
+  if ($("modal").hidden) {
+    modalOpener = document.activeElement;
+    document.querySelectorAll('.hero, .shell, #menuBtn, #scrim, #pendingPixBar, .cookie-banner').forEach(el => {
+      modalBackground.set(el, el.inert); el.inert = true;
+    });
+  }
   const b = $("modalBody"); b.innerHTML = ""; b.append(...nodes);
-  b.parentElement.classList.toggle("wide", !!wide); b.parentElement.classList.remove("pix-dialog"); $("modal").hidden = false;
+  b.parentElement.classList.toggle("wide", !!wide); b.parentElement.classList.remove("pix-dialog", "auth-dialog", "account-dialog"); $("modal").hidden = false;
+  const title = b.querySelector('h3');
+  if (title) { title.id = 'modalTitle'; title.tabIndex = -1; b.parentElement.setAttribute('aria-labelledby', title.id); title.focus({preventScroll:true}); }
+  else { b.parentElement.removeAttribute('aria-labelledby'); $("closeBtn").focus({preventScroll:true}); }
+  b.parentElement.scrollTop = 0;
 }
-function closeModal() { $("modal").hidden = true; }
+function closeModal() {
+  $("modal").hidden = true;
+  modalBackground.forEach((inert, el) => { el.inert = inert; }); modalBackground.clear();
+  if (modalOpener?.isConnected && !modalOpener.closest('[hidden], [inert]')) modalOpener.focus({preventScroll:true});
+}
+document.addEventListener('keydown', e => {
+  if ($('modal').hidden || document.querySelector('dialog[open]')) return;
+  if (e.key === 'Escape') { e.preventDefault(); closeModal(); return; }
+  if (e.key !== 'Tab') return;
+  const focusable = [...$('modal').querySelectorAll('button:not(:disabled), input:not(:disabled), a[href], summary, [tabindex="0"]')]
+    .filter(el => el.getClientRects().length && !el.closest('[hidden], [inert]'));
+  const first = focusable[0], last = focusable[focusable.length - 1];
+  if (!first) return;
+  if (e.shiftKey && (document.activeElement === first || !focusable.includes(document.activeElement))) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && (document.activeElement === last || !focusable.includes(document.activeElement))) { e.preventDefault(); first.focus(); }
+});
 function campo(rotulo, tipo, valor) {
   const i = h("input"); i.type = tipo; if (tipo !== "file" && valor != null) i.value = valor;
   i.id = 'campo-' + crypto.randomUUID();
   const label = h('label', null, rotulo); label.htmlFor = i.id;
-  const w = h("div"); w.append(label);
+  const w = h("div", "form-field"); w.append(label);
   if (tipo === "password") {
     const controle = h("div", "password-field");
     const mostrar = botao("Mostrar", "password-toggle", () => {
@@ -98,7 +125,92 @@ function tabela(cab, linhas) {
   const scroll = h("div", "table-scroll"); scroll.tabIndex = 0; scroll.setAttribute("role", "region");
   scroll.setAttribute("aria-label", "Tabela: " + cab.join(", ")); scroll.append(t); return scroll;
 }
-async function rodar(err, fn) { try { await fn(); } catch (e) { err.textContent = e.message; } }
+async function rodar(err, fn) { try { await fn(); } catch (e) { mostrarFeedback(err, e.message); } }
+
+/* Componentes de apresentação. As rotas, os corpos e as regras do servidor são preservados. */
+function mostrarFeedback(el, texto, sucesso = false) {
+  el.classList.toggle('is-success', sucesso); el.setAttribute('role', sucesso ? 'status' : 'alert');
+  el.textContent = texto;
+}
+function prepararCampo(c, op = {}, mensagemPadrao = 'Use de 8 a 100 caracteres, com letras e números.') {
+  Object.assign(c.i, {required:true, ...op});
+  const erro = h('span', 'field-error'); erro.id = c.i.id + '-erro'; erro.setAttribute('aria-live', 'polite');
+  c.i.setAttribute('aria-describedby', erro.id); c.w.append(erro);
+  const validar = () => {
+    const v = c.i.validity;
+    const mensagem = v.valid ? '' : v.valueMissing ? 'Preencha este campo.' : v.typeMismatch ? 'Informe um e-mail válido.' :
+      v.tooShort ? 'Use pelo menos ' + c.i.minLength + ' caracteres.' : v.patternMismatch ? mensagemPadrao : 'Confira o valor informado.';
+    erro.textContent = mensagem; c.i.setAttribute('aria-invalid', String(!v.valid));
+    return v.valid;
+  };
+  c.i.addEventListener('blur', () => { if (c.i.value) validar(); });
+  c.i.addEventListener('input', () => { if (c.i.getAttribute('aria-invalid') === 'true') validar(); });
+  c.i.addEventListener('invalid', e => { e.preventDefault(); validar(); });
+  return c;
+}
+function formularioConta(err, ok, enviar, carregando = 'Aguarde...') {
+  const form = h('form', 'account-form'); form.noValidate = true;
+  err.setAttribute('role', 'alert'); err.tabIndex = -1; ok.type = 'submit';
+  form.addEventListener('input', () => { if (err.classList.contains('is-success')) mostrarFeedback(err, ''); });
+  form.addEventListener('submit', async e => {
+    e.preventDefault(); if (ok.disabled) return;
+    if (!form.checkValidity()) {
+      form.querySelector(':invalid')?.focus(); return;
+    }
+    const texto = ok.textContent; ok.disabled = true; ok.textContent = carregando; ok.classList.add('is-loading');
+    form.setAttribute('aria-busy', 'true'); mostrarFeedback(err, '');
+    try { await enviar(); }
+    catch (error) { mostrarFeedback(err, error.message); if (err.isConnected) err.focus({preventScroll:true}); }
+    finally { ok.disabled = false; ok.textContent = texto; ok.classList.remove('is-loading'); form.removeAttribute('aria-busy'); }
+  });
+  return form;
+}
+function dicaSenha(c) {
+  const box = h('div', 'password-rules'); box.id = c.i.id + '-regras';
+  const regras = [['8 a 100 caracteres', s => s.length >= 8 && s.length <= 100], ['Uma letra', s => /[a-zA-Z]/.test(s)], ['Um número', s => /\d/.test(s)]];
+  regras.forEach(([texto, verificar]) => {
+    const regra = h('span', null, texto); box.append(regra);
+    c.i.addEventListener('input', () => regra.classList.toggle('is-met', verificar(c.i.value)));
+  });
+  c.i.setAttribute('aria-describedby', c.i.getAttribute('aria-describedby') + ' ' + box.id);
+  return box;
+}
+function tituloConta(titulo, descricao, categoria = 'SUA CONTA GOATSKINS') {
+  const head = h('header', 'account-heading');
+  head.append(h('p', 'auth-eyebrow', categoria), h('h3', null, titulo), h('p', 'auth-description', descricao)); return head;
+}
+function abrirAuth(titulo, descricao, nodes, modo = '') {
+  const shell = h('div', 'auth-shell'), visual = h('aside', 'auth-visual'), brand = h('div', 'auth-brand');
+  visual.setAttribute('aria-label', 'GOATSKINS');
+  const logo = h('img'); logo.src = 'logo-marca.webp'; logo.alt = ''; logo.width = 44; logo.height = 48;
+  const wordmark = h('span', null, 'GOAT'); wordmark.append(h('b', null, 'SKINS')); brand.append(logo, wordmark);
+  const copy = h('div', 'auth-visual-copy'), headline = h('h2', null, 'Seu próximo'); headline.append(h('span', null, 'capítulo no CS.'));
+  copy.append(h('p', 'auth-eyebrow', 'BEM-VINDO À GOATSKINS'), headline, h('p', null, 'Escolha seus números. Acompanhe os sorteios. Viva cada resultado.'));
+  const art = h('div', 'auth-art'), mascot = h('img'); mascot.src = 'mascote.webp'; mascot.alt = ''; mascot.width = 720; mascot.height = 984;
+  art.setAttribute('aria-hidden', 'true'); art.append(mascot);
+  visual.append(brand, copy, art, h('p', 'auth-visual-footer', 'SKINS DE CS. PERSONALIDADE GOAT.'));
+  const panel = h('section', 'auth-panel');
+  const mobileBrand = brand.cloneNode(true); mobileBrand.classList.add('auth-mobile-brand'); panel.append(mobileBrand);
+  if (modo === 'entrar' || modo === 'criar') {
+    const nav = h('nav', 'auth-nav'); nav.setAttribute('aria-label', 'Acesso à conta');
+    [['entrar', 'Login'], ['criar', 'Cadastro']].forEach(([key, label]) => {
+      const bt = botao(label, '', () => authModal(key)); bt.className = 'auth-tab';
+      if (key === modo) bt.setAttribute('aria-current', 'page'); nav.append(bt);
+    }); panel.append(nav);
+  }
+  panel.append(tituloConta(titulo, descricao, modo === 'criar' ? 'FAÇA PARTE' : modo === 'entrar' ? 'BOM TER VOCÊ DE VOLTA' : 'ACESSO E SEGURANÇA'), ...nodes);
+  const foot = h('p', 'auth-legal');
+  const termos = h('a', null, 'Termos de uso'), privacidade = h('a', null, 'Privacidade');
+  termos.href = '/termos.html'; privacidade.href = '/privacidade.html';
+  [termos, privacidade].forEach(a => { a.target = '_blank'; a.rel = 'noopener'; });
+  foot.append(termos, h('span', null, '·'), privacidade); panel.append(foot);
+  shell.append(visual, panel); openModal(false, shell); $('modalBody').parentElement.classList.add('auth-dialog');
+}
+function mensagemAuth(titulo, mensagem, textoAcao, acao, sucesso = true) {
+  const icon = h('div', 'auth-result' + (sucesso ? ' is-success' : ''), sucesso ? '✓' : '!'); icon.setAttribute('aria-hidden', 'true');
+  const bt = botao(textoAcao, 'auth-primary', acao);
+  abrirAuth(titulo, mensagem, [icon, bt], 'resultado');
+}
 
 /* ---------- Aparência vinda do servidor ---------- */
 function aplicarAparencia() {
@@ -304,19 +416,25 @@ function authModal(modo, emailInicial = "") {
   const nome = campo("Nome completo", "text"), email = campo("E-mail", "email", emailInicial), tel = campo("Celular com DDD", "tel");
   const pw = campo(reset ? "Nova senha" : "Senha", "password"), err = h("p", "err");
   mascaraCelular(tel.i);
-  pw.i.autocomplete = criar || reset ? "new-password" : "current-password";
+  prepararCampo(nome, {autocomplete:'name', minLength:2, maxLength:80, placeholder:'Como podemos chamar você?'});
+  prepararCampo(email, {autocomplete:'email', maxLength:120, placeholder:'voce@exemplo.com'}); email.i.autocapitalize = 'none'; email.i.spellcheck = false;
+  prepararCampo(tel, {placeholder:'(11) 99999-9999'});
+  prepararCampo(pw, {autocomplete:criar || reset ? 'new-password' : 'current-password', maxLength:100, placeholder:criar || reset ? 'Crie uma senha segura' : 'Sua senha'});
+  if (criar || reset) { pw.i.minLength = 8; pw.i.pattern = '(?=.*[a-zA-Z])(?=.*[0-9]).{8,100}'; }
   const ck1 = h("input"), ck2 = h("input"); ck1.type = ck2.type = "checkbox";
+  ck1.required = ck2.required = true;
+  [ck1, ck2].forEach(ck => {
+    ck.addEventListener('invalid', () => { ck.setAttribute('aria-invalid', 'true'); mostrarFeedback(err, 'Confirme a idade e aceite os termos e a política de privacidade.'); });
+    ck.addEventListener('change', () => ck.removeAttribute('aria-invalid'));
+  });
   const l1 = h("label", "check"), l2 = h("label", "check"), termos = h("span"), a1 = h("a", null, "Termos de uso"), a2 = h("a", null, "Política de privacidade");
   a1.href = "/termos.html"; a2.href = "/privacidade.html"; a1.target = a2.target = "_blank"; a1.rel = a2.rel = "noopener";
   termos.append("Li e aceito os ", a1, " e a ", a2, "."); l1.append(ck1, h("span", null, "Tenho 18 anos ou mais.")); l2.append(ck2, termos);
-  const dica = h("p", "muted", "A senha precisa ter 8 ou mais caracteres, com letras e números.");
-  const ok = botao(criar ? "Criar conta" : esq ? "Enviar link" : reset ? "Salvar nova senha" : "Entrar");
-  const enviar = () => {
-    if (ok.disabled) return;
-    ok.disabled = true; err.textContent = "";
-    return rodar(err, async () => {
-    if (esq) { await api("/api/esqueci-senha", "POST", { email: email.i.value }); return aviso("Confira seu e-mail", "Solicitação recebida. Se existir uma conta com esse e-mail, confira a caixa de entrada e o spam. Se não chegar, tente novamente mais tarde."); }
-    if (reset) { await api("/api/redefinir-senha", "POST", { token: modo.slice(6), senha: pw.i.value }); return aviso("Senha alterada", "Agora é só entrar com a nova senha."); }
+  const dica = dicaSenha(pw);
+  const ok = botao(criar ? "Criar conta" : esq ? "Enviar link" : reset ? "Salvar nova senha" : "Entrar", 'auth-primary');
+  const enviar = async () => {
+    if (esq) { await api("/api/esqueci-senha", "POST", { email: email.i.value }); return mensagemAuth("Confira seu e-mail", "Solicitação recebida. Se existir uma conta com esse e-mail, confira a caixa de entrada e o spam. Se não chegar, tente novamente mais tarde.", 'Voltar para entrar', () => authModal('entrar', email.i.value)); }
+    if (reset) { await api("/api/redefinir-senha", "POST", { token: modo.slice(6), senha: pw.i.value }); pw.i.value = ''; return mensagemAuth("Senha alterada", "Agora é só entrar com a nova senha.", 'Entrar', () => authModal('entrar')); }
     if (criar && (!ck1.checked || !ck2.checked)) throw new Error("Confirme a idade e aceite os termos e a política de privacidade.");
     const resposta = await api(criar ? "/api/registro" : "/api/login", "POST", criar ? { nome: nome.i.value, email: email.i.value, telefone: tel.i.value, senha: pw.i.value, maior18: ck1.checked, consentimento: ck2.checked } : { email: email.i.value, senha: pw.i.value });
     pw.i.value = "";
@@ -325,14 +443,18 @@ function authModal(modo, emailInicial = "") {
       return confirmarCadastroModal();
     }
     closeModal(); await carregar();
-  }).finally(() => { ok.disabled = false; });
   };
-  ok.addEventListener("click", enviar); pw.i.addEventListener("keydown", e => { if (e.key === "Enter") enviar(); });
-  const troca = h("div"); 
-  if (!criar && !esq && !reset) { const a = botao("Esqueci minha senha", "link", () => authModal("esqueci")), b = botao("Criar conta", "alt", () => authModal("criar")); a.className = "link"; troca.append(a, h("br"), b); }
-  else if (!reset) troca.append(botao("Voltar para entrar", "alt", () => authModal("entrar")));
+  const form = formularioConta(err, ok, enviar, criar ? 'Criando sua conta...' : esq ? 'Enviando link...' : reset ? 'Salvando senha...' : 'Entrando...');
+  const troca = h("div", 'auth-switch');
+  if (!criar && !esq && !reset) {
+    const recovery = h('div', 'auth-recovery'); recovery.append(botao('Esqueci minha senha', 'link', () => authModal('esqueci', email.i.value))); pw.w.append(recovery);
+    troca.append(h('span', null, 'Ainda não tem uma conta?'), botao('Criar conta', 'link', () => authModal('criar')));
+  } else if (criar) troca.append(h('span', null, 'Já faz parte da GOATSKINS?'), botao('Voltar para entrar', 'link', () => authModal('entrar')));
+  else troca.append(botao('Voltar para entrar', 'link', () => authModal('entrar', email.i.value)));
   const campos = criar ? [nome.w, email.w, tel.w, pw.w, dica, l1, l2] : esq ? [email.w] : reset ? [pw.w, dica] : [email.w, pw.w];
-  openModal(false, h("h3", null, criar ? "Criar conta" : esq ? "Recuperar senha" : reset ? "Nova senha" : "Entrar"), ...campos, err, ok, troca);
+  form.append(...campos, err, ok);
+  const descriptions = criar ? 'Seu acesso aos sorteios começa aqui. Preencha seus dados para criar sua conta.' : esq ? 'Informe o e-mail da sua conta para receber o link de redefinição.' : reset ? 'Escolha uma nova senha para proteger o acesso à sua conta.' : 'Entre para escolher seus números e acompanhar suas participações.';
+  abrirAuth(criar ? 'Criar conta' : esq ? 'Recuperar senha' : reset ? 'Nova senha' : 'Entrar', descriptions, [form, troca], modo);
 }
 
 let confirmacaoPendente = null;
@@ -344,52 +466,60 @@ function guardarConfirmacao(dados) {
 function confirmarCadastroModal() {
   const p = confirmacaoPendente;
   if (!p || p.cadastro_expira_em <= Date.now()) { guardarConfirmacao(null); return authModal("criar"); }
-  const codigo = campo("Código de 6 dígitos", "text"), err = h("p", "err"), status = h("p", "muted");
+  const codigo = campo("Código de 6 dígitos", "text"), err = h("p", "err"), status = h("p", "code-status");
   codigo.i.id = "codigoCadastro"; codigo.w.querySelector("label").htmlFor = codigo.i.id;
   codigo.i.inputMode = "numeric"; codigo.i.autocomplete = "one-time-code";
   codigo.i.maxLength = 6; codigo.i.pattern = "[0-9]{6}";
+  prepararCampo(codigo, {placeholder:'000000'}, 'Digite os seis dígitos do código.'); codigo.w.classList.add('code-field');
   codigo.i.addEventListener("input", () => { codigo.i.value = codigo.i.value.replace(/\D/g, "").slice(0, 6); });
   err.setAttribute("role", "alert");
-  const box = h("div", "confirmacao-cadastro"); let ocupado = false;
-  const confirmar = botao("Confirmar e-mail", "", async () => {
-    if (ocupado) return;
-    if (!/^\d{6}$/.test(codigo.i.value)) { err.textContent = "Digite os seis dígitos do código."; return; }
-    ocupado = true; atualizar(); err.textContent = "";
+  const box = h("form", "confirmacao-cadastro"); box.noValidate = true; let ocupado = false, acao = '';
+  const confirmar = botao('Confirmar e-mail', 'auth-primary');
+  const confirmarCodigo = async () => {
+    if (ocupado || confirmar.disabled) return;
+    if (!/^\d{6}$/.test(codigo.i.value)) { codigo.i.setAttribute('aria-invalid', 'true'); mostrarFeedback(err, "Digite os seis dígitos do código."); codigo.i.focus(); return; }
+    ocupado = true; acao = 'confirmar'; atualizar(); mostrarFeedback(err, '');
     try {
       await api("/api/confirmar-cadastro", "POST", { token: p.token, codigo: codigo.i.value });
       guardarConfirmacao(null); await carregar();
-      openModal(false, h("h3", null, "E-mail confirmado!"), h("p", null, "Entre com seu e-mail e senha para participar."), botao("Entrar", "", () => authModal("entrar", p.email)));
-    } catch (e) { err.textContent = e.message; }
+      mensagemAuth("E-mail confirmado!", "Entre com seu e-mail e senha para participar.", 'Entrar', () => authModal('entrar', p.email));
+    } catch (e) { mostrarFeedback(err, e.message); }
     finally { ocupado = false; atualizar(); }
-  });
+  };
   const reenviar = botao("Reenviar código", "alt", async () => {
     if (ocupado) return;
-    ocupado = true; atualizar(); err.textContent = "";
+    ocupado = true; acao = 'reenviar'; atualizar(); mostrarFeedback(err, '');
     try {
       const r = await api("/api/reenviar-verificacao", "POST", { token: p.token });
       Object.assign(p, r); guardarConfirmacao(p); codigo.i.value = "";
-      err.textContent = r.simulado ? "Modo de teste: o código está no arquivo local emails.log. Nenhum e-mail foi enviado." : "Solicitação processada. Confira seu e-mail e use apenas o código mais recente.";
-    } catch (e) { err.textContent = e.message; p.reenviar_em = Date.now() + 60000; guardarConfirmacao(p); }
+      mostrarFeedback(err, r.simulado ? "Modo de teste: o código está no arquivo local emails.log. Nenhum e-mail foi enviado." : "Solicitação processada. Confira seu e-mail e use apenas o código mais recente.", true);
+    } catch (e) { mostrarFeedback(err, e.message); p.reenviar_em = Date.now() + 60000; guardarConfirmacao(p); }
     finally { ocupado = false; atualizar(); }
   });
   const corrigir = botao("Corrigir e-mail / reiniciar", "link", async () => {
     if (ocupado) return;
-    ocupado = true; atualizar();
+    ocupado = true; acao = 'corrigir'; atualizar();
     try { await api("/api/cancelar-cadastro", "POST", { token: p.token }); guardarConfirmacao(null); authModal(p.modo, p.email); }
-    catch (e) { err.textContent = e.message; ocupado = false; atualizar(); }
+    catch (e) { mostrarFeedback(err, e.message); ocupado = false; atualizar(); }
   });
   function atualizar() {
     const restante = Math.max(0, Math.ceil((p.expira_em - Date.now()) / 1000)), espera = Math.max(0, Math.ceil((p.reenviar_em - Date.now()) / 1000));
     const acabou = p.cadastro_expira_em <= Date.now();
     status.textContent = acabou ? "Solicitação expirada. Reinicie o cadastro." : restante ? "Código válido por " + Math.floor(restante / 60) + ":" + String(restante % 60).padStart(2, "0") + "." : "Código expirado. Solicite um novo código.";
     confirmar.disabled = ocupado || !restante || acabou; reenviar.disabled = ocupado || espera > 0 || acabou; corrigir.disabled = ocupado;
-    reenviar.textContent = espera ? "Reenviar em " + espera + "s" : "Reenviar código";
+    confirmar.textContent = ocupado && acao === 'confirmar' ? 'Confirmando...' : 'Confirmar e-mail';
+    confirmar.classList.toggle('is-loading', ocupado && acao === 'confirmar');
+    box.setAttribute('aria-busy', String(ocupado));
+    reenviar.textContent = ocupado && acao === 'reenviar' ? 'Enviando...' : espera ? "Reenviar em " + espera + "s" : "Reenviar código";
   }
-  codigo.i.addEventListener("keydown", e => { if (e.key === "Enter" && !confirmar.disabled) confirmar.click(); });
-  box.append(h("h3", null, "Confirme seu e-mail"), h("p", null, "Endereço informado: " + p.email),
-    h("p", "muted", p.mensagem), codigo.w, status, err, confirmar, reenviar, corrigir);
+  confirmar.type = 'submit';
+  // O envio por clique e por Enter usa o mesmo handler e mantém a proteção contra duplicidade.
+  box.addEventListener('submit', e => { e.preventDefault(); confirmarCodigo(); });
+  const destino = h('div', 'verification-destination'); destino.append(h('span', null, 'ENDEREÇO INFORMADO'), h('strong', null, p.email));
+  status.id = codigo.i.id + '-prazo'; codigo.i.setAttribute('aria-describedby', codigo.i.getAttribute('aria-describedby') + ' ' + status.id);
+  box.append(destino, h("p", "muted", p.mensagem), codigo.w, status, err, confirmar, reenviar, corrigir);
   if (p.simulado) box.append(h("p", "muted", "TESTE LOCAL: código em data/emails.log; não há envio real."));
-  openModal(false, box); atualizar(); codigo.i.focus();
+  abrirAuth('Confirme seu e-mail', 'Enviamos um código para confirmar que este e-mail é seu. Confira também a pasta de spam.', [box], 'verificar'); atualizar();
   const timer = setInterval(() => { if (!box.isConnected || $("modal").hidden) clearInterval(timer); else atualizar(); }, 1000);
 }
 function verificarEmailModal() { return confirmacaoPendente ? confirmarCadastroModal() : authModal("entrar"); }
@@ -558,16 +688,38 @@ async function conta() {
   tel.i.value = (p.celular || p.telefone || "").replace(/^\+55/, "");
   mascaraCelular(tel.i); tel.i.dispatchEvent(new Event("input"));
   const atual = campo("Senha atual", "password"), nova = campo("Nova senha", "password"), err2 = h("p", "err"), del = campo("Senha para confirmar a exclusão", "password"), err3 = h("p", "err");
-  const notas = h("div"); const ns = await api("/api/notificacoes");
+  prepararCampo(nome, {autocomplete:'name', minLength:2, maxLength:80}); prepararCampo(tel, {placeholder:'(11) 99999-9999'});
+  prepararCampo(atual, {autocomplete:'current-password', maxLength:100});
+  prepararCampo(nova, {autocomplete:'new-password', minLength:8, maxLength:100, pattern:'(?=.*[a-zA-Z])(?=.*[0-9]).{8,100}'});
+  prepararCampo(del, {autocomplete:'current-password', maxLength:100});
+  const notas = h("div", 'account-notifications'); const ns = await api("/api/notificacoes");
   if (!ns.length) notas.append(h("p", "muted", "Nenhuma notificação."));
-  ns.forEach(n => { const d = h("p", null); d.append(h("b", null, (n.lida ? "" : "● ") + n.titulo + " "), h("span", "muted", dataHora(n.criado_em) + " — " + n.texto)); notas.append(d); });
+  ns.forEach(n => { const d = h("article", 'account-notification'); d.append(h("b", null, (n.lida ? "" : "● ") + n.titulo), h('p', 'muted', n.texto), h("small", "muted", dataHora(n.criado_em))); notas.append(d); });
   if (S.naoLidas) { api("/api/notificacoes/lidas", "POST").then(() => { S.naoLidas = 0; render(); }); }
-  openModal(true, h("h3", null, "Minha conta"), h("p", "muted", p.email + (p.email_verificado ? " · e-mail confirmado" : " · e-mail NÃO confirmado")),
-    h("h4", null, "Dados"), nome.w, tel.w, err, botao("Salvar dados", "", () => rodar(err, async () => { await api("/api/conta", "PUT", { nome: nome.i.value, telefone: tel.i.value }); await carregar(); err.textContent = "Salvo!"; })),
-    h("h4", null, "Alterar senha"), atual.w, nova.w, err2, botao("Alterar senha", "", () => rodar(err2, async () => { await api("/api/conta/senha", "POST", { atual: atual.i.value, nova: nova.i.value }); atual.i.value = nova.i.value = ""; err2.textContent = "Senha alterada! Outros dispositivos foram desconectados."; })),
-    h("h4", null, "Notificações"), notas,
-    h("h4", null, "Excluir minha conta (LGPD)"), h("p", "muted", "Remove seu nome, e-mail e telefone. Esta ação não pode ser desfeita."), del.w, err3,
-    botao("Excluir minha conta", "alt", () => rodar(err3, async () => { if (!confirm("Tem certeza? Isso não pode ser desfeito.")) return; await api("/api/conta/excluir", "POST", { senha: del.i.value }); await carregar(); aviso("Conta excluída", "Seus dados pessoais foram removidos."); })));
+  const salvar = botao('Salvar dados'), senha = botao('Alterar senha'), excluir = botao('Excluir minha conta', 'danger-button');
+  const dadosForm = formularioConta(err, salvar, async () => {
+    const atualizado = await api('/api/conta', 'PUT', {nome:nome.i.value, telefone:tel.i.value}); await carregar();
+    info.querySelector('strong').textContent = atualizado.nome; avatar.textContent = atualizado.nome.trim().slice(0,1).toUpperCase();
+    mostrarFeedback(err, 'Dados atualizados com sucesso.', true);
+  }, 'Salvando...');
+  dadosForm.append(nome.w, tel.w, err, salvar);
+  const senhaForm = formularioConta(err2, senha, async () => { await api('/api/conta/senha', 'POST', {atual:atual.i.value, nova:nova.i.value}); atual.i.value = nova.i.value = ''; nova.i.dispatchEvent(new Event('input')); mostrarFeedback(err2, 'Senha alterada! Outros dispositivos foram desconectados.', true); }, 'Alterando senha...');
+  senhaForm.append(atual.w, nova.w, dicaSenha(nova), err2, senha);
+  const excluirForm = formularioConta(err3, excluir, async () => { if (!confirm('Tem certeza? Isso não pode ser desfeito.')) return; await api('/api/conta/excluir', 'POST', {senha:del.i.value}); await carregar(); mensagemAuth('Conta excluída', 'Seus dados pessoais foram removidos.', 'Voltar aos sorteios', closeModal); }, 'Excluindo conta...');
+  excluirForm.append(h('p', 'muted', 'Remove seu nome, e-mail e telefone. Esta ação não pode ser desfeita.'), del.w, err3, excluir);
+  const wrapper = h('div', 'account-shell'), head = tituloConta('Minha conta', 'Gerencie seus dados, sua segurança e suas notificações.');
+  const identity = h('div', 'account-identity'), avatar = h('span', 'account-avatar', p.nome.trim().slice(0,1).toUpperCase()), info = h('div');
+  avatar.setAttribute('aria-hidden', 'true'); info.append(h('strong', null, p.nome), h('p', 'muted', p.email));
+  const badge = h('span', 'account-status' + (p.email_verificado ? ' is-verified' : ''), p.email_verificado ? 'E-mail confirmado' : 'E-mail pendente');
+  identity.append(avatar, info, badge);
+  const grid = h('div', 'account-grid');
+  function card(titulo, descricao, conteudo) {
+    const section = h('section', 'account-card'); section.append(h('h4', null, titulo), h('p', 'muted', descricao), conteudo); return section;
+  }
+  grid.append(card('Dados pessoais', 'Mantenha suas informações de contato atualizadas.', dadosForm), card('Segurança', 'Uma senha forte ajuda a proteger sua conta.', senhaForm));
+  const danger = h('details', 'account-danger'); danger.append(h('summary', null, 'Excluir minha conta (LGPD)'), excluirForm);
+  wrapper.append(head, identity, grid, card('Notificações', 'Atualizações sobre sua conta e suas participações.', notas), danger);
+  openModal(true, wrapper); $('modalBody').parentElement.classList.add('account-dialog');
 }
 
 /* ---------- Painel admin ---------- */
@@ -716,7 +868,7 @@ function menuAberto(aberto, guardar) {
 }
 $("menuBtn").addEventListener("click", () => menuAberto(document.body.classList.contains("menu-closed"), true));
 $("scrim").addEventListener("click", () => menuAberto(false));
-document.addEventListener("keydown", e => { if (e.key === "Escape" && mobileMQ.matches && !document.body.classList.contains("menu-closed")) menuAberto(false); });
+document.addEventListener("keydown", e => { if (!e.defaultPrevented && !document.querySelector('dialog[open]') && e.key === "Escape" && mobileMQ.matches && !document.body.classList.contains("menu-closed")) menuAberto(false); });
 mobileMQ.addEventListener("change", () => menuAberto(!mobileMQ.matches));
 (() => { let pref = null; try { if (window.GoatskinsCookies?.allowsPreferences()) pref = localStorage.getItem("menu"); } catch (e) { /* ignora */ } menuAberto(mobileMQ.matches ? false : pref !== "0"); })();
 
@@ -731,8 +883,8 @@ $("contaBtn").addEventListener("click", () => conta().catch(e => aviso("Ops", e.
 $("adminBtn").addEventListener("click", () => painel("painel"));
 carregar().then(() => {
   const q = new URLSearchParams(location.search);
-  if (q.get("msg") === "email-verificado") aviso("E-mail confirmado!", "Pronto, agora você já pode participar dos sorteios.");
-  else if (q.get("msg") === "link-invalido") aviso("Link inválido", "Este link antigo não é mais válido. Entre com seu e-mail e senha para solicitar um código de confirmação.");
+  if (q.get("msg") === "email-verificado") mensagemAuth("E-mail confirmado!", "Pronto, agora você já pode participar dos sorteios.", 'Continuar', closeModal);
+  else if (q.get("msg") === "link-invalido") mensagemAuth("Link inválido", "Este link antigo não é mais válido. Entre com seu e-mail e senha para solicitar um código de confirmação.", 'Entrar', () => authModal('entrar'), false);
   else {
     const tk = q.get("redefinir") || new URLSearchParams(location.hash.slice(1)).get("redefinir");
     if (tk && /^[a-f0-9]{64}$/.test(tk)) authModal("reset:" + tk);
@@ -755,13 +907,14 @@ window.addEventListener("popstate",()=>{
   render();
 });
 
-/* Security dialogs use the existing visual components. Passwords/secrets never enter storage. */
+/* Verificação Turnstile */
 let turnstileScript;
 async function desafioSeguranca(action) {
   const config = await api('/api/seguranca');
   if (!config.turnstileSiteKey) throw new Error('Verificação indisponível.');
   const overlay = document.createElement('dialog'), title=h('h3',null,'Verificação de segurança'), box=h('div'), err=h('p','err');
   overlay.className = 'turnstile-dialog';
+  title.id = 'turnstileTitle'; overlay.setAttribute('aria-labelledby', title.id); err.setAttribute('role', 'alert');
   overlay.append(title,box,err);document.body.append(overlay);overlay.showModal();
   try {
     if (!window.turnstile) {
@@ -799,11 +952,10 @@ async function celularModal() {
   const p=await api('/api/celular'),tel=campo('Celular com DDD','tel',(p.celular||'').replace(/^\+55/,''));
   mascaraCelular(tel.i);tel.i.dispatchEvent(new Event('input'));
   const err=h('p','err');err.setAttribute('role','alert');
-  const save=botao('Salvar celular','',()=>rodar(err,async()=>{
-    save.disabled=true;
-    try {await api('/api/celular','POST',{telefone:tel.i.value});closeModal();await carregar();}
-    finally {save.disabled=false;}
-  }));
-  openModal(false,h('h3',null,'Concluir cadastro'),h('p','muted','Informe um celular brasileiro com DDD para participar.'),tel.w,err,save,
-    botao('Sair','alt',()=>rodar(err,sairDaConta)));
+  prepararCampo(tel, {placeholder:'(11) 99999-9999'});
+  const save=botao('Salvar celular','auth-primary');
+  const form=formularioConta(err,save,async()=>{await api('/api/celular','POST',{telefone:tel.i.value});closeModal();await carregar();},'Salvando celular...');
+  form.append(tel.w,h('p','field-hint','Inclua o DDD e os nove dígitos do celular.'),err,save);
+  const exit=h('div','auth-switch'); exit.append(botao('Sair','link',()=>rodar(err,sairDaConta)));
+  abrirAuth('Concluir cadastro','Informe um celular brasileiro com DDD para participar.',[form,exit],'celular');
 }
