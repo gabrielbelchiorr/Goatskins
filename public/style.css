@@ -464,9 +464,14 @@ body:has(.pending-pix:not([hidden])) .sale-checkout { bottom:calc(var(--pending-
 }
 .auth-dialog .x,.account-dialog .x{
   z-index:5;top:16px;right:16px;width:36px;height:36px;border-radius:50%;
+  display:grid;place-items:center;padding:0;line-height:1;
   border-color:#405169;background:#122238;color:#bec9d7;font-size:0;font-weight:400;
 }
-.auth-dialog .x::before,.account-dialog .x::before{content:'×';font-size:25px;line-height:1}
+.auth-dialog .x::before,.account-dialog .x::before{
+  content:'';position:absolute;inset:0;margin:auto;display:block;width:18px;height:18px;background:currentColor;
+  --close-icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='m5 5 14 14M5 19 19 5'/%3E%3C/svg%3E");
+  mask:var(--close-icon) center/contain no-repeat;-webkit-mask:var(--close-icon) center/contain no-repeat;
+}
 .auth-dialog .x:hover,.account-dialog .x:hover{background:#25354b;color:#fff;border-color:var(--gold)}
 .auth-shell{display:grid;grid-template-columns:minmax(0,.86fr) minmax(0,1.14fr);min-height:656px}
 .auth-visual{
