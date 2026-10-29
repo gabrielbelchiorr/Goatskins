@@ -46,9 +46,14 @@ async function despachar(req, res, rota, body) {
     }
     const ctx = { req, res, body, user, ip: ipDe(req), params: m.slice(1), query: Object.fromEntries(req.urlObj.searchParams) };
     if (administrativa) await require('./src/mfa').exigir(ctx);
-    if (metodo === 'POST' && /^\/api\/campanhas\/\d+\/(numeros|pedidos)$/.test(rota))
-      require('./src/phone').exigir(user);
-    return administrativa ? comAutorizacao(() => require('./src/mfa').exigir(ctx), () => fn(ctx)) : fn(ctx);
+    const participacao = metodo === 'POST' && /^\/api\/campanhas\/\d+\/(numeros|pedidos)$/.test(rota);
+    if (participacao) require('./src/phone').exigir(user);
+    if (administrativa) return comAutorizacao(() => require('./src/mfa').exigir(ctx), () => fn(ctx));
+    if (guarda === 'user') return comAutorizacao(async () => {
+      const atual = await auth.exigirSessao(ctx);
+      if (participacao) require('./src/phone').exigir(atual);
+    }, () => fn(ctx), { antesCommit: false });
+    return fn(ctx);
   }
   throw new Erro("Rota não encontrada.", 404);
 }

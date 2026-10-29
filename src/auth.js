@@ -1,7 +1,7 @@
 /* Autenticação, conta, e-mail, notificações. */
 const crypto = require("node:crypto"), registration = require("./registration");
 const cfg = require("./config"), mail = require("./mail");
-const { db, sha, agora, tx, audit, notificar } = require("./db");
+const { db, sha, agora, tx, audit, notificar, comAutorizacao } = require("./db");
 const { Erro, RE, txt, limite, cookie, ipDe } = require("./http");
 
 const MAX_FALHAS = 5, BLOQUEIO_MS = 15 * 60e3, SESSAO_MS = 7 * 864e5;
@@ -30,9 +30,11 @@ async function abrirSessao(ctx, uid, hashEsperado) {
   const t = crypto.randomBytes(32).toString("hex");
   // Participa da mesma trava transacional das revogações, inclusive quando chamada após /conta/senha.
   // Sem tx, o MVCC poderia ler o hash anterior de um reset ainda sem commit e criar uma sessão após seu DELETE.
-  const r = await tx(() => db.get(`INSERT INTO sessions(token,user_id,expira)
+  // A abertura autentica pelo hash de senha conferido, inclusive após a troca que revogou
+  // o cookie anterior. A autorização herdada por esse cookie não é a credencial aqui.
+  const r = await comAutorizacao(null, () => tx(() => db.get(`INSERT INTO sessions(token,user_id,expira)
     SELECT ?,id,? FROM users WHERE id=? AND status='ACTIVE' AND email_verificado=1 AND hash=? RETURNING user_id`,
-    [sha(t), Date.now() + SESSAO_MS, uid, hashEsperado]));
+    [sha(t), Date.now() + SESSAO_MS, uid, hashEsperado])));
   if (!r) throw new Erro("Não foi possível entrar. Tente novamente.", 401);
   const seguro = cfg.PRODUCAO || ctx.req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
   ctx.res.setHeader("Set-Cookie", "sid=" + t + "; HttpOnly; SameSite=Lax; Path=/; Max-Age=" + SESSAO_MS / 1000 + seguro);
@@ -46,6 +48,14 @@ async function usuarioDaSessao(req) {
   const phone = require('./phone');
   u.celular_preenchido = phone.valid(u.celular) || phone.valid(u.telefone);
   delete u.celular; delete u.telefone;
+  return u;
+}
+/* Revalidar na entrada da transação, depois de adquirir a mesma trava das
+   revogações. O usuário resolvido pelo dispatcher pode ter sido excluído ou
+   perdido sua sessão enquanto a requisição aguardava a vez de gravar. */
+async function exigirSessao(ctx) {
+  const u = await usuarioDaSessao(ctx.req);
+  if (!u || !ctx.user || u.id !== ctx.user.id) throw new Erro("Entre na sua conta.", 401);
   return u;
 }
 setInterval(() => {
@@ -194,6 +204,6 @@ const rotas = [
     ctx.res.setHeader("Set-Cookie", "sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0" + (cfg.PRODUCAO ? "; Secure" : "")); return { ok: true };
   }, "user"],
   ["GET", /^\/api\/notificacoes$/, ctx => db.all("SELECT id, titulo, texto, lida, criado_em FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 30", [ctx.user.id]), "user"],
-  ["POST", /^\/api\/notificacoes\/lidas$/, async ctx => { await db.run("UPDATE notifications SET lida=1 WHERE user_id=?", [ctx.user.id]); return { ok: true }; }, "user"]
+  ["POST", /^\/api\/notificacoes\/lidas$/, async ctx => { await tx(() => db.run("UPDATE notifications SET lida=1 WHERE user_id=?", [ctx.user.id])); return { ok: true }; }, "user"]
 ];
-module.exports = { abrirSessao, rotas, usuarioDaSessao, hashSenha, confere, senhaOk, ipDe };
+module.exports = { abrirSessao, rotas, usuarioDaSessao, exigirSessao, hashSenha, confere, senhaOk, ipDe };
