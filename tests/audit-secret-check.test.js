@@ -15,6 +15,7 @@ test('secret heuristics identify supported synthetic formats and return no match
     ['resend-token', 're_' + 'aB7'.repeat(12)],
     ['mercadopago-token', 'APP_USR-' + '12ab-'.repeat(16)],
     ['assigned-hex-secret', 'MP_WEBHOOK_SECRET=' + 'af'.repeat(32)],
+    ['assigned-hex-secret', 'MFA_ENCRYPTION_KEY=' + 'ba'.repeat(32)],
     ['assigned-hex-secret', '"TWILIO_AUTH_TOKEN": "' + 'a1'.repeat(16) + '"']
   ];
   for (const [rule, value] of fixtures) {

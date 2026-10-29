@@ -10,7 +10,7 @@ const TEST_URL = require('../scripts/banco-teste').bancoTeste(process.env.TEST_D
 const test = (nome, fn) => _test(nome, { timeout: 60000, skip: PODE ? false : "defina TEST_DATABASE_URL (banco PostgreSQL descartável)" }, fn);
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), "goat-")), PORT = 3300 + Math.floor(Math.random() * 500), BASE = "http://localhost:" + PORT;
 const MP_PORT = 4300 + Math.floor(Math.random() * 400), SEGREDO = "segredo-de-teste", TOKEN = "TOKEN-DE-TESTE-NAO-VAZAR";
-const env = { ...process.env, DATABASE_URL: TEST_URL, DATABASE_SSL: "0", DATA_DIR: DIR, PORT: String(PORT), TESTE: "1", EMAIL_DRIVER: "console", APP_URL: BASE, NODE_ENV: "test", RENDER: "", EMAIL_CODE_SECRET: "a".repeat(64),
+const env = { ...process.env, DATABASE_URL: TEST_URL, DATABASE_SSL: "0", DATA_DIR: DIR, PORT: String(PORT), TESTE: "1", EMAIL_DRIVER: "console", APP_URL: BASE, NODE_ENV: "test", RENDER: "", EMAIL_CODE_SECRET: "a".repeat(64), MFA_ENCRYPTION_KEY: crypto.randomBytes(32).toString('hex'),
   MP_ACCESS_TOKEN: TOKEN, MP_WEBHOOK_SECRET: SEGREDO, MP_API_BASE: "http://localhost:" + MP_PORT, RESERVA_SEGUNDOS: "3",
   ORIGIN_VERIFY_SECRET:'', TURNSTILE_SITE_KEY:'', TURNSTILE_SECRET_KEY:'', TURNSTILE_HOSTNAMES:'', };
 let srv;
@@ -67,7 +67,7 @@ function cliente() {
     const dados = await r.json().catch(() => ({}));
     return { status: r.status, dados, loc: r.headers.get("location") };
   };
-  return { get: u => chamar("GET", u), post: (u, b) => chamar("POST", u, b || {}), put: (u, b) => chamar("PUT", u, b || {}), del: u => chamar("DELETE", u), chamar };
+  return { get: u => chamar("GET", u), post: (u, b) => chamar("POST", u, b || {}), put: (u, b) => chamar("PUT", u, b || {}), del: u => chamar("DELETE", u), chamar, sidDeFixture: () => sid };
 }
 const emailsDe = para => fs.readFileSync(path.join(DIR, "emails.log"), "utf8").split("=== ").filter(b => b.startsWith("para: " + para));
 const liberarEnvio = email => dbLer("DELETE FROM auth_rate_limits WHERE chave=?", "email:" + crypto.createHash("sha256").update(email).digest("hex"));
@@ -93,7 +93,18 @@ async function novoUsuario(verificar = true) {
   }
   return { c, email, token: r.dados.token };
 }
-async function adminLogado() { const c = cliente(); assert.equal((await c.post("/api/login", { email: "admin@teste.com", senha: "Admin1234" })).status, 200); return c; }
+/* Fixtures privilegiadas SOMENTE no banco descartável validado acima: esta suíte testa regras financeiras.
+   MFA real, enrollment, senha, replay, limites e rotação têm suíte HTTP própria, sem bypass na aplicação. */
+function elevarFixture(c,email) {
+  const uid=dbLer('SELECT id FROM users WHERE email=?',email)[0].id;
+  const iv=crypto.randomBytes(12),cipher=crypto.createCipheriv('aes-256-gcm',Buffer.from(env.MFA_ENCRYPTION_KEY,'hex'),iv);
+  cipher.setAAD(Buffer.from('GOATSKINS:admin-mfa:v1:'+uid));
+  const body=Buffer.concat([cipher.update('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP','utf8'),cipher.final()]);
+  const encrypted=['v1',iv.toString('base64'),cipher.getAuthTag().toString('base64'),body.toString('base64')].join('.');
+  dbLer("INSERT INTO admin_mfa(user_id,secret,enabled) VALUES(?,?,1) ON CONFLICT(user_id) DO NOTHING",uid,encrypted);
+  dbLer('UPDATE sessions s SET mfa_until=?,mfa_role=u.role FROM users u WHERE s.user_id=u.id AND u.id=? AND s.token=?',Date.now()+900000,uid,crypto.createHash('sha256').update(c.sidDeFixture()).digest('hex'));
+}
+async function adminLogado() { const c = cliente(); assert.equal((await c.post("/api/login", { email: "admin@teste.com", senha: "Admin1234" })).status, 200); elevarFixture(c,'admin@teste.com'); return c; }
 async function novoSorteio(adm, over = {}) {
   const r = await adm.post("/api/admin/campanhas", { premio: "Skin Teste", desgaste: "FT", valor: 100, fim: "2026-12-31", max: 5, max_por_usuario: 1, ...over });
   assert.equal(r.status, 200, JSON.stringify(r.dados)); const e = await adm.get("/api/estado"); assert.equal(e.status,200,JSON.stringify(e.dados)); return e.dados.c[e.dados.c.length - 1];
@@ -584,6 +595,8 @@ test("hierarquia: ADMIN comum não promove ninguém, não mexe em outro ADMIN ne
   assert.equal((await sup.put("/api/admin/usuarios/" + idA + "/papel", { role: "ADMIN" })).status, 200);
   assert.equal((await a.c.get("/api/admin/dashboard")).status, 401); // mudança de papel revoga sessões
   assert.equal((await a.c.post("/api/login",{email:a.email,senha:"Senha1234"})).status,200);
+  assert.equal((await a.c.get("/api/admin/dashboard")).dados.tipo,'MFA_REQUIRED');
+  elevarFixture(a.c,a.email);
   assert.equal((await a.c.get("/api/admin/dashboard")).status,200);
   assert.equal((await a.c.put("/api/admin/usuarios/" + idB + "/papel", { role: "ADMIN" })).status, 403);
   assert.equal((await a.c.put("/api/admin/usuarios/" + idSup + "/status", { status: "SUSPENDED" })).status, 403);
@@ -717,7 +730,8 @@ test('conta antiga não verificada perde acesso; confirma com senha + código pr
   assert.equal((await confirmar(c,r.dados.token,codigoDe(p.email))).status,200);
   const depois=dbLer('SELECT id,hash,role,email_verificado FROM users WHERE email=?',p.email)[0];
   assert.equal(depois.id,u.id);assert.equal(depois.hash,u.hash);assert.equal(depois.role,'ADMIN');assert.equal(depois.email_verificado,1);
-  assert.equal((await c.post('/api/login',{email:p.email,senha:'Senha1234'})).status,200);assert.equal((await c.get('/api/admin/dashboard')).status,200);
+  assert.equal((await c.post('/api/login',{email:p.email,senha:'Senha1234'})).status,200);
+  const acessoAdmin=await c.get('/api/admin/dashboard');assert.equal(acessoAdmin.status,403);assert.equal(acessoAdmin.dados.tipo,'MFA_REQUIRED');
 });
 
 test('falha no envio retorna 503, persiste código desativado e não cria usuário',async()=>{

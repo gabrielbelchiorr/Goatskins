@@ -21,7 +21,7 @@ const brl = v => "R$ " + Number(v).toLocaleString("pt-BR", { minimumFractionDigi
 const admin = () => !!S.eu && (S.eu.role === "ADMIN" || S.eu.role === "SUPER_ADMIN");
 
 /* Requisições à API com o cabeçalho exigido pela proteção CSRF. */
-async function api(url, method, body) {
+async function api(url, method, body, mfaRetry = false) {
   const r = await fetch(url, { method: method || "GET", credentials: "same-origin", signal: AbortSignal.timeout(20000),
     headers: { "Content-Type": "application/json", "X-Requested-With": "goatskins" }, body: body ? JSON.stringify(body) : undefined });
   const d = await r.json().catch(() => ({}));
@@ -30,6 +30,19 @@ async function api(url, method, body) {
     const token = await desafioSeguranca(action);
     const retry = await fetch(url, {method: method || "GET", credentials:"same-origin", signal:AbortSignal.timeout(20000), headers:{"Content-Type":"application/json","X-Requested-With":"goatskins"}, body:JSON.stringify({...body,turnstileToken:token})});
     const result = await retry.json(); if(!retry.ok) throw new Error(result.erro || "Falha na verificação."); return result;
+  }
+  if (!r.ok && d.tipo === 'MFA_REQUIRED' && url.startsWith('/api/admin/') && !mfaRetry && admin()) {
+    const retomar = retomarPainelAdmin;
+    const verified = await exigirMfaAdmin();
+    if (verified && (!method || method === 'GET')) {
+      if (retomar) retomar();
+      return api(url, method, body, true);
+    }
+    if (verified) {
+      painel(destinoAdmin.aba, destinoAdmin.editar, 'Verificação concluída. Revise e confirme a ação novamente.');
+      throw new Error('Verificação concluída. A ação anterior não foi executada; confirme novamente.');
+    }
+    throw new Error('Confirme a autenticação em duas etapas para acessar a administração.');
   }
   if (!r.ok) throw new Error(d.erro || (r.status === 429 ? "Muitas tentativas. Aguarde um pouco." : r.status >= 500 ? "Erro no servidor. Tente novamente em instantes." : "Erro " + r.status));
   return d;
@@ -59,6 +72,9 @@ function lerFoto(file, cb) {
 
 /* ---------- Janela (modal) e campos ---------- */
 let modalOpener = null;
+let mfaPendente = null;
+let destinoAdmin = {aba:'painel', editar:undefined};
+let retomarPainelAdmin = null;
 const modalBackground = new Map();
 function openModal(wide, ...nodes) {
   if ($("modal").hidden) {
@@ -68,13 +84,18 @@ function openModal(wide, ...nodes) {
     });
   }
   const b = $("modalBody"); b.innerHTML = ""; b.append(...nodes);
-  b.parentElement.classList.toggle("wide", !!wide); b.parentElement.classList.remove("pix-dialog", "auth-dialog", "account-dialog"); $("modal").hidden = false;
+  b.parentElement.classList.toggle("wide", !!wide); b.parentElement.classList.remove("pix-dialog", "auth-dialog", "account-dialog", "mfa-dialog"); $("modal").hidden = false;
   const title = b.querySelector('h3');
   if (title) { title.id = 'modalTitle'; title.tabIndex = -1; b.parentElement.setAttribute('aria-labelledby', title.id); title.focus({preventScroll:true}); }
   else { b.parentElement.removeAttribute('aria-labelledby'); $("closeBtn").focus({preventScroll:true}); }
   b.parentElement.scrollTop = 0;
 }
 function closeModal() {
+  if (mfaPendente?.busy) return;
+  if (mfaPendente) {
+    const pending = mfaPendente; mfaPendente = null;
+    $('modalBody').replaceChildren(); pending.resolve(false);
+  }
   $("modal").hidden = true;
   modalBackground.forEach((inert, el) => { el.inert = inert; }); modalBackground.clear();
   if (modalOpener?.isConnected && !modalOpener.closest('[hidden], [inert]')) modalOpener.focus({preventScroll:true});
@@ -114,6 +135,7 @@ function campo(rotulo, tipo, valor) {
 async function sairDaConta() {
   if (!confirm("Tem certeza de que deseja sair da sua conta?")) return;
   await api("/api/logout", "POST");
+  retomarPainelAdmin = null; destinoAdmin = {aba:'painel', editar:undefined};
   closeModal();
   await carregar();
 }
@@ -210,6 +232,133 @@ function mensagemAuth(titulo, mensagem, textoAcao, acao, sucesso = true) {
   const icon = h('div', 'auth-result' + (sucesso ? ' is-success' : ''), sucesso ? '✓' : '!'); icon.setAttribute('aria-hidden', 'true');
   const bt = botao(textoAcao, 'auth-primary', acao);
   abrirAuth(titulo, mensagem, [icon, bt], 'resultado');
+}
+
+/* A autorização administrativa é sempre confirmada pelo servidor. Segredos e
+   códigos de recuperação permanecem apenas neste modal, sem armazenamento web. */
+function exigirMfaAdmin() {
+  if (!admin()) return Promise.resolve(false);
+  if (mfaPendente) return mfaPendente.promise;
+  let resolver;
+  const pending = {promise:new Promise(resolve => { resolver = resolve; }), resolve:resolver};
+  mfaPendente = pending;
+  const ativo = () => mfaPendente === pending;
+  const terminar = () => {
+    if (!ativo()) return;
+    mfaPendente = null; $('modalBody').replaceChildren(); closeModal(); pending.resolve(true);
+  };
+  const abrir = (titulo, descricao, nodes) => {
+    if (!ativo()) return;
+    abrirAuth(titulo, descricao, nodes, 'mfa');
+    $('modalBody').parentElement.classList.add('mfa-dialog');
+  };
+  const sair = () => {
+    const row = h('div', 'auth-switch'), err = h('p', 'err');
+    row.append(botao('Cancelar', 'link', closeModal), botao('Sair da conta', 'link', () => { if (!pending.busy) rodar(err, sairDaConta); }), err);
+    return row;
+  };
+  const copiar = async (texto, status, input) => {
+    try { await navigator.clipboard.writeText(texto); mostrarFeedback(status, 'Copiado. Guarde em um local seguro.', true); }
+    catch (_) {
+      input?.focus(); input?.select();
+      mostrarFeedback(status, input ? 'Selecione e copie a chave manualmente.' : 'Use Baixar códigos ou copie os códigos exibidos.');
+    }
+  };
+  const recuperacao = codes => {
+    if (!ativo()) return;
+    const box = h('section', 'mfa-recovery'), list = h('ul', 'mfa-recovery-list');
+    const status = h('p', 'err'); status.setAttribute('role', 'status');
+    codes.forEach(code => list.append(h('li', null, code)));
+    const texto = 'GOATSKINS — códigos de recuperação do administrador\n\n' + codes.join('\n') + '\n\nCada código pode ser usado uma única vez. Guarde este arquivo em um local seguro.\n';
+    const actions = h('div', 'mfa-actions');
+    actions.append(botao('Copiar códigos', 'alt', () => copiar(texto, status)), botao('Baixar códigos', 'alt', () => {
+      const url = URL.createObjectURL(new Blob([texto], {type:'text/plain;charset=utf-8'}));
+      const a = h('a'); a.href = url; a.download = 'goatskins-recuperacao-mfa.txt';
+      a.hidden = true; document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      mostrarFeedback(status, 'Arquivo solicitado. Confira o download e guarde em um local seguro.', true);
+    }));
+    const confirm = h('input'); confirm.type = 'checkbox';
+    const label = h('label', 'check'); label.append(confirm, h('span', null, 'Guardei meus códigos de recuperação em um local seguro.'));
+    const next = botao('Continuar para a administração', 'auth-primary', terminar); next.disabled = true;
+    confirm.addEventListener('change', () => { next.disabled = !confirm.checked; });
+    box.append(h('p', 'mfa-important', 'Estes códigos são exibidos uma única vez. Cada um substitui o código do aplicativo em uma emergência.'), list, actions, status, label, next);
+    abrir('Guarde seus códigos', 'Autenticação em duas etapas ativada. Salve seus códigos antes de continuar.', [box]);
+  };
+  const desafio = (status, configuracao) => {
+    if (!ativo()) return;
+    const pw = prepararCampo(campo('Senha da conta', 'password'), {autocomplete:'current-password', maxLength:100});
+    const code = prepararCampo(campo('Código do aplicativo', 'text'), {autocomplete:'one-time-code', inputMode:'numeric', minLength:6, maxLength:6, pattern:'[0-9]{6}', placeholder:'000000'}, 'Informe o código completo, conforme exibido.');
+    code.w.classList.add('code-field'); code.i.spellcheck = false; code.i.autocapitalize = 'none';
+    const err = h('p', 'err'), ok = botao(configuracao ? 'Ativar autenticação em duas etapas' : 'Confirmar acesso', 'auth-primary');
+    let usarRecuperacao = false;
+    const form = formularioConta(err, ok, async () => {
+      let resposta;
+      pending.busy = true; $('closeBtn').disabled = true;
+      try { resposta = await api('/api/mfa/verificar', 'POST', {senha:pw.i.value, codigo:code.i.value}); }
+      finally { pending.busy = false; $('closeBtn').disabled = false; pw.i.value = ''; code.i.value = ''; }
+      if (!ativo()) return;
+      if (configuracao) {
+        if (!Array.isArray(resposta.recoveryCodes) || resposta.recoveryCodes.length !== 8) throw new Error('A ativação não retornou os códigos de recuperação. Contate o responsável pela plataforma antes de continuar.');
+        recuperacao(resposta.recoveryCodes);
+      } else terminar();
+    }, 'Verificando...');
+    code.i.addEventListener('input', () => {
+      code.i.value = usarRecuperacao ? code.i.value.replace(/[^a-fA-F0-9-]/g, '').slice(0,35) : code.i.value.replace(/\D/g, '').slice(0,6);
+    });
+    if (configuracao) {
+      const setup = h('div', 'mfa-setup'), img = h('img', 'mfa-qr');
+      if (typeof configuracao.qrCode !== 'string' || !/^data:image\/(?:png|gif|svg\+xml);(?:base64|charset=utf-8),/i.test(configuracao.qrCode)) throw new Error('Não foi possível carregar o QR Code. Tente novamente.');
+      img.src = configuracao.qrCode; img.width = img.height = 208; img.alt = 'QR Code para adicionar a conta GOATSKINS ao aplicativo autenticador';
+      const key = campo('Chave para configuração manual', 'text', configuracao.secret);
+      key.i.readOnly = true; key.i.autocomplete = 'off'; key.i.spellcheck = false; key.i.classList.add('mfa-secret');
+      const copyStatus = h('p', 'err'), manual = h('div', 'mfa-manual');
+      manual.append(key.w, h('p', 'field-hint', 'TOTP · 6 dígitos · 30 segundos · SHA-1'), botao('Copiar chave', 'alt', () => copiar(key.i.value, copyStatus, key.i)), copyStatus);
+      setup.append(img, manual);
+      form.append(h('p', 'field-hint', 'Adicione uma conta no Google Authenticator ou Microsoft Authenticator usando o QR Code ou a chave manual.'), setup,
+        h('p', 'field-hint', 'Depois, confirme sua senha e o código atual do aplicativo. Esta configuração expira em 10 minutos.'));
+    } else {
+      const switcher = botao('Usar código de recuperação', 'link', () => {
+        usarRecuperacao = !usarRecuperacao; code.i.value = ''; code.i.removeAttribute('aria-invalid');
+        code.w.querySelector('.field-error').textContent = '';
+        code.w.querySelector('label').textContent = usarRecuperacao ? 'Código de recuperação' : 'Código do aplicativo';
+        code.i.removeAttribute('minlength'); code.i.removeAttribute('maxlength');
+        Object.assign(code.i, {inputMode:usarRecuperacao ? 'text' : 'numeric', minLength:usarRecuperacao ? 32 : 6, maxLength:usarRecuperacao ? 35 : 6, pattern:usarRecuperacao ? '(?:[a-fA-F0-9]{32}|[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{8}){3})' : '[0-9]{6}', placeholder:usarRecuperacao ? 'XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX' : '000000'});
+        code.w.classList.toggle('mfa-recovery-field', usarRecuperacao);
+        switcher.textContent = usarRecuperacao ? 'Usar aplicativo autenticador' : 'Usar código de recuperação';
+        mostrarFeedback(err, ''); code.i.focus();
+      });
+      form.append(h('p', 'field-hint', 'Use o código atual do seu aplicativo. Códigos já utilizados não podem ser reutilizados.'), switcher);
+      if (status.remainingRecoveryCodes <= 2) form.append(h('p', 'mfa-important', 'Códigos de recuperação restantes: ' + status.remainingRecoveryCodes + '. Mantenha o acesso ao seu aplicativo autenticador.'));
+    }
+    form.append(pw.w, code.w, err, ok);
+    abrir(configuracao ? 'Conecte seu autenticador' : 'Confirme seu acesso', configuracao ? 'Proteja a administração com uma segunda etapa de verificação.' : 'A administração exige sua senha e um código do autenticador ou de recuperação.', [form, sair()]);
+  };
+  const preparar = status => {
+    const pw = prepararCampo(campo('Senha da conta', 'password'), {autocomplete:'current-password', maxLength:100});
+    const err = h('p', 'err'), ok = botao('Configurar autenticador', 'auth-primary');
+    const form = formularioConta(err, ok, async () => {
+      let dados;
+      try { dados = await api('/api/mfa/preparar', 'POST', {senha:pw.i.value}); }
+      finally { pw.i.value = ''; }
+      desafio(status, dados);
+    }, 'Preparando configuração...');
+    form.append(h('p', 'mfa-important', 'Esta configuração é obrigatória para todos os administradores. Tenha seu celular e um aplicativo autenticador por perto.'), pw.w, err, ok);
+    abrir('Proteja sua administração', 'Confirme sua senha para configurar a autenticação em duas etapas. Compatível com Google Authenticator e Microsoft Authenticator.', [form, sair()]);
+  };
+  const consultar = async () => {
+    try {
+      const status = await api('/api/mfa/status');
+      if (!ativo()) return;
+      if (status.verified) { mfaPendente = null; pending.resolve(true); return; }
+      if (status.enabled) desafio(status); else preparar(status);
+    } catch (error) {
+      if (!ativo()) return;
+      const err = h('p', 'err', error.message);
+      abrir('Verificação indisponível', 'O acesso administrativo permanece protegido. Tente novamente ou peça ao responsável pela plataforma para verificar a configuração de MFA.', [err, botao('Tentar novamente', 'auth-primary', consultar), sair()]);
+    }
+  };
+  consultar(); return pending.promise;
 }
 
 /* ---------- Aparência vinda do servidor ---------- */
@@ -443,6 +592,7 @@ function authModal(modo, emailInicial = "") {
       return confirmarCadastroModal();
     }
     closeModal(); await carregar();
+    if (admin() && await exigirMfaAdmin()) painel('painel');
   };
   const form = formularioConta(err, ok, enviar, criar ? 'Criando sua conta...' : esq ? 'Enviando link...' : reset ? 'Salvando senha...' : 'Entrando...');
   const troca = h("div", 'auth-switch');
@@ -723,12 +873,17 @@ async function conta() {
 }
 
 /* ---------- Painel admin ---------- */
-function painel(aba, editar) {
+async function painel(aba, editar, mensagem = '') {
+  destinoAdmin = {aba, editar};
+  if (!await exigirMfaAdmin()) return;
   const tabs = h("div", "tabs");
   [["painel", "Painel"], ["sorteios", "Sorteios"], ["pedidos", "Pedidos"], ["entregas", "Entregas"], ["usuarios", "Usuários"], ["logs", "Logs"], ["visual", "Aparência"]].forEach(([k, nome]) =>
     tabs.append(botao(nome, k === aba ? "on" : "", () => painel(k))));
   const corpo = h("div");
-  openModal(true, h("h3", null, "Painel GOATSKINS"), tabs, corpo);
+  const titulo = h("h3", null, "Painel GOATSKINS");
+  retomarPainelAdmin = () => openModal(true, titulo, tabs, corpo);
+  retomarPainelAdmin();
+  if (mensagem) { const note = h('p', 'err'); mostrarFeedback(note, mensagem, true); corpo.append(note); }
   const f = { painel: abaPainel, sorteios: abaSorteios, pedidos: abaPedidos, entregas: abaEntregas, usuarios: abaUsuarios, logs: abaLogs, visual: abaVisual }[aba];
   Promise.resolve(f(corpo, editar)).catch(e => corpo.append(h("p", "err", e.message)));
 }
@@ -881,7 +1036,7 @@ document.querySelectorAll(".nv[data-view]").forEach(b => b.addEventListener("cli
 $("loginBtn").addEventListener("click", async () => { if (S.eu) { try { await sairDaConta(); } catch (e) { aviso("Não foi possível sair", e.message); } } else if (confirmacaoPendente) confirmarCadastroModal(); else authModal("entrar"); });
 $("contaBtn").addEventListener("click", () => conta().catch(e => aviso("Ops", e.message)));
 $("adminBtn").addEventListener("click", () => painel("painel"));
-carregar().then(() => {
+carregar().then(async () => {
   const q = new URLSearchParams(location.search);
   if (q.get("msg") === "email-verificado") mensagemAuth("E-mail confirmado!", "Pronto, agora você já pode participar dos sorteios.", 'Continuar', closeModal);
   else if (q.get("msg") === "link-invalido") mensagemAuth("Link inválido", "Este link antigo não é mais válido. Entre com seu e-mail e senha para solicitar um código de confirmação.", 'Entrar', () => authModal('entrar'), false);
@@ -889,6 +1044,7 @@ carregar().then(() => {
     const tk = q.get("redefinir") || new URLSearchParams(location.hash.slice(1)).get("redefinir");
     if (tk && /^[a-f0-9]{64}$/.test(tk)) authModal("reset:" + tk);
     else if (confirmacaoPendente && !S.eu) confirmarCadastroModal();
+    else if (admin()) await exigirMfaAdmin();
   }
   // Remove somente tokens e mensagens temporárias, não a URL compartilhável ?sorteio=ID.
   const limpo = new URL(location.href);

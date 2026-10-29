@@ -12,7 +12,7 @@ const rules = [
   ['github-token', /\b(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{80,})\b/g],
   ['resend-token', /\bre_[A-Za-z0-9_]{24,}\b/g],
   ['mercadopago-token', /\bAPP_USR-[A-Za-z0-9-]{60,}\b/g],
-  ['assigned-hex-secret', /\b(?:MP_WEBHOOK_SECRET|EMAIL_CODE_SECRET|TURNSTILE_SECRET_KEY|TWILIO_AUTH_TOKEN)["']?\s*[:=]\s*["']?[a-f0-9]{32,}["']?(?=\s|[,;}]|$)/gi]
+  ['assigned-hex-secret', /\b(?:MP_WEBHOOK_SECRET|EMAIL_CODE_SECRET|MFA_ENCRYPTION_KEY|TURNSTILE_SECRET_KEY|TWILIO_AUTH_TOKEN)["']?\s*[:=]\s*["']?[a-f0-9]{32,}["']?(?=\s|[,;}]|$)/gi]
 ];
 
 function scanText(source) {

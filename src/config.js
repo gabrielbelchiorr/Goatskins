@@ -66,6 +66,9 @@ if (cfgProd.PRODUCAO) {
   if (!/^[a-f0-9]{64,}$/i.test(e.EMAIL_CODE_SECRET || "")) {
     erros.push("EMAIL_CODE_SECRET precisa ter pelo menos 32 bytes aleatórios em hexadecimal");
   }
+  if (!/^[a-f0-9]{64}$/i.test(e.MFA_ENCRYPTION_KEY || "")) {
+    erros.push("MFA_ENCRYPTION_KEY precisa ter exatamente 32 bytes aleatórios em hexadecimal; preserve a chave para manter os autenticadores");
+  }
 
   if (
     !e.EMAIL_FROM ||
@@ -141,6 +144,7 @@ module.exports = {
     (cfgProd.PRODUCAO ? "" : "somente-desenvolvimento-nao-usar-em-producao"),
   EMAIL_API_KEY: e.EMAIL_API_KEY || "",
   EMAIL_FROM: e.EMAIL_FROM || "GOATSKINS <onboarding@resend.dev>",
+  MFA_ENCRYPTION_KEY: e.MFA_ENCRYPTION_KEY || "",
 
   PRODUCAO: cfgProd.PRODUCAO,
 

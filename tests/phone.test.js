@@ -52,6 +52,6 @@ run('legado entra e preenche celular; APIs exigem e-mail e formato, sem SMS, sem
  await store.db.run("UPDATE users SET celular=NULL,telefone='(11) 99999-9999' WHERE id=?",[c.user.id]);assert.equal((await req('/api/estado')).data.eu.celular_preenchido,true);
  await store.db.run('UPDATE users SET email_verificado=0 WHERE id=?',[c.user.id]);assert.equal((await req('/api/campanhas/'+campaign+'/numeros',{numeros:[2]})).status,401);
  await store.db.run("UPDATE users SET email_verificado=1,celular=NULL,telefone=NULL,role='ADMIN' WHERE id=?",[c.user.id]);
- assert.equal((await req('/api/mfa/status')).status,404);assert.equal((await req('/api/campanhas/'+campaign+'/numeros',{numeros:[2]})).status,403);
+ assert.equal((await req('/api/mfa/status')).status,200);assert.equal((await req('/api/campanhas/'+campaign+'/numeros',{numeros:[2]})).status,403);
  for(const route of ['/api/celular/enviar','/api/celular/confirmar','/api/celular/corrigir'])assert.equal((await req(route,{})).status,404);
 });

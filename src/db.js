@@ -27,6 +27,8 @@ const agora = () => new Date().toISOString();
 
 /* ----- consultas ----- */
 const als = new AsyncLocalStorage();           // guarda a conexão da transação em andamento
+const autorizacao = new AsyncLocalStorage();   // revalidação de privilégios fornecida pelo dispatcher
+const comAutorizacao = (verificar, fn) => autorizacao.run(verificar, fn);
 const alvo = () => als.getStore() || pool;
 const conv = sql => { let i = 0; return sql.replace(/\?/g, () => "$" + (++i)); };
 const all = async (sql, p = []) => (await alvo().query(conv(sql), p)).rows;
@@ -45,7 +47,15 @@ async function tx(fn) {
   try {
     await c.query("BEGIN");
     await c.query("SELECT pg_advisory_xact_lock(" + LOCK_ESCRITA + ")");
-    const r = await als.run(c, fn);
+    const r = await als.run(c, async () => {
+      const verificar = autorizacao.getStore();
+      // Uma requisição pode perder sessão/MFA enquanto aguarda a trava. Revalidar já sob o mesmo lock
+      // das revogações, e novamente antes do commit. Nenhum I/O de provedor é colocado na transação.
+      if (verificar) await verificar();
+      const result = await fn();
+      if (verificar) await verificar();
+      return result;
+    });
     await c.query("COMMIT"); return r;
   } catch (e) {
     try { await c.query("ROLLBACK"); } catch (_) { quebrada = true; }
@@ -167,6 +177,20 @@ CREATE INDEX ix_recovery_due ON password_recovery_jobs(proximo,lease_ate);
 CREATE INDEX ix_recovery_email ON password_recovery_jobs(email);
 CREATE INDEX ix_recovery_expira ON password_recovery_jobs(expira);
 `
+,
+/* 10: MFA obrigatório para ADMIN/SUPER_ADMIN. Aditiva: mantém contas e todas as sessões;
+   sessões anteriores começam sem elevação. Não restaura segredos removidos pela migração8. */ `
+ALTER TABLE sessions ADD COLUMN mfa_until BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN mfa_role TEXT;
+CREATE TABLE admin_mfa(
+ user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ secret TEXT NOT NULL,
+ enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)),
+ last_step BIGINT NOT NULL DEFAULT -1,
+ pending_session TEXT, pending_expira BIGINT NOT NULL DEFAULT 0,
+ recovery_hashes TEXT NOT NULL DEFAULT '[]'
+);
+`
 /* próximas alterações: acrescente novos itens a este array (nunca edite os já aplicados) */
 ];
 
@@ -215,4 +239,4 @@ async function liberar() {
   await run("UPDATE pedidos SET status='EXPIRED', atualizado_em=? WHERE status='PENDING' AND mp_order_id IS NULL AND mp_creation_uncertain=0 AND expira_em<?", [agora(), Date.now()]);
   await run("DELETE FROM reservas WHERE pedido_id IN (SELECT id FROM pedidos WHERE status<>'PENDING')");
 }
-module.exports = { db, tx, iniciar, fechar, liberar, liberarSeVencido, ping, sha, agora, audit, notificar, novaSemente };
+module.exports = { db, tx, comAutorizacao, iniciar, fechar, liberar, liberarSeVencido, ping, sha, agora, audit, notificar, novaSemente };

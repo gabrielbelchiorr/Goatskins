@@ -56,7 +56,10 @@ test("config de produção: recusa configurações inseguras e aceita uma corret
     [{TURNSTILE_SECRET_KEY:'1x0000000000000000000000000000000AA'}, /Chave de teste Turnstile/],
     [{TURNSTILE_SECRET_KEY:'2x0000000000000000000000000000000AA'}, /Chave de teste Turnstile/],
     [{TURNSTILE_SECRET_KEY:'3x0000000000000000000000000000000AA'}, /Chave de teste Turnstile/],
-    [{ORIGIN_VERIFY_SECRET:'curto'}, /ORIGIN_VERIFY_SECRET/]]) {
+    [{ORIGIN_VERIFY_SECRET:'curto'}, /ORIGIN_VERIFY_SECRET/],
+    [{MFA_ENCRYPTION_KEY:''}, /MFA_ENCRYPTION_KEY/],
+    [{MFA_ENCRYPTION_KEY:'z'.repeat(64)}, /MFA_ENCRYPTION_KEY/],
+    [{MFA_ENCRYPTION_KEY:'b'.repeat(62)}, /MFA_ENCRYPTION_KEY/]]) {
     const r = config({ ...bom, ...ruim }); assert.equal(r.status, 1, JSON.stringify(ruim)); assert.match(r.stderr, esperado);
   }
 });

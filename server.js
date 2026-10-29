@@ -2,7 +2,7 @@
    Rodar:  node --no-warnings server.js
    Criar o primeiro SUPER_ADMIN:  node --no-warnings server.js criar-admin email@exemplo.com SuaSenha123 "Seu Nome" */
 const http = require("node:http"), fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
-const cfg = require("./src/config"), { db, iniciar, fechar, agora, audit, ping, tx } = require("./src/db");
+const cfg = require("./src/config"), { db, iniciar, fechar, agora, audit, ping, tx, comAutorizacao } = require("./src/db");
 const { Erro, ipDe, limite } = require("./src/http");
 const auth = require("./src/auth");
 
@@ -26,7 +26,7 @@ process.on("unhandledRejection", e => console.error("[rejeição não tratada]",
 process.on("uncaughtException", e => { console.error("[erro fatal]", e && (e.code || e.name)); process.exit(1); }); // o gerenciador (pm2/systemd) reinicia
 
 const security = require("./src/security");
-const ROTAS = [...security.rotas, ...auth.rotas, ...require("./src/phone").rotas, ...require("./src/rifas").rotas, ...require("./src/pedidos").rotas, ...require("./src/admin").rotas];
+const ROTAS = [...security.rotas, ...auth.rotas, ...require("./src/mfa").rotas, ...require("./src/phone").rotas, ...require("./src/rifas").rotas, ...require("./src/pedidos").rotas, ...require("./src/admin").rotas];
 const PAPEIS_ADMIN = ["ADMIN", "SUPER_ADMIN"];
 
 async function despachar(req, res, rota, body) {
@@ -38,13 +38,17 @@ async function despachar(req, res, rota, body) {
     await security.proteger(req, body, rota);
     if (user === undefined) user = guarda === "webhook" ? null : await auth.usuarioDaSessao(req); // o webhook não usa sessão: poupa uma consulta por notificação
     if (metodo !== "GET" && guarda !== "webhook" && req.headers["x-requested-with"] !== "goatskins") throw new Erro("Requisição não permitida.", 403); // proteção CSRF
-    if (guarda && guarda !== "webhook") { // o webhook não tem sessão: ele se autentica pela assinatura do Mercado Pago
+    // Todo caminho administrativo exige papel e MFA, inclusive uma futura rota sem guarda explícita.
+    const administrativa = guarda === 'admin' || guarda === 'super' || rota.startsWith('/api/admin/');
+    if ((guarda && guarda !== "webhook") || administrativa) { // webhook se autentica pela assinatura do Mercado Pago
       if (!user) throw new Erro("Entre na sua conta.", 401);
-      if ((guarda === "admin" && !PAPEIS_ADMIN.includes(user.role)) || (guarda === "super" && user.role !== "SUPER_ADMIN")) throw new Erro("Acesso negado.", 403);
+      if ((administrativa && !PAPEIS_ADMIN.includes(user.role)) || (guarda === "super" && user.role !== "SUPER_ADMIN")) throw new Erro("Acesso negado.", 403);
     }
+    const ctx = { req, res, body, user, ip: ipDe(req), params: m.slice(1), query: Object.fromEntries(req.urlObj.searchParams) };
+    if (administrativa) await require('./src/mfa').exigir(ctx);
     if (metodo === 'POST' && /^\/api\/campanhas\/\d+\/(numeros|pedidos)$/.test(rota))
       require('./src/phone').exigir(user);
-    return fn({ req, res, body, user, ip: ipDe(req), params: m.slice(1), query: Object.fromEntries(req.urlObj.searchParams) });
+    return administrativa ? comAutorizacao(() => require('./src/mfa').exigir(ctx), () => fn(ctx)) : fn(ctx);
   }
   throw new Erro("Rota não encontrada.", 404);
 }

@@ -662,3 +662,39 @@ body:has(.pending-pix:not([hidden])) .sale-checkout { bottom:calc(var(--pending-
   .auth-dialog *,.account-dialog *{animation:none!important;transition:none!important;scroll-behavior:auto!important}
   .auth-dialog .btn:hover:not(:disabled),.account-dialog .btn:hover:not(:disabled){transform:none}
 }
+
+/* A segunda etapa compartilha a linguagem de acesso, sem serviços de QR externos. */
+.mfa-dialog .auth-panel{padding-top:48px}
+.mfa-dialog .auth-visual-copy{margin-top:34px}
+.mfa-dialog .account-heading h3{font-size:30px}
+.mfa-dialog .field-hint{margin:0;font-size:12px;line-height:1.7}
+.mfa-important{margin:0;padding:13px 15px;border:1px solid #786540;border-left:2px solid var(--gold);border-radius:8px;background:#2c2b28;color:#e6d6b4;font-size:12px;line-height:1.75}
+.mfa-setup{display:flex;flex-direction:column;align-items:center;gap:18px;min-width:0;padding:18px;border:1px solid var(--line);border-radius:12px;background:#102136}
+.mfa-qr{display:block;flex:none;width:208px;height:208px;max-width:100%;object-fit:contain;border:8px solid #fff;border-radius:8px;background:#fff}
+.mfa-manual{display:flex;flex-direction:column;gap:10px;width:100%;min-width:0}
+.mfa-dialog .mfa-secret{font:500 12px/1.5 ui-monospace,Consolas,monospace;letter-spacing:.02em;padding-right:10px;padding-left:10px}
+.mfa-dialog .mfa-manual .btn.alt,.mfa-dialog .mfa-actions .btn.alt{border:1px solid var(--account-border);background:transparent;color:#dce4ef}
+.mfa-dialog .mfa-manual .btn.alt:hover:not(:disabled),.mfa-dialog .mfa-actions .btn.alt:hover:not(:disabled){background:#25354a}
+.mfa-recovery{display:flex;flex-direction:column;gap:18px;min-width:0}
+.mfa-recovery-list{list-style:none;margin:0;padding:14px;display:grid;gap:9px;border:1px solid var(--account-border);border-radius:9px;background:var(--account-input)}
+.mfa-recovery-list li{font:500 12px/1.6 ui-monospace,Consolas,monospace;color:#e0e8f2;overflow-wrap:anywhere;user-select:all}
+.mfa-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.mfa-dialog .code-field.mfa-recovery-field input{font-size:13px;letter-spacing:0;text-align:left;padding:12px 14px}
+.mfa-dialog .auth-switch>.err{flex-basis:100%;text-align:left}
+@media(min-width:1100px){
+  .mfa-setup{display:grid;grid-template-columns:190px minmax(0,1fr);gap:16px;padding:16px}
+  .mfa-qr{width:190px;height:190px}
+  .mfa-dialog .mfa-secret{font-size:12px}
+}
+@media(max-width:680px){
+  .mfa-dialog .auth-panel{padding-top:24px}
+  .mfa-dialog .account-heading h3{font-size:27px}
+  .mfa-dialog .mfa-secret{font-size:13px}
+  .mfa-dialog .code-field.mfa-recovery-field input{font-size:16px}
+}
+@media(max-width:360px){
+  .mfa-setup{padding:12px}
+  .mfa-actions{grid-template-columns:minmax(0,1fr)}
+  .mfa-recovery-list{padding:10px}
+  .mfa-recovery-list li{font-size:12px}
+}

@@ -36,6 +36,7 @@ async function limpar() {
   await db.run('DELETE FROM pending_registrations WHERE cadastro_expira<=?', [now]);
   await db.run('DELETE FROM auth_rate_limits WHERE expira<=?', [now]);
   await db.run('DELETE FROM phone_verifications WHERE expira<=?', [now]);
+  await db.run('DELETE FROM admin_mfa WHERE enabled=0 AND pending_expira<=?', [now]);
 }
 async function entregar(p, codigo, avisoConta = false) {
   try {

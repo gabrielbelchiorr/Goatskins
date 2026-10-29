@@ -56,5 +56,17 @@ test('migrações preservam dados antigos e adicionam a fila de recuperação se
     VALUES($1,'antigo@teste.com',1,9999999999999,1,'recuperacao')`,['a'.repeat(64)]);
   await c.query("DELETE FROM tokens_email WHERE token_hash='recuperacao'");
   assert.equal((await c.query('SELECT * FROM password_recovery_jobs')).rows.length,0,'FK revoga o job junto do token');
+  const before10={};
+  for(const table of ['users','sessions','tokens_email','tickets','pedidos','password_recovery_jobs'])
+    before10[table]=(await c.query('SELECT * FROM '+table+' ORDER BY 1')).rows;
+  await c.query(migrations[9]);
+  for(const table of Object.keys(before10).filter(t=>t!=='sessions'))
+    assert.deepEqual((await c.query('SELECT * FROM '+table+' ORDER BY 1')).rows,before10[table]);
+  const migratedSessions=(await c.query('SELECT * FROM sessions ORDER BY 1')).rows;
+  for(let i=0;i<migratedSessions.length;i++){
+    const {mfa_until,mfa_role,...old}=migratedSessions[i];
+    assert.equal(Number(mfa_until),0);assert.equal(mfa_role,null);assert.deepEqual(old,before10.sessions[i]);
+  }
+  assert.equal((await c.query('SELECT * FROM admin_mfa')).rows.length,0);
  } finally {await c.query('ROLLBACK');c.release();await pool.end();}
 });

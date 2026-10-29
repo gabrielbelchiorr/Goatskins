@@ -98,7 +98,8 @@ const rotas = [
       if (!u.email) throw new Erro("Esta conta precisa de um e-mail válido. Fale com o suporte.", 403);
       return registration.iniciar({ nome: u.nome, email: u.email.toLowerCase(), telefone: u.telefone, hash: u.hash }, ip, u);
     }
-    await audit(u.id, "LOGIN", null, ip); await tx(() => abrirSessao(ctx, u.id, u.hash)); return { ok: true };
+    await audit(u.id, "LOGIN", null, ip); await tx(() => abrirSessao(ctx, u.id, u.hash));
+    return { ok: true, ...(['ADMIN','SUPER_ADMIN'].includes(u.role) ? { mfaRequired: true } : {}) };
   }],
   ["POST", /^\/api\/logout$/, async ctx => {
     const t = cookie(ctx.req, "sid"); if (t) await db.run("DELETE FROM sessions WHERE token=?", [sha(t)]);
