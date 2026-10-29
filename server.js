@@ -87,6 +87,9 @@ const server = http.createServer((req, res) => {
   let url; try { url = new URL(req.url, "http://localhost"); if (url.origin !== "http://localhost") throw 0; } catch (e) { res.writeHead(400); return res.end(); } // "GET //" derrubava o servidor
   const rota = url.pathname; req.urlObj = url;
   if (rota === "/healthz" && (req.method === "GET" || req.method === "HEAD")) { // health check do Render/UptimeRobot: leve e confere o banco
+    // Metadado publico do deploy, sem consultar contas ou pedidos para verificar a versao.
+    const revisao = process.env.RENDER_GIT_COMMIT || "";
+    if (/^[a-f0-9]{40}$/i.test(revisao)) res.setHeader("X-Goatskins-Revision", revisao);
     return ping().then(() => { res.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" }); res.end(req.method === "HEAD" ? undefined : "ok"); },
       e => { console.error("[healthz] banco indisponível:", e.message); res.writeHead(503, { "Cache-Control": "no-store" }); res.end(); });
   }
