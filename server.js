@@ -46,9 +46,14 @@ async function despachar(req, res, rota, body) {
     }
     const ctx = { req, res, body, user, ip: ipDe(req), params: m.slice(1), query: Object.fromEntries(req.urlObj.searchParams) };
     if (administrativa) await require('./src/mfa').exigir(ctx);
-    if (metodo === 'POST' && /^\/api\/campanhas\/\d+\/(numeros|pedidos)$/.test(rota))
-      require('./src/phone').exigir(user);
-    return administrativa ? comAutorizacao(() => require('./src/mfa').exigir(ctx), () => fn(ctx)) : fn(ctx);
+    const participacao = metodo === 'POST' && /^\/api\/campanhas\/\d+\/(numeros|pedidos)$/.test(rota);
+    if (participacao) require('./src/phone').exigir(user);
+    if (administrativa) return comAutorizacao(() => require('./src/mfa').exigir(ctx), () => fn(ctx));
+    if (guarda === 'user') return comAutorizacao(async () => {
+      const atual = await auth.exigirSessao(ctx);
+      if (participacao) require('./src/phone').exigir(atual);
+    }, () => fn(ctx), { antesCommit: false });
+    return fn(ctx);
   }
   throw new Erro("Rota não encontrada.", 404);
 }
@@ -82,6 +87,9 @@ const server = http.createServer((req, res) => {
   let url; try { url = new URL(req.url, "http://localhost"); if (url.origin !== "http://localhost") throw 0; } catch (e) { res.writeHead(400); return res.end(); } // "GET //" derrubava o servidor
   const rota = url.pathname; req.urlObj = url;
   if (rota === "/healthz" && (req.method === "GET" || req.method === "HEAD")) { // health check do Render/UptimeRobot: leve e confere o banco
+    // Metadado publico do deploy, sem consultar contas ou pedidos para verificar a versao.
+    const revisao = process.env.RENDER_GIT_COMMIT || "";
+    if (/^[a-f0-9]{40}$/i.test(revisao)) res.setHeader("X-Goatskins-Revision", revisao);
     return ping().then(() => { res.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" }); res.end(req.method === "HEAD" ? undefined : "ok"); },
       e => { console.error("[healthz] banco indisponível:", e.message); res.writeHead(503, { "Cache-Control": "no-store" }); res.end(); });
   }

@@ -28,7 +28,8 @@ const agora = () => new Date().toISOString();
 /* ----- consultas ----- */
 const als = new AsyncLocalStorage();           // guarda a conexão da transação em andamento
 const autorizacao = new AsyncLocalStorage();   // revalidação de privilégios fornecida pelo dispatcher
-const comAutorizacao = (verificar, fn) => autorizacao.run(verificar, fn);
+const comAutorizacao = (verificar, fn, { antesCommit = true } = {}) =>
+  autorizacao.run(verificar ? { verificar, antesCommit } : null, fn);
 const alvo = () => als.getStore() || pool;
 const conv = sql => { let i = 0; return sql.replace(/\?/g, () => "$" + (++i)); };
 const all = async (sql, p = []) => (await alvo().query(conv(sql), p)).rows;
@@ -48,12 +49,13 @@ async function tx(fn) {
     await c.query("BEGIN");
     await c.query("SELECT pg_advisory_xact_lock(" + LOCK_ESCRITA + ")");
     const r = await als.run(c, async () => {
-      const verificar = autorizacao.getStore();
+      const contexto = autorizacao.getStore();
       // Uma requisição pode perder sessão/MFA enquanto aguarda a trava. Revalidar já sob o mesmo lock
-      // das revogações, e novamente antes do commit. Nenhum I/O de provedor é colocado na transação.
-      if (verificar) await verificar();
+      // das revogações. Administradores também são revalidados antes do commit; operações de conta
+      // podem revogar a própria sessão como parte da mudança. Nenhum I/O de provedor entra aqui.
+      if (contexto) await contexto.verificar();
       const result = await fn();
-      if (verificar) await verificar();
+      if (contexto && contexto.antesCommit) await contexto.verificar();
       return result;
     });
     await c.query("COMMIT"); return r;
@@ -209,11 +211,15 @@ async function migrar() {
   } finally { try { await c.query("SELECT pg_advisory_unlock(" + LOCK_MIGRACAO + ")"); } catch (_) { /* a conexão é devolvida de qualquer jeito */ } c.release(); }
 }
 
-/* Sorteios sem semente (ex.: importados de bancos antigos) ganham uma (compromisso = sha256 da semente) */
+/* Somente campanhas legadas ainda sem semente E compromisso recebem um par novo.
+   Um compromisso publicado e provas de campanhas concluídas nunca são reescritos:
+   se o segredo comprometido se perder, sortear() deve falhar de forma segura.
+   O predicado no UPDATE é também a garantia atômica contra duas instâncias iniciando juntas. */
 function novaSemente() { const s = crypto.randomBytes(32).toString("hex"); return { seed: s, commit: sha(s) }; }
 async function semear() {
-  for (const c of await all("SELECT id FROM campaigns WHERE seed IS NULL")) {
-    const s = novaSemente(); await run("UPDATE campaigns SET seed=?, commit_hash=? WHERE id=?", [s.seed, s.commit, c.id]);
+  for (const c of await all("SELECT id FROM campaigns WHERE seed IS NULL AND commit_hash IS NULL AND status<>'DRAWN'")) {
+    const s = novaSemente();
+    await run("UPDATE campaigns SET seed=?, commit_hash=? WHERE id=? AND seed IS NULL AND commit_hash IS NULL AND status<>'DRAWN'", [s.seed, s.commit, c.id]);
   }
 }
 
