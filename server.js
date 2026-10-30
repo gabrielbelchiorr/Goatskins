@@ -26,7 +26,7 @@ process.on("unhandledRejection", e => console.error("[rejeição não tratada]",
 process.on("uncaughtException", e => { console.error("[erro fatal]", e && (e.code || e.name)); process.exit(1); }); // o gerenciador (pm2/systemd) reinicia
 
 const security = require("./src/security");
-const ROTAS = [...security.rotas, ...auth.rotas, ...require("./src/mfa").rotas, ...require("./src/phone").rotas, ...require("./src/rifas").rotas, ...require("./src/pedidos").rotas, ...require("./src/admin").rotas];
+const ROTAS = [...security.rotas, ...auth.rotas, ...require("./src/mfa").rotas, ...require("./src/phone").rotas, ...require("./src/rifas").rotas, ...require("./src/pedidos").rotas, ...require("./src/admin").rotas, ...require("./src/predefinicoes").rotas];
 const PAPEIS_ADMIN = ["ADMIN", "SUPER_ADMIN"];
 
 async function despachar(req, res, rota, body) {
@@ -63,7 +63,8 @@ const TIPOS = { ".html": "text/html; charset=utf-8", ".css": "text/css", ".js": 
 // Uma extensao permitida (como .js, .html) nao deve tornar um backup publico.
 const PUBLICOS = new Set([
   'index.html','style.css','script.js','logo.jpg','logo-marca.webp','mascote.webp','cenario.webp',
-  'privacidade.html','termos.html','cookies.html','page-loader.js','roulette.js','roulette.css','cookie-consent.js'
+  'privacidade.html','termos.html','cookies.html','page-loader.js','roulette.js','roulette.css','cookie-consent.js',
+  'cs2inspect.js','skin-viewer.js','skin-viewer.css','presets.css'
 ]);
 function segredoOrigemValido(req) {
   if (!cfg.ORIGIN_VERIFY_SECRET) return true;
@@ -75,7 +76,7 @@ function segredoOrigemValido(req) {
 }
 function cabecalhos(res) {
   res.setHeader("X-Content-Type-Options", "nosniff"); res.setHeader("X-Frame-Options", "DENY"); res.setHeader("Referrer-Policy", "same-origin");
-  res.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com https://cs2inspect.skin; connect-src 'self' https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()"); res.setHeader("Cross-Origin-Opener-Policy", "same-origin"); res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
   if (cfg.PRODUCAO) res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
 }
@@ -113,7 +114,7 @@ const server = http.createServer((req, res) => {
           if (!body || typeof body !== "object" || Array.isArray(body)) throw new Erro("JSON deve ser um objeto.");
         }
         const r = await despachar(req, res, rota, body);
-        if (r && r.raw) { res.writeHead(200, { "Content-Type": r.tipo, "Cache-Control": "public, max-age=86400" }); return res.end(r.raw); }
+        if (r && r.raw) { res.writeHead(200, { "Content-Type": r.tipo, "Cache-Control": rota.startsWith('/api/admin/') ? "no-store" : "public, max-age=86400" }); return res.end(r.raw); }
         if (r && r.redirect) { res.writeHead(302, { Location: r.redirect }); return res.end(); }
         json(res, 200, r);
       } catch (e) {

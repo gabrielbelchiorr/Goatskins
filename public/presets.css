@@ -1,0 +1,62 @@
+/* Biblioteca e configuração de skins: utiliza a paleta e os componentes GOATSKINS. */
+.raffle-config{min-width:0}
+.raffle-editor{display:flex;flex-direction:column;gap:9px;min-width:0}
+.raffle-editor .two{gap:12px}
+.raffle-editor .form-field{min-width:0}
+.raffle-editor>h4,.raffle-config>h4{margin-top:18px}
+.raffle-editor input[type=search],.preset-picker input[type=search],.preset-list~input[type=search],.dialog input[type=search]{width:100%;padding:11px 12px;border:1px solid rgba(212,226,241,.32);border-radius:10px;background:#edf0f4;color:#0c1625}
+.preset-source,.skin-config,.preset-save,.preset-picker{padding:16px;border:1px solid var(--line);border-radius:13px;background:rgba(4,13,27,.24)}
+.preset-source{border-color:color-mix(in srgb,var(--gold) 45%,transparent);margin:12px 0;color:var(--gold)}
+.preset-source .muted{margin-top:5px}
+.skin-config h4,.preset-save h4{margin:0 0 7px}
+.skin-config>.muted{margin:9px 0;font-size:.79rem}
+.skin-config-fields,.skin-stickers,.skin-charm{min-width:0;margin:12px 0;padding:0;border:0}
+.skin-config select{width:100%;padding:11px 12px;border:1px solid rgba(212,226,241,.32);border-radius:10px;background:#edf0f4;color:#0c1625;font:inherit}
+.skin-config-fields>.form-field,.skin-config-fields>.two{margin-bottom:10px}
+.skin-stickers legend,.skin-charm legend{margin:9px 0;color:var(--gold);font-weight:700;font-size:.85rem}
+.skin-sticker{margin:10px 0;padding:12px;border:1px solid var(--line);border-radius:10px;background:rgba(4,13,27,.2)}
+.skin-sticker-advanced summary{margin:9px 0;color:var(--gold);font-size:.8rem;cursor:pointer}
+.skin-config fieldset:disabled{opacity:.55}
+.skin-config-fields:disabled{opacity:1}
+.preset-3d-warning{margin:9px 0;color:#efc883;font-size:.8rem;line-height:1.5}
+.skin-config input:disabled{cursor:not-allowed}
+.preset-help{display:inline-block;color:var(--gold);font-size:.82rem;text-underline-offset:3px;margin:5px 0}
+.preset-check{display:flex;align-items:center;gap:10px;margin:12px 0}
+.preset-check label{margin:0;order:1}
+.preset-check input{flex:none;width:18px;height:18px;accent-color:var(--gold)}
+.preset-actions{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+.dialog .preset-actions .btn{margin:0;min-height:37px;padding:8px 11px;font-size:.8rem}
+.preset-current-image:empty,.raffle-preview:empty{display:none}
+.preset-current-image img{display:block;width:180px;height:110px;object-fit:cover;border-radius:10px;border:1px solid var(--line)}
+.raffle-preview{padding:14px;border-radius:12px;border:1px dashed rgba(228,180,91,.5)}
+.raffle-preview>.muted{margin-bottom:10px}
+.preset-list{display:grid;gap:13px;margin:14px 0}
+.preset-card{min-width:0;padding:16px;border:1px solid var(--line);border-radius:13px;background:linear-gradient(145deg,rgba(27,46,71,.72),rgba(8,23,43,.85))}
+.preset-card h4{margin:0 0 12px;color:var(--cream);text-transform:none;letter-spacing:0;font-size:1rem}
+.preset-preview{display:flex;align-items:flex-start;gap:14px;min-width:0}
+.preset-preview>img{width:112px;height:84px;object-fit:cover;flex:none;border-radius:9px;background:var(--navy)}
+.preset-preview-info{display:grid;gap:5px;min-width:0;flex:1;overflow-wrap:anywhere}
+.preset-preview-info>.btn{justify-self:start;margin-top:5px;font-size:.78rem;padding:7px 10px;min-height:34px}
+.preset-preview .muted{font-size:.8rem;white-space:pre-wrap}
+.preset-details{border-top:1px solid var(--line);margin-top:12px;padding-top:10px}
+.preset-details summary{color:var(--gold);font-size:.83rem;cursor:pointer;padding:3px 0}
+.preset-details[open]>div{margin-top:12px}
+.preset-details .preset-preview{margin-bottom:10px}
+.preset-picker{margin-top:12px}
+.preset-picker .preset-card{padding:12px}
+.preset-picker .preset-preview>img{width:88px;height:70px}
+.dialog .raffle-editor .is-success{color:#85dc9b}
+.skin-3d-button{gap:8px}
+.skin-3d-button::before{content:'◇';font-size:1.1em;color:var(--gold)}
+.sale-overview>.skin-3d-button{align-self:flex-start;margin:10px 0}
+.info>.skin-3d-button{margin-top:5px}
+@media(max-width:540px){
+  .raffle-editor .two{grid-template-columns:1fr;gap:0}
+  .skin-config,.preset-save,.preset-picker{padding:12px}
+  .preset-preview{gap:10px}
+  .preset-preview>img{width:82px;height:74px}
+  .preset-card{padding:12px}
+  .preset-actions>.btn{flex:1 1 auto}
+  .preset-preview-info strong{font-size:.88rem}
+}
+@media(prefers-reduced-motion:reduce){.preset-card,.skin-3d-button{transition:none}}

@@ -146,6 +146,11 @@ module.exports = {
   EMAIL_FROM: e.EMAIL_FROM || "GOATSKINS <onboarding@resend.dev>",
   MFA_ENCRYPTION_KEY: e.MFA_ENCRYPTION_KEY || "",
 
+  // Pública: os domínios autorizados são definidos no painel CS2Inspect.
+  // Uma chave ausente/inválida desativa apenas o visualizador 3D.
+  CS2INSPECT_EMBED_KEY: /^pk_[A-Za-z0-9_-]{8,120}$/.test((e.CS2INSPECT_EMBED_KEY || '').trim())
+    ? e.CS2INSPECT_EMBED_KEY.trim() : '',
+
   PRODUCAO: cfgProd.PRODUCAO,
 
   // Opcional: chave enviada apenas pelo proxy de borda confiável.
