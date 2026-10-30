@@ -80,7 +80,7 @@
   }
   function frameUrl(config, key) {
     const data = normalize(config), url = new URL('/embed',ORIGIN);
-    const params = {key:publicKey(key),bg:'transparent',logo:'minimal',logopos:'br',accent:'d4aa55',interactive:'1',controls:'1',view:data.view,spin:'0',loader:'spinner',wear:String(data.wear),seed:String(data.seed),st:data.stattrak?'1':'0'};
+    const params = {key:publicKey(key),bg:'transparent',logo:'minimal',logopos:'br',accent:'d4aa55',interactive:'1',controls:'0',card:'0',ui:'0',view:data.view,spin:'0',loader:'spinner',wear:String(data.wear),seed:String(data.seed),st:data.stattrak?'1':'0'};
     for (const key of ['item','name','weapon','paint']) if (data[key] !== undefined) params[key] = String(data[key]);
     if (data.nametag) params.nametag = data.nametag;
     if (data.stickers.length) params.stickers = data.stickers.map(sticker => [sticker.slot,sticker.index,...(sticker.x === undefined ? [] : [sticker.x,sticker.y,sticker.rotation,sticker.wear])].join(':')).join(',');

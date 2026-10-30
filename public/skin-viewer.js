@@ -26,15 +26,34 @@
     const opener = document.activeElement;
     const dialog = element('dialog','skin-viewer');
     if (typeof dialog.showModal !== 'function') throw new Error('Seu navegador não suporta esta janela. Atualize o navegador para visualizar a skin em 3D.');
-    dialog.setAttribute('aria-labelledby','skin-viewer-title'); dialog.setAttribute('aria-describedby','skin-viewer-description');
+    dialog.setAttribute('aria-labelledby','skin-viewer-title');
     const head = element('div','skin-viewer-head'), names = element('div');
     names.append(element('p','skin-viewer-eyebrow','GOATSKINS · VISUALIZAÇÃO 3D'));
     const title = element('h2','',options.title || 'Visualizar skin em 3D'); title.id='skin-viewer-title'; names.append(title);
     const closeButton = element('button','skin-viewer-close','×');
     closeButton.type='button'; closeButton.setAttribute('aria-label','Fechar visualização 3D'); head.append(names,closeButton);
-    const description = element('p','skin-viewer-description',config.manual ? 'Representação configurada manualmente. Float, padrão, adesivos e outros detalhes podem diferir do prêmio. Consulte as informações do sorteio.' : 'Modelo configurado com os atributos informados pelo administrador. Consulte as informações do sorteio para confirmar os atributos do prêmio.');
-    description.id='skin-viewer-description';
     const viewport = element('div','skin-viewer-viewport'), loading = element('div','skin-viewer-loading');
+    const toolbar = element('div','skin-viewer-tools'), cameras = element('div','skin-viewer-cameras');
+    toolbar.setAttribute('role','group'); toolbar.setAttribute('aria-label','Controles do visualizador 3D');
+    const control = (label, className) => {const button=element('button','skin-viewer-control '+className,label);button.type='button';return button;};
+    const rotate = control('Rotacionar','skin-viewer-rotate'), hands = control('Primeira pessoa','skin-viewer-hands');
+    const inspect = control('Inspecionar','skin-viewer-inspect'), toggle = control('Ocultar controles','skin-viewer-toggle');
+    const metadata = element('p','skin-viewer-metadata');
+    let cameraView=config.view, supportsHands=!/gloves|hand[-_ ]?wraps|luvas|bandagens/i.test(config.item||config.weapon||config.name), controlsHidden=false;
+    const updateMetadata = item => {
+      const wear=typeof item?.wear==='number'&&Number.isFinite(item.wear)&&item.wear>=0&&item.wear<=1?item.wear:config.wear;
+      const seed=Number.isInteger(item?.seed)&&item.seed>=0&&item.seed<=1000?item.seed:config.seed;
+      metadata.textContent='Desgaste: '+wear.toLocaleString('pt-BR',{minimumFractionDigits:4,maximumFractionDigits:6})+' · Padrão: '+seed;
+    };
+    const updateControls = () => {
+      rotate.classList.toggle('is-selected',cameraView==='item'); hands.classList.toggle('is-selected',cameraView==='hands');
+      rotate.setAttribute('aria-pressed',String(cameraView==='item')); hands.setAttribute('aria-pressed',String(cameraView==='hands'));
+      hands.hidden=!supportsHands; inspect.hidden=!supportsHands||cameraView!=='hands';
+      for(const button of [rotate,hands,inspect])button.disabled=!ready||failed;
+      cameras.hidden=controlsHidden; metadata.hidden=controlsHidden;
+      toggle.textContent=controlsHidden?'Mostrar controles':'Ocultar controles';toggle.setAttribute('aria-expanded',String(!controlsHidden));
+    };
+    cameras.append(rotate,hands,inspect); toolbar.append(cameras,toggle);toolbar.hidden=true;
     const spinner = element('span','skin-viewer-spinner'); spinner.setAttribute('aria-hidden','true');
     loading.append(spinner,element('span','','Preparando a skin…')); loading.setAttribute('role','status');
     const status = element('p','skin-viewer-status','O CS2Inspect está preparando o modelo e as texturas.');
@@ -42,9 +61,17 @@
     const footer = element('div','skin-viewer-footer');
     const instructions = element('p','','Arraste para rotacionar e use a roda do mouse ou os gestos para aproximar. Os controles do visualizador permitem alternar a câmera e inspecionar em primeira pessoa, quando compatível.');
     const retry = element('button','btn alt skin-viewer-retry','Recarregar visualizador'); retry.type='button';
-    const help = element('p','skin-viewer-help','Se o modelo não aparecer, recarregue ou tente outro navegador com WebGL. Uma falha do serviço não altera o sorteio.');
-    footer.append(instructions,retry); dialog.append(head,description,viewport,status,footer,help); document.body.append(dialog);
+    const help = element('p','skin-viewer-help','Se o modelo não aparecer, recarregue a página.');
+    footer.append(instructions,retry); dialog.append(head,viewport,status,footer,help); document.body.append(dialog);
     let frame = null, timeout = null, alive = true, ready = false, failed = false;
+    const command = (type, spec) => {
+      if(!alive||!frame||!ready||failed)return;
+      frame.contentWindow.postMessage({type,...(spec?{spec}:{})},GoatCS2Inspect.ORIGIN);
+    };
+    rotate.addEventListener('click',()=>command('cs2embed:set',{view:'item'}));
+    hands.addEventListener('click',()=>command('cs2embed:set',{view:'hands'}));
+    inspect.addEventListener('click',()=>command('cs2embed:inspect'));
+    toggle.addEventListener('click',()=>{controlsHidden=!controlsHidden;updateControls();});
     const previousOverflow = document.body.style.overflow; document.body.style.overflow='hidden';
     const releaseFrame = () => {
       clearTimeout(timeout);
@@ -61,9 +88,11 @@
       if (!alive) return;
       clearTimeout(timeout); failed=true; loading.hidden=true; status.classList.add('is-error'); status.textContent=message; retry.textContent='Tentar novamente';
       if (frame) frame.removeAttribute('aria-busy');
+      updateControls();
     };
     const start = () => {
       releaseFrame(); ready=false; failed=false;
+      cameraView=config.view;toolbar.hidden=true;updateMetadata();updateControls();
       status.classList.remove('is-error'); status.textContent='O CS2Inspect está preparando o modelo e as texturas.'; retry.textContent='Recarregar visualizador'; loading.hidden=false;
       frame=element('iframe','skin-viewer-frame'); frame.title='CS2Inspect: visualizador 3D da skin CS2';
       frame.referrerPolicy='strict-origin-when-cross-origin'; frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-pointer-lock');
@@ -74,14 +103,18 @@
         status.textContent='Janela carregada. O CS2Inspect está preparando a skin…';
       };
       frame.onerror = () => fail('Não foi possível abrir o CS2Inspect. Verifique sua conexão e tente novamente.');
-      viewport.append(frame,loading); frame.src=src;
+      viewport.append(frame,loading,toolbar,metadata); frame.src=src;
       timeout=setTimeout(()=>fail('O CS2Inspect está demorando para responder. Você pode aguardar ou tentar novamente.'),25000);
     };
     const onMessage = event => {
       if (!alive || !frame || event.origin!==GoatCS2Inspect.ORIGIN || event.source!==frame.contentWindow || !event.data || typeof event.data!=='object' || event.data.source!=='cs2inspect-embed') return;
       if (event.data.type==='ready') {
         clearTimeout(timeout); ready=true; failed=false; loading.hidden=true; frame.removeAttribute('aria-busy');
+        if(typeof event.data.item?.weapon==='string')supportsHands=!/gloves|hand[_ -]?wraps/i.test(event.data.item.weapon);
+        if(!supportsHands)cameraView='item';toolbar.hidden=false;updateMetadata(event.data.item);updateControls();
         status.classList.remove('is-error'); status.textContent='Skin preparada. Use os controles do visualizador para explorar o modelo.'; retry.textContent='Recarregar visualizador';
+      } else if (event.data.type==='view'&&['item','hands'].includes(event.data.view)) {
+        cameraView=event.data.view;updateControls();
       } else if (event.data.type==='error') {
         fail(Object.hasOwn(messages,event.data.reason) ? messages[event.data.reason] : 'O CS2Inspect não conseguiu preparar esta skin. Confira a configuração ou tente novamente mais tarde.');
       }
