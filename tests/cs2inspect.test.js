@@ -11,7 +11,7 @@ test('CS2Inspect: normaliza armas, facas, luvas e os três seletores oficiais se
 test('CS2Inspect: serializa URL oficial, transparência, marca gratuita, cor e controles sem SDK',()=>{
   const url=new URL(frameUrl({item:'ak-47/redline',wear:.18,seed:661,stattrak:true,view:'hands',nametag:'Minha skin',stickers:[{slot:2,index:4501},{slot:0,index:5032,x:.02,y:-.01,rotation:12,wear:.1}],charm:{index:4123,seed:661}},key));
   assert.equal(url.origin,ORIGIN);assert.equal(url.pathname,'/embed');assert.equal(url.searchParams.get('key'),key);
-  for(const [name,value]of Object.entries({bg:'transparent',logo:'minimal',accent:'d4aa55',interactive:'1',controls:'1',view:'hands',spin:'0',st:'1',wear:'0.18',seed:'661',nametag:'Minha skin',stickers:'0:5032:0.02:-0.01:12:0.1,2:4501',charm:'4123:661'})) assert.equal(url.searchParams.get(name),value,name);
+  for(const [name,value]of Object.entries({bg:'transparent',logo:'minimal',accent:'d4aa55',interactive:'1',controls:'0',card:'0',ui:'0',view:'hands',spin:'0',st:'1',wear:'0.18',seed:'661',nametag:'Minha skin',stickers:'0:5032:0.02:-0.01:12:0.1,2:4501',charm:'4123:661'})) assert.equal(url.searchParams.get(name),value,name);
   assert.equal(new URL(frameUrl({weapon:'ak47',paint:282},key)).searchParams.get('paint'),'282');
 });
 test('CS2Inspect: rejeita URL arbitrária, ambiguidade, campos desconhecidos e poluição de protótipo',()=>{

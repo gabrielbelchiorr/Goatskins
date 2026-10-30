@@ -70,3 +70,40 @@ test('CS2Inspect mobile: arma/faca/luva, primeira pessoa, timeout e formulário 
   await b.cdp.evaluate('GoatSkinViewer.close()');assert.equal(await b.cdp.evaluate('document.querySelector("#modal").hidden'),false);assert.equal(await b.cdp.evaluate('document.querySelector("#modalBody input").value'),'Minha skin');assert.deepEqual(b.pageErrors,[]);
  }finally{await b.close();}
 });
+
+test('Controles em português usam mensagens oficiais e preservam câmera, inspeção e interface móvel', {skip:!executable,timeout:30000},async()=>{
+ const b=await fixture({width:390,height:844});
+ try{
+  await b.navigate();await b.cdp.evaluate('GoatSkinViewer.open({config:'+JSON.stringify(config)+',title:"AK-47 | Linha Vermelha"});true');
+  const url=new URL(await b.cdp.evaluate('document.querySelector(".skin-viewer-frame").src'));
+  for(const field of ['controls','card','ui'])assert.equal(url.searchParams.get(field),'0');
+  assert.equal(await b.cdp.evaluate('document.querySelector(".skin-viewer-description")'),null);
+  assert.equal(await b.cdp.evaluate('document.querySelector(".skin-viewer-help").textContent'),'Se o modelo não aparecer, recarregue a página.');
+  // O iframe da fixture não acessa o provedor. Uma janela local permite observar
+  // os comandos enviados pelos botões sem interceptar recursos externos.
+  await b.cdp.evaluate('new Promise(resolve=>{const f=document.querySelector("iframe");f.addEventListener("load",resolve,{once:true});f.src="about:blank"})');
+  await b.cdp.evaluate('window.__commands=[];document.querySelector("iframe").contentWindow.postMessage=(message,origin)=>{__commands.push({message,origin})};true');
+  await post(b,'ready',{item:{weapon:'ak47',wear:.3,seed:13}});
+  assert.match(await b.cdp.evaluate('document.querySelector(".skin-viewer-metadata").textContent'),/Desgaste: 0,3000 · Padrão: 13/);
+  assert.deepEqual(await b.cdp.evaluate('[...document.querySelectorAll(".skin-viewer-tools button")].map(b=>b.textContent)'),['Rotacionar','Primeira pessoa','Inspecionar','Ocultar controles']);
+  await b.cdp.evaluate('document.querySelector(".skin-viewer-hands").click()');
+  assert.deepEqual(await b.cdp.evaluate('__commands.at(-1)'),{message:{type:'cs2embed:set',spec:{view:'hands'}},origin:'https://cs2inspect.skin'});
+  await post(b,'view',{view:'hands'});
+  assert.equal(await b.cdp.evaluate('document.querySelector(".skin-viewer-hands").getAttribute("aria-pressed")'),'true');
+  await b.cdp.evaluate('document.querySelector(".skin-viewer-inspect").click()');
+  assert.deepEqual(await b.cdp.evaluate('__commands.at(-1)'),{message:{type:'cs2embed:inspect'},origin:'https://cs2inspect.skin'});
+  await b.cdp.evaluate('document.querySelector(".skin-viewer-rotate").click()');
+  assert.equal(await b.cdp.evaluate('__commands.at(-1).message.spec.view'),'item');
+  await post(b,'view',{view:'item'});
+  await b.cdp.evaluate('document.querySelector(".skin-viewer-toggle").click()');
+  assert.equal(await b.cdp.evaluate('document.querySelector(".skin-viewer-cameras").hidden'),true);
+  assert.equal(await b.cdp.evaluate('document.querySelector(".skin-viewer-toggle").textContent'),'Mostrar controles');
+  await b.cdp.evaluate('document.querySelector(".skin-viewer-toggle").click()');
+  assert.equal(await b.cdp.evaluate('document.querySelector(".skin-viewer-cameras").hidden'),false);
+  await post(b,'ready',{item:{weapon:'sporty_gloves',wear:.15,seed:1}});
+  assert.equal(await b.cdp.evaluate('document.querySelector(".skin-viewer-hands").hidden'),true);
+  assert.equal(await b.cdp.evaluate('document.querySelector(".skin-viewer-inspect").hidden'),true);
+  assert.equal(await b.cdp.evaluate('document.documentElement.scrollWidth<=innerWidth'),true);
+  assert.deepEqual(b.pageErrors,[]);
+ }finally{await b.close();}
+});

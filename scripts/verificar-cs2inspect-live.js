@@ -49,7 +49,7 @@ class CDP {
    report.errors=report.local.messages.filter(e=>e.type==='error');report.error=report.errors[0]||null;
   };
   const observeProvider=async timeoutMs=>Promise.all([...sessions].map(async session=>{
-   try{return await cdp.evaluate('({title:document.title,canvases:[...document.querySelectorAll("canvas")].map(c=>({width:c.width,height:c.height,visible:c.getBoundingClientRect().width>0&&c.getBoundingClientRect().height>0}))})',session,timeoutMs);}
+   try{return await cdp.evaluate('({title:document.title,visibleButtons:[...document.querySelectorAll("button")].filter(b=>b.getClientRects().length).map(b=>b.textContent.trim()),canvases:[...document.querySelectorAll("canvas")].map(c=>({width:c.width,height:c.height,visible:c.getBoundingClientRect().width>0&&c.getBoundingClientRect().height>0}))})',session,timeoutMs);}
    catch(error){return {inspectionError:error.message};}
   }));
   await refreshMessages();report.viewport=await cdp.evaluate('({width:innerWidth,documentWidth:document.documentElement.scrollWidth})');report.provider=[];
@@ -72,11 +72,13 @@ class CDP {
    await refreshMessages();
    if(kind!=='gloves'&&!report.error){
     const messageOffset=report.local.messages.length;
-    await cdp.evaluate('document.querySelector("iframe").contentWindow.postMessage({type:"cs2embed:set",spec:{view:"hands"}},"https://cs2inspect.skin")');
+    const cameraButton=await cdp.evaluate('(()=>{const r=document.querySelector(".skin-viewer-hands").getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()');
+    await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:cameraButton.x,y:cameraButton.y,button:'left',clickCount:1});
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:cameraButton.x,y:cameraButton.y,button:'left',clickCount:1});
     const viewDeadline=Date.now()+5000;
     do{await delay(200);await refreshMessages();report.firstPersonMessages=report.local.messages.slice(messageOffset);if(report.error||report.firstPersonMessages.some(e=>e.type==='view'))break;}while(Date.now()<viewDeadline);
-    report.firstPersonAcknowledgement=report.firstPersonMessages.find(e=>e.type==='view')||null;
-    report.firstPersonStateVerified=report.firstPersonAcknowledgement?.view==='hands';
+    report.firstPersonAcknowledgement=[...report.local.messages].reverse().find(e=>e.type==='view')||null;
+    report.firstPersonStateVerified=report.firstPersonAcknowledgement?.view==='hands'&&await cdp.evaluate('document.querySelector(".skin-viewer-hands").getAttribute("aria-pressed")==="true"');
     await delay(500);
     const handsShot=await cdp.send('Page.captureScreenshot',{format:'png'});fs.writeFileSync(path.join(output,'cs2inspect-live-'+mode+'-hands.png'),Buffer.from(handsShot.data,'base64'));report.handsScreenshot='cs2inspect-live-'+mode+'-hands.png';
    }
@@ -87,7 +89,8 @@ class CDP {
   assert.equal(report.error,null,'O provedor respondeu com erro: '+(report.error?.reason||''));assert.equal(report.ready,true,'O CS2Inspect não confirmou ready.');assert.equal(report.canvasObserved,true,'Não foi observado um canvas visível.');assert.equal(report.framesBeforeClick,0);assert.equal(report.framesAfterClose,0);assert(report.viewport.documentWidth<=report.viewport.width);assert.deepEqual(report.consoleErrors,[]);
   assert.equal(report.responses.find(response=>response.url.startsWith('https://cs2inspect.skin/embed'))?.status,200,'O documento oficial não respondeu HTTP 200.');
   assert.equal(report.controls?.rotationPixelsChanged,true,'Não foi observada alteração visual após arrastar o modelo.');assert.equal(report.controls?.zoomPixelsChanged,true,'Não foi observada alteração visual após aproximar o modelo.');
-  if(kind!=='gloves')assert.equal(report.firstPersonAcknowledgement?.view,'hands','O CS2Inspect não confirmou a câmera em primeira pessoa para este modelo.');
+  assert(report.provider.every(p=>!p.visibleButtons?.length),'A interface nativa em inglês deve permanecer oculta.');
+  if(kind!=='gloves')assert.equal(report.firstPersonStateVerified,true,'O CS2Inspect não confirmou a câmera em primeira pessoa para este modelo.');
  }finally{
   cdp?.close();if(child&&child.exitCode===null&&child.signalCode===null)await new Promise(resolve=>{child.once('exit',resolve);child.kill();});server.closeAllConnections();await new Promise(resolve=>server.close(resolve));
   if(path.dirname(path.resolve(profile))!==path.resolve(os.tmpdir())||!path.basename(profile).startsWith('goatskins-cs2inspect-live-'))throw Error('Diretório temporário inesperado.');fs.rmSync(profile,{recursive:true,force:true});
