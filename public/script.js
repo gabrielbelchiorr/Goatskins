@@ -1,7 +1,7 @@
 /* Interface GOATSKINS */
 let S = { eu: null, naoLidas: 0, s: { titulo: "", sub: "", banner: "", cores: { gold: "#d4aa55", copper: "#b8651f", slate: "#102440", navy: "#0e1a33" } }, c: [] };
 let view = "sorteios";
-let sorteioAtual = null, pedidoPendente = null, buscandoPendente = false, pedidoPoll = null;
+let sorteioAtual = null, pedidoPendente = null, buscandoPendente = false, encerrarPedidoModal = null;
 const sorteioURL = Number(new URLSearchParams(location.search).get("sorteio"));
 if (Number.isInteger(sorteioURL) && sorteioURL > 0) { view = "detalhe"; sorteioAtual = sorteioURL; }
 
@@ -48,7 +48,9 @@ async function api(url, method, body, mfaRetry = false) {
   return d;
 }
 async function carregar() {
-  S = await api("/api/estado"); render();
+  S = await api("/api/estado");
+  window.GoatSkinViewer?.configure?.({key:S.viewer3d?.key || ''});
+  render();
   window.GoatskinsLoading?.finish();
   if (S.eu && !S.eu.celular_preenchido && !admin()) return celularModal();
   await atualizarPendente();
@@ -77,6 +79,7 @@ let destinoAdmin = {aba:'painel', editar:undefined};
 let retomarPainelAdmin = null;
 const modalBackground = new Map();
 function openModal(wide, ...nodes) {
+  encerrarPedidoModal?.();
   if ($("modal").hidden) {
     modalOpener = document.activeElement;
     document.querySelectorAll('.hero, .shell, #menuBtn, #scrim, #pendingPixBar, .cookie-banner').forEach(el => {
@@ -92,6 +95,7 @@ function openModal(wide, ...nodes) {
 }
 function closeModal() {
   if (mfaPendente?.busy) return;
+  encerrarPedidoModal?.();
   if (mfaPendente) {
     const pending = mfaPendente; mfaPendente = null;
     $('modalBody').replaceChildren(); pending.resolve(false);
@@ -392,6 +396,21 @@ function abrirSorteio(id) {
   history.pushState({}, "", "?sorteio=" + encodeURIComponent(id));
   render(); window.scrollTo(0, 0);
 }
+function botaoVisualizarSkin(c) {
+  if (!c.viewer_3d || !S.viewer3d?.key || !window.GoatCS2Inspect || !window.GoatSkinViewer) return null;
+  try { window.GoatCS2Inspect.normalize(c.viewer_3d); } catch (_) { return null; }
+  let error;
+  const button = botao("Visualizar em 3D", "alt skin-3d-button", () => {
+    try {
+      window.GoatSkinViewer.open({config:c.viewer_3d, title:c.premio});
+      error?.remove(); error = null;
+    } catch (e) {
+      if (!error) { error = h('p','err skin-3d-error'); button.insertAdjacentElement('afterend',error); }
+      mostrarFeedback(error,'Visualização 3D indisponível. ' + e.message);
+    }
+  });
+  return button;
+}
 function cardSorteio(c) {
   const pct = Math.round(Math.min(100, c.total / c.max * 100)), restante = c.max_por_usuario - c.meus.length, fechado = c.status !== "OPEN" || cheio(c);
   const card = h("article", "card"), prize = h("button", "prize");
@@ -405,6 +424,7 @@ function cardSorteio(c) {
   info.append(h("h3", null, c.premio));
   if (c.desgaste) info.append(h("p", "muted", c.desgaste));
   if (c.descricao) info.append(h("p", "muted", c.descricao));
+  const visualizar = botaoVisualizarSkin(c); if (visualizar) info.append(visualizar);
   if (c.ganhador) {
     const w = c.ganhador;
     info.append(h("p", null, "Ganhador(a): " + w.nome + " · Nº " + w.n + (w.eu ? " (você!)" : "")),
@@ -489,6 +509,7 @@ function renderDetalhe(c) {
   infos.append(h("span", "sale-eyebrow", "GOATSKINS / SORTEIO #" + c.id), h("h1", null, c.premio));
   if (c.desgaste) infos.append(h("p", "sale-wear", c.desgaste));
   if (c.descricao) infos.append(h("p", "muted", c.descricao));
+  const visualizar = botaoVisualizarSkin(c); if (visualizar) infos.append(visualizar);
   const specs = h("div", "sale-specs");
   [["VALOR DA COTA", brl(c.preco)], ["DISPONÍVEIS", String(Math.max(0,c.max-c.total-c.reservados.length))], ["PARTICIPAÇÕES", c.total + " / " + c.max]].forEach(([k,v]) => {
     const s = h("div", "sale-spec"); s.append(h("small", null, k), h("strong", null, v)); specs.append(s);
@@ -720,7 +741,7 @@ function desenharBarra() {
 }
 async function atualizarPendente() {
   if (!S.eu) {pedidoPendente=null;desenharBarra();return;}
-  if (buscandoPendente) return;
+  if (document.hidden || buscandoPendente) return;
   buscandoPendente=true;
   try {pedidoPendente=await api("/api/pedidos/pendente");desenharBarra();}
   catch(e) { /* mantém a barra anterior até termos resposta do servidor */ }
@@ -735,21 +756,27 @@ setInterval(()=>{if(S.eu)atualizarPendente();},15000);
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&S.eu)atualizarPendente();});
 
 function pedidoModal(p0) {
-  if(pedidoPoll){clearInterval(pedidoPoll);pedidoPoll=null;}
-  let p=p0;
+  let p=p0, encerrado=false, contador=null, consulta=null, consultando=false;
   const box=h("div","pix-checkout"), card=h("div","pix-panel"), err=h("p","err");
+  // Os dois timers pertencem a esta instância da janela. Uma resposta que chega
+  // depois de fechar ou trocar a janela não pode redesenhar nem parar a seguinte.
+  const limpar=()=>{
+    encerrado=true;clearInterval(contador);clearInterval(consulta);
+    if(encerrarPedidoModal===limpar)encerrarPedidoModal=null;
+  };
+  const atual=()=>!encerrado&&encerrarPedidoModal===limpar&&box.isConnected&&!$("modal").hidden;
   const desenhar = () => {
     card.innerHTML="";
     if (p.status==="PAID") {
       card.append(h("span","pix-success","✓ PAGAMENTO APROVADO"),h("h2",null,"Números garantidos!"),
         h("p","muted center",p.premio),h("div","big",p.numeros.join(", ")));
-      if(pedidoPoll){clearInterval(pedidoPoll);pedidoPoll=null;}
+      limpar();
       atualizarPendente();carregar().catch(()=>{});return;
     }
     if(p.status!=="PENDING") {
       card.append(h("h2",null,"Pedido "+(STATUS_PEDIDO[p.status]||p.status).toLowerCase()),
         h("p","muted center",MSG_PEDIDO[p.status]||"Verifique seus pedidos."));
-      if(pedidoPoll){clearInterval(pedidoPoll);pedidoPoll=null;}
+      limpar();
       atualizarPendente();carregar().catch(()=>{});return;
     }
     const aindaValido=Number(p.expira_em)>Date.now();
@@ -783,21 +810,26 @@ function pedidoModal(p0) {
     };
     countdown.tick=tick;
   };
-  box.append(card,err);desenhar();openModal(false,box);$("modalBody").parentElement.classList.add("pix-dialog");
+  box.append(card,err);openModal(false,box);encerrarPedidoModal=limpar;desenhar();$("modalBody").parentElement.classList.add("pix-dialog");
+  if(p.status!=="PENDING")return;
   // Redesenha somente quando o estado muda; o contador não reinicia ao recarregar a página.
-  pedidoPoll=setInterval(async()=>{
-    if(!box.isConnected||$("modal").hidden){clearInterval(pedidoPoll);pedidoPoll=null;return;}
+  contador=setInterval(()=>{
+    if(!atual()){limpar();return;}
     const rel=card.querySelector(".pix-countdown");if(rel&&rel.tick)rel.tick();
   },1000);
   let chamadas=0;
-  const pollStatus=setInterval(async()=>{
-    if(!box.isConnected||$("modal").hidden||p.status!=="PENDING") {clearInterval(pollStatus);return;}
+  consulta=setInterval(async()=>{
+    if(!atual()){limpar();return;}
+    if(document.hidden||consultando||p.status!=="PENDING")return;
+    consultando=true;
     try{
       const antes=p.status, antesPix=!!p.pix;
-      p=++chamadas%2===0 ? await api("/api/pedidos/"+p.id+"/atualizar","POST") : await api("/api/pedidos/"+p.id);
+      const resposta=++chamadas%2===0 ? await api("/api/pedidos/"+p.id+"/atualizar","POST") : await api("/api/pedidos/"+p.id);
+      if(!atual())return;
+      p=resposta;
       if(p.status!==antes||!!p.pix!==antesPix)desenhar();
-      if(p.status!=="PENDING") {clearInterval(pollStatus);await atualizarPendente();}
     } catch(e) { /* falha de rede: mantém o pedido, tenta de novo na próxima consulta */ }
+    finally {consultando=false;}
   },10000);
   atualizarPendente();
 }
@@ -877,14 +909,14 @@ async function painel(aba, editar, mensagem = '') {
   destinoAdmin = {aba, editar};
   if (!await exigirMfaAdmin()) return;
   const tabs = h("div", "tabs");
-  [["painel", "Painel"], ["sorteios", "Sorteios"], ["pedidos", "Pedidos"], ["entregas", "Entregas"], ["usuarios", "Usuários"], ["logs", "Logs"], ["visual", "Aparência"]].forEach(([k, nome]) =>
+  [["painel", "Painel"], ["sorteios", "Sorteios"], ["predefinicoes", "Predefinições de Sorteios"], ["pedidos", "Pedidos"], ["entregas", "Entregas"], ["usuarios", "Usuários"], ["logs", "Logs"], ["visual", "Aparência"]].forEach(([k, nome]) =>
     tabs.append(botao(nome, k === aba ? "on" : "", () => painel(k))));
   const corpo = h("div");
   const titulo = h("h3", null, "Painel GOATSKINS");
   retomarPainelAdmin = () => openModal(true, titulo, tabs, corpo);
   retomarPainelAdmin();
   if (mensagem) { const note = h('p', 'err'); mostrarFeedback(note, mensagem, true); corpo.append(note); }
-  const f = { painel: abaPainel, sorteios: abaSorteios, pedidos: abaPedidos, entregas: abaEntregas, usuarios: abaUsuarios, logs: abaLogs, visual: abaVisual }[aba];
+  const f = { painel: abaPainel, sorteios: abaSorteios, predefinicoes: abaPredefinicoes, pedidos: abaPedidos, entregas: abaEntregas, usuarios: abaUsuarios, logs: abaLogs, visual: abaVisual }[aba];
   Promise.resolve(f(corpo, editar)).catch(e => corpo.append(h("p", "err", e.message)));
 }
 
@@ -896,19 +928,291 @@ async function abaPainel(box) {
     h("h4", null, "Últimas escolhas"), tabela(["Quando", "Sorteio", "Nº", "Pessoa"], d.ultimas.map(u => [dataHora(u.criado_em), u.premio, u.n, u.nome + " (" + u.email + ")"])));
 }
 
-function abaSorteios(box, edit) {
-  const c = edit || { premio: "", desgaste: "", descricao: "", valor: "", preco: 0, cor: "#b3263a", max: 100, max_por_usuario: 1 };
-  const f = { premio: campo("Skin (ex.: AK-47 | Redline)", "text", c.premio), desgaste: campo("Desgaste (ex.: Field-Tested)", "text", c.desgaste),
-    descricao: campo("Descrição", "text", c.descricao), valor: campo("Valor da skin (R$, só exibição)", "number", c.valor), preco: campo("Preço por número (R$; 0 = grátis)", "number", c.preco),
-    max: campo("Números (máx. 100)", "number", c.max), mpu: campo("Números por pessoa", "number", c.max_por_usuario), cor: campo("Cor (se não tiver foto)", "color", c.cor), foto: campo("Foto da skin", "file") };
-  f.foto.i.accept = "image/*"; f.preco.i.step = "0.01"; f.preco.i.min = "0";
-  const par = (a, b) => { const r = h("div", "two"); r.append(a.w, b.w); return r; }, err = h("p", "err");
-  const ok = botao(edit ? "Salvar alterações" : "Adicionar sorteio", "", () => {
-    const d = { premio: f.premio.i.value, desgaste: f.desgaste.i.value, descricao: f.descricao.i.value, valor: f.valor.i.value, preco_numero: f.preco.i.value, max: f.max.i.value, max_por_usuario: f.mpu.i.value, cor: f.cor.i.value };
-    const enviar = foto => rodar(err, async () => { if (foto !== undefined) d.foto = foto; await api(edit ? "/api/admin/campanhas/" + c.id : "/api/admin/campanhas", edit ? "PUT" : "POST", d); await carregar(); painel("sorteios"); });
-    const file = f.foto.i.files[0]; file ? lerFoto(file, enviar) : enviar(undefined);
+/* Um modelo contém somente os campos configuráveis. Aplicar preenche este formulário;
+   a publicação continua sendo uma ação independente, validada pelo servidor. */
+const CONFIGURACAO_VAZIA = {premio:'', desgaste:'', descricao:'', valor:0, preco_numero:0, cor:'#b3263a', max:100, max_por_usuario:1, foto:'', viewer_3d:null, reconfigurar_3d:false};
+async function imagemConfiguracao(file) {
+  if (!file || !file.type.startsWith('image/') || file.size > 15e6) throw new Error('Selecione uma imagem de até 15 MB.');
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Não foi possível ler a imagem. Escolha o arquivo novamente.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Este arquivo não é uma imagem compatível.'));
+      img.onload = () => {
+        try {
+          const k = Math.min(1, IMG_MAX / img.width), canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * k)); canvas.height = Math.max(1, Math.round(img.height * k));
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', .82));
+        } catch (_) { reject(new Error('Não foi possível preparar a imagem. Tente outro arquivo.')); }
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
   });
-  box.append(par(f.premio, f.desgaste), f.descricao.w, par(f.valor, f.preco), par(f.max, f.mpu), f.cor.w, f.foto.w, err, ok);
+}
+function resumoConfiguracao(d, foto = d.foto) {
+  const card = h('article', 'preset-preview');
+  if (foto) { const img = h('img'); img.src = foto; img.alt = d.premio || 'Skin'; img.loading = 'lazy'; card.append(img); }
+  const info = h('div', 'preset-preview-info');
+  info.append(h('strong', null, d.premio || 'Skin sem nome'));
+  if (d.desgaste) info.append(h('p', 'muted', d.desgaste));
+  if (d.descricao) info.append(h('p', 'muted', d.descricao));
+  info.append(h('p', 'muted', d.max + ' números · ' + d.max_por_usuario + ' por pessoa · ' + (Number(d.preco_numero) ? brl(d.preco_numero) + ' por número' : 'Grátis')));
+  if (Number(d.valor)) info.append(h('p', 'muted', 'Valor da skin: ' + brl(d.valor)));
+  if (d.reconfigurar_3d) info.append(h('p', 'preset-3d-warning', 'Visualização 3D precisa ser configurada novamente.'));
+  const visualizar = botaoVisualizarSkin(d); if (visualizar) info.append(visualizar);
+  card.append(info); return card;
+}
+/* Campos estruturados: nenhum link ou iframe arbitrário pode entrar no modelo. */
+function camposVisualizador3d(titulo) {
+  const section = h('section','skin-config'), status = h('p','muted'), enabled = campo('Ativar visualização 3D','checkbox');
+  enabled.w.classList.add('preset-check'); status.setAttribute('role','status');
+  const fields = h('fieldset','skin-config-fields');
+  const select = (rotulo, options) => {
+    const w=h('div','form-field'), i=h('select'), label=h('label',null,rotulo); i.id='campo-'+crypto.randomUUID(); label.htmlFor=i.id;
+    options.forEach(([value,text])=>{const option=h('option',null,text);option.value=value;i.append(option);}); w.append(label,i);return {w,i};
+  };
+  const par=(a,b)=>{const row=h('div','two');row.append(a.w,b.w);return row;};
+  const modo=select('Identificação no CS2Inspect',[['name','Nome no Mercado Steam'],['item','Identificador do catálogo'],['weapon','Modelo e paint index']]);
+  const nome=campo('Nome Steam da skin','text'), item=campo('Identificador oficial (ex.: ak-47/redline)','text'), weapon=campo('Identificador do modelo (ex.: ak47)','text'), paint=campo('Paint index (opcional)','number');
+  nome.i.maxLength=200; item.i.maxLength=160; weapon.i.maxLength=80;
+  nome.i.placeholder='AK-47 | Redline (Field-Tested)'; item.i.placeholder='ak-47/redline'; weapon.i.placeholder='ak47';
+  Object.assign(paint.i,{min:0,max:2147483647,step:1});
+  const wear=campo('Float (wear)','number'), seed=campo('Pattern seed','number'), st=campo('StatTrak','checkbox'), nametag=campo('Name tag (opcional)','text');
+  Object.assign(wear.i,{min:0,max:1,step:'any',required:true}); Object.assign(seed.i,{min:0,max:1000,step:1,required:true}); nametag.i.maxLength=20; st.w.classList.add('preset-check');
+  const view=select('Visualização inicial',[['item','Rotação do item'],['hands','Primeira pessoa, quando compatível']]);
+  const manual=campo('Representação ilustrativa (atributos podem diferir do prêmio)','checkbox'); manual.w.classList.add('preset-check');
+  const compatibility=h('p','muted'); compatibility.textContent='Confira os atributos do prêmio. O provedor pode ajustar o float ao intervalo permitido da skin.';
+  const stickerFieldset=h('fieldset','skin-stickers'), stickerList=h('div','skin-sticker-list'), rows=[];
+  stickerFieldset.append(h('legend',null,'Stickers (quando compatíveis)'),h('p','muted','Use o índice oficial do sticker. Posições são contadas de 0 a 4.'),stickerList);
+  const adicionar=botao('Adicionar sticker','alt',()=>addSticker());
+  const addSticker=(data={})=>{
+    if(rows.length>=5)return;
+    const box=h('section','skin-sticker'), slot=campo('Slot do sticker','number'), index=campo('Índice do sticker','number');
+    const livre=[0,1,2,3,4].find(n=>!rows.some(row=>Number(row.slot.i.value)===n));
+    Object.assign(slot.i,{min:0,max:4,step:1,required:true,value:data.slot??livre});Object.assign(index.i,{min:1,max:2147483647,step:1,required:true,value:data.index??''});
+    const advanced=h('details','skin-sticker-advanced'), x=campo('Deslocamento X','number'),y=campo('Deslocamento Y','number'),rotation=campo('Rotação (graus)','number'),scrape=campo('Desgaste do sticker','number');
+    [x,y,rotation].forEach(f=>f.i.step='any');Object.assign(scrape.i,{min:0,max:1,step:'any'});
+    for(const [field,key]of [[x,'x'],[y,'y'],[rotation,'rotation'],[scrape,'wear']])if(data[key]!==undefined)field.i.value=data[key];
+    advanced.append(h('summary',null,'Posição e desgaste opcionais'),par(x,y),par(rotation,scrape));
+    const row={box,slot,index,x,y,rotation,scrape}; rows.push(row);
+    box.append(par(slot,index),advanced,botao('Remover sticker','alt',()=>{rows.splice(rows.indexOf(row),1);box.remove();adicionar.disabled=rows.length>=5;}));stickerList.append(box);adicionar.disabled=rows.length>=5;
+  };
+  stickerFieldset.append(adicionar);
+  const charmFieldset=h('fieldset','skin-charm'), charm=campo('Índice do charm (opcional)','number'), charmSeed=campo('Pattern seed do charm (opcional)','number');
+  Object.assign(charm.i,{min:1,max:2147483647,step:1});Object.assign(charmSeed.i,{min:0,max:2147483647,step:1});
+  charmFieldset.append(h('legend',null,'Charm (quando compatível)'),par(charm,charmSeed));
+  let pendente=false;
+  const atualizar=()=>{
+    fields.hidden=!enabled.i.checked;fields.disabled=!enabled.i.checked;
+    nome.w.hidden=modo.i.value!=='name';nome.i.disabled=modo.i.value!=='name';nome.i.required=modo.i.value==='name';
+    item.w.hidden=modo.i.value!=='item';item.i.disabled=modo.i.value!=='item';item.i.required=modo.i.value==='item';
+    weapon.w.hidden=paint.w.hidden=modo.i.value!=='weapon';weapon.i.disabled=paint.i.disabled=modo.i.value!=='weapon';weapon.i.required=modo.i.value==='weapon';
+    const selector=modo.i.value==='name'?nome.i.value:modo.i.value==='item'?item.i.value:weapon.i.value;
+    const luvas=/gloves|hand[- ]?wraps|luvas|bandagens/i.test(selector), faca=/karambit|bayonet|knife|butterfly|falchion|shadow daggers|bowie|navaja|stiletto|talon|kukri/i.test(selector);
+    st.i.disabled=luvas;stickerFieldset.disabled=charmFieldset.disabled=luvas||faca;
+    compatibility.textContent=luvas?'Luvas não usam StatTrak, stickers ou charms. Confira o float e o padrão do prêmio.':faca?'Stickers e charms não se aplicam a facas. A primeira pessoa depende da compatibilidade do modelo.':'Confira os atributos do prêmio. O provedor pode ajustar o float ao intervalo permitido da skin.';
+    status.classList.toggle('preset-3d-warning',pendente);
+    status.textContent=pendente?'Visualização 3D precisa ser configurada novamente. Os demais dados foram preservados.':!S.viewer3d?.key?'A chave pública do CS2Inspect ainda não foi configurada no servidor. Você pode salvar os dados; a prévia estará disponível após a configuração.':enabled.i.checked?'Configure os atributos e abra a prévia antes de salvar.':'Opcional. O botão 3D aparece quando há configuração válida.';
+  };
+  enabled.i.addEventListener('change',()=>{if(!enabled.i.checked)pendente=false;atualizar();});modo.i.addEventListener('change',atualizar);[nome,item,weapon].forEach(f=>f.i.addEventListener('input',atualizar));
+  const aplicar=(config,reconfigurar)=>{
+    const d=config||{};pendente=!!reconfigurar&&!config;enabled.i.checked=!!config;
+    modo.i.value=d.item?'item':d.weapon?'weapon':'name';nome.i.value=d.name||'';item.i.value=d.item||'';weapon.i.value=d.weapon||'';paint.i.value=d.paint??'';
+    wear.i.value=d.wear??.06;seed.i.value=d.seed??1;st.i.checked=!!d.stattrak;nametag.i.value=d.nametag||'';view.i.value=d.view||'item';manual.i.checked=d.manual!==false;
+    rows.splice(0);stickerList.replaceChildren();adicionar.disabled=false;(d.stickers||[]).forEach(addSticker);charm.i.value=d.charm?.index??'';charmSeed.i.value=d.charm?.seed??'';atualizar();
+  };
+  const ler=()=>{
+    if(!enabled.i.checked)return {viewer_3d:null,reconfigurar_3d:pendente};
+    if(!window.GoatCS2Inspect)throw new Error('O validador 3D não carregou. Atualize a página.');
+    if([...fields.querySelectorAll('input,select')].some(field=>!field.reportValidity()))throw new Error('Confira os campos da visualização 3D.');
+    const d={wear:Number(wear.i.value),seed:Number(seed.i.value),stattrak:!st.i.disabled&&st.i.checked,nametag:nametag.i.value.trim(),view:view.i.value,manual:manual.i.checked,stickers:[],charm:null};
+    if(modo.i.value==='name')d.name=nome.i.value.trim();else if(modo.i.value==='item')d.item=item.i.value.trim();else{d.weapon=weapon.i.value.trim();if(paint.i.value!=='')d.paint=Number(paint.i.value);}
+    if(!stickerFieldset.disabled)d.stickers=rows.map(row=>{const s={slot:Number(row.slot.i.value),index:Number(row.index.i.value)};for(const [field,key]of [[row.x,'x'],[row.y,'y'],[row.rotation,'rotation'],[row.scrape,'wear']])if(field.i.value!=='')s[key]=Number(field.i.value);return s;});
+    if(!charmFieldset.disabled&&charm.i.value!==''){d.charm={index:Number(charm.i.value)};if(charmSeed.i.value!=='')d.charm.seed=Number(charmSeed.i.value);}else if(!charmFieldset.disabled&&charmSeed.i.value!=='')throw new Error('Informe o índice do charm antes do seu pattern seed.');
+    return {viewer_3d:window.GoatCS2Inspect.normalize(d),reconfigurar_3d:false};
+  };
+  const preview=botao('Prévia 3D','alt',()=>{try{const d=ler();if(!d.viewer_3d)throw new Error('Ative e configure a visualização 3D antes de abrir a prévia.');window.GoatSkinViewer.open({config:d.viewer_3d,title:titulo()||'Prévia da skin'});}catch(error){status.textContent=error.message;status.classList.add('preset-3d-warning');}});
+  const help=h('a','preset-help','Consultar catálogo e parâmetros do CS2Inspect');help.href='https://cs2inspect.skin/docs/api';help.target='_blank';help.rel='noopener noreferrer';
+  fields.append(modo.w,nome.w,item.w,par(weapon,paint),par(wear,seed),st.w,nametag.w,view.w,compatibility,stickerFieldset,charmFieldset,manual.w);
+  const actions=h('div','preset-actions');actions.append(preview,botao('Remover visualização 3D','alt',()=>aplicar(null,false)));
+  section.append(h('h4',null,'Visualização 3D da skin'),enabled.w,fields,actions,status,help);
+  return {w:section,aplicar,ler};
+}
+function editorConfiguracao(box, {dados = {}, campanha = null, predefinicao = null, gerenciar = false, aoSalvar}) {
+  let origem = predefinicao || null, fotoAtual = '';
+  const shell = h('section', 'raffle-config'), source = h('div', 'preset-source');
+  const f = {
+    premio:campo('Skin (ex.: AK-47 | Redline)', 'text'), desgaste:campo('Desgaste (ex.: Field-Tested)', 'text'),
+    descricao:campo('Descrição', 'text'), valor:campo('Valor da skin (R$, só exibição)', 'number'),
+    preco_numero:campo('Preço por número (R$; 0 = grátis)', 'number'), max:campo('Números (máx. 100)', 'number'),
+    max_por_usuario:campo('Números por pessoa', 'number'), cor:campo('Cor (se não tiver foto)', 'color'),
+    foto:campo('Foto da skin', 'file')
+  };
+  Object.assign(f.premio.i, {required:true, maxLength:80}); f.desgaste.i.maxLength = 40; f.descricao.i.maxLength = 500;
+  Object.assign(f.valor.i, {min:0, max:10000000, step:'.01'});
+  Object.assign(f.preco_numero.i, {min:0, max:10000, step:'.01', required:true});
+  Object.assign(f.max.i, {min:1, max:100, step:1, required:true});
+  Object.assign(f.max_por_usuario.i, {min:1, max:100, step:1, required:true});
+  f.foto.i.accept = 'image/*';
+  const nome = campo('Nome da predefinição', 'text', origem?.nome || ''); nome.i.maxLength = 100;
+  const viewer = camposVisualizador3d(()=>f.premio.i.value);
+  const err = h('p', 'err'), preview = h('div', 'raffle-preview'), image = h('div', 'preset-current-image');
+  err.setAttribute('aria-live', 'polite');
+  const atualizaFoto = () => {
+    image.replaceChildren();
+    if (fotoAtual) { const img = h('img'); img.src = fotoAtual; img.alt = 'Imagem configurada'; image.append(img); }
+  };
+  const aplicar = (d, modelo) => {
+    const values = {...CONFIGURACAO_VAZIA, ...d};
+    Object.entries(f).forEach(([k, field]) => { if (k !== 'foto') field.i.value = values[k] ?? ''; });
+    viewer.aplicar(values.viewer_3d,values.reconfigurar_3d || modelo?.reconfigurar_3d); fotoAtual = values.foto || ''; f.foto.i.value = '';
+    origem = modelo || null; nome.i.value = origem?.nome || '';
+    preview.replaceChildren();
+    atualizaFoto(); atualizaOrigem();
+  };
+  const ler = async () => {
+    if (!form.reportValidity()) throw new Error('Confira os campos destacados antes de continuar.');
+    const max = Number(f.max.i.value), mpu = Number(f.max_por_usuario.i.value), preco = Number(f.preco_numero.i.value);
+    if (mpu > max) throw new Error('O limite por pessoa não pode ser maior que a quantidade de números.');
+    if (preco > 0 && preco < 1) throw new Error('Preço por número: grátis ou a partir de R$ 1,00.');
+    const configuracao3d=viewer.ler();
+    if (f.foto.i.files[0]) { fotoAtual = await imagemConfiguracao(f.foto.i.files[0]); f.foto.i.value = ''; atualizaFoto(); }
+    return {premio:f.premio.i.value.trim(), desgaste:f.desgaste.i.value.trim(), descricao:f.descricao.i.value.trim(),
+      valor:Number(f.valor.i.value), preco_numero:preco, max, max_por_usuario:mpu, cor:f.cor.i.value,
+      foto:fotoAtual, ...configuracao3d};
+  };
+  let ocupado = false;
+  const executar = async (button, fn) => {
+    if (ocupado) return; ocupado = true;
+    const text = button.textContent; button.disabled = true; button.textContent = 'Aguarde…'; shell.setAttribute('aria-busy', 'true'); mostrarFeedback(err, '');
+    try { await fn(); }
+    catch (error) { mostrarFeedback(err, error.message); }
+    finally { ocupado = false; button.disabled = false; button.textContent = text; shell.removeAttribute('aria-busy'); }
+  };
+  const acao = (text, cls, fn) => { const bt = botao(text, cls); bt.addEventListener('click', () => executar(bt, fn)); return bt; };
+  const salvarModelo = async (original) => {
+    const d = await ler(), titulo = nome.i.value.trim() || d.premio + ' — Modelo padrão';
+    if (original && !origem) throw new Error('Selecione uma predefinição para atualizar.');
+    if (original && !confirm('Salvar alterações em “' + origem.nome + '”? Sorteios já criados continuam independentes.')) return;
+    const saved = await api('/api/admin/predefinicoes' + (original ? '/' + origem.id : ''), original ? 'PUT' : 'POST',
+      {nome:titulo, dados:d, ...(original ? {versao:origem.versao} : {})});
+    origem = saved; nome.i.value = saved.nome; atualizaOrigem(); mostrarFeedback(err, 'Predefinição salva na biblioteca.', true);
+    if (gerenciar && aoSalvar) aoSalvar(saved);
+  };
+  const salvarOriginal = acao('Salvar alterações na predefinição original', 'alt', () => salvarModelo(true));
+  const salvarNova = acao('Salvar como predefinição', 'alt', () => salvarModelo(false));
+  const atualizaOrigem = () => {
+    source.replaceChildren(); source.hidden = !origem;
+    if (origem) source.append(h('strong', null, 'Predefinição: ' + origem.nome), h('p', 'muted', 'Os campos são uma cópia editável. Criar o sorteio não modifica a predefinição.'));
+    salvarOriginal.hidden = !origem; salvarNova.textContent = origem ? 'Salvar como nova predefinição' : 'Salvar como predefinição';
+  };
+  const submit = botao(gerenciar ? (origem ? 'Salvar alterações na predefinição original' : 'Salvar predefinição') : campanha ? 'Salvar alterações' : 'Adicionar sorteio'); submit.type = 'submit';
+  const form = h('form', 'raffle-editor');
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    executar(submit, async () => {
+      if (gerenciar) return salvarModelo(!!origem);
+      const d = await ler();
+      await api('/api/admin/campanhas' + (campanha ? '/' + campanha.id : ''), campanha ? 'PUT' : 'POST', d);
+      await carregar(); await painel('sorteios', undefined, campanha ? 'Sorteio atualizado.' : 'Novo sorteio criado com participantes e números independentes.');
+    });
+  });
+  const par = (a,b) => { const row = h('div','two'); row.append(a.w,b.w); return row; };
+  shell.append(h('h4', null, gerenciar ? 'Configuração reutilizável' : campanha ? 'Editar sorteio' : 'Novo sorteio'), source);
+  if (!gerenciar && !campanha) {
+    const picker = h('section', 'preset-picker'); picker.hidden = true;
+    shell.append(botao('Utilizar predefinição', 'alt', () => {
+      picker.hidden = !picker.hidden;
+      if (!picker.hidden && !picker.childNodes.length) bibliotecaPredefinicoes(picker, async saved => {
+        if (!confirm('Preencher o formulário com “' + saved.nome + '”? Os valores atuais serão substituídos.')) return;
+        aplicar(saved.dados, saved); picker.hidden = true; mostrarFeedback(err, 'Predefinição aplicada. Revise a prévia e confirme para criar o sorteio.', true);
+      });
+    }), picker);
+  }
+  form.append(par(f.premio, f.desgaste), f.descricao.w, par(f.valor,f.preco_numero), par(f.max,f.max_por_usuario), f.cor.w, f.foto.w, image,
+    botao('Remover imagem', 'alt', () => { fotoAtual = ''; f.foto.i.value = ''; atualizaFoto(); }));
+  form.append(viewer.w);
+  const modelo = h('section','preset-save'); modelo.append(h('h4',null,gerenciar ? 'Nome na biblioteca' : 'Guardar esta configuração'), nome.w);
+  if (!gerenciar) { const actions = h('div','preset-actions'); actions.append(salvarOriginal,salvarNova); modelo.append(actions); }
+  form.append(modelo, acao('Prévia do sorteio', 'alt', async () => {
+    const d = await ler(); preview.replaceChildren(h('p','muted','Prévia. Nenhum sorteio foi publicado.'),resumoConfiguracao(d));
+  }), preview, err, submit);
+  if (!gerenciar) form.append(h('p','muted','Revise os dados antes de confirmar. Cada novo sorteio recebe números, participantes, pagamentos e resultado próprios.'));
+  shell.append(form); box.append(shell); aplicar(predefinicao?.dados || dados, predefinicao);
+}
+function bibliotecaPredefinicoes(box, selecionar, gerenciar = false, areaGerenciador = box) {
+  const search = campo('Pesquisar por predefinição ou skin', 'search'); search.i.placeholder = 'Ex.: AK-47 ou Redline'; search.i.maxLength = 100;
+  const status = h('p','muted'), lista = h('div','preset-list'); status.setAttribute('role','status');
+  box.append(search.w,status,lista);
+  let generation = 0, timer;
+  const recarregar = async mensagem => {
+    const atual = ++generation; status.textContent = mensagem || 'Carregando predefinições…'; lista.setAttribute('aria-busy','true');
+    try {
+      const rows = await api('/api/admin/predefinicoes?q=' + encodeURIComponent(search.i.value.trim()));
+      if (atual !== generation || !box.isConnected) return;
+      lista.replaceChildren(); status.textContent = rows.length ? rows.length + ' predefinição(ões) encontrada(s).' : search.i.value ? 'Nenhuma predefinição corresponde à pesquisa.' : 'Sua biblioteca está vazia. Cadastre uma predefinição para reutilizar a configuração da skin.';
+      rows.forEach(p => {
+        const card = h('article','preset-card'), title = h('h4',null,p.nome), error = h('p','err');
+        card.append(title,resumoConfiguracao(p.dados,p.foto));
+        const actions = h('div','preset-actions');
+        const agir = (text, fn, cls = 'alt') => {
+          const bt = botao(text,cls,async () => {
+            bt.disabled = true; mostrarFeedback(error,'');
+            try { await fn(); } catch (e) { mostrarFeedback(error,e.message); } finally { bt.disabled = false; }
+          }); actions.append(bt); return bt;
+        };
+        const full = () => api('/api/admin/predefinicoes/' + p.id);
+        agir(gerenciar ? 'Criar sorteio' : 'Selecionar', async () => selecionar(await full()), '');
+        const details = h('details','preset-details'), summary = h('summary',null,'Visualizar detalhes'), content = h('div');
+        details.append(summary,content);
+        details.addEventListener('toggle', async () => {
+          if (!details.open || content.childNodes.length) return;
+          content.textContent = 'Carregando detalhes…';
+          try { const saved = await full(); content.replaceChildren(resumoConfiguracao(saved.dados),h('p','muted','Atualizada em ' + dataHora(saved.atualizado_em))); }
+          catch (e) { content.replaceChildren(h('p','err',e.message)); }
+        });
+        if (gerenciar) {
+          agir('Editar', async () => abrirEditorPredefinicao(areaGerenciador,await full()));
+          agir('Duplicar', async () => { await api('/api/admin/predefinicoes/' + p.id + '/duplicar','POST',{}); await recarregar(); status.textContent = 'Predefinição duplicada. Você pode editar a cópia.'; });
+          agir('Excluir', async () => {
+            if (!confirm('Excluir a predefinição “' + p.nome + '”? Os sorteios criados com ela serão preservados.')) return;
+            await api('/api/admin/predefinicoes/' + p.id,'DELETE',{versao:p.versao}); await recarregar(); status.textContent = 'Predefinição excluída. Os sorteios foram preservados.';
+          });
+        }
+        card.append(actions,details,error); lista.append(card);
+      });
+    } catch (e) {
+      if (atual !== generation || !box.isConnected) return;
+      lista.replaceChildren(botao('Tentar novamente','alt',() => recarregar())); status.textContent = e.message;
+    } finally { if (atual === generation) lista.removeAttribute('aria-busy'); }
+  };
+  search.i.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { if (box.isConnected) recarregar(); },250); });
+  recarregar();
+}
+function abrirEditorPredefinicao(box, p) {
+  box.replaceChildren(botao('← Voltar à biblioteca','alt',() => abaPredefinicoes(box)));
+  editorConfiguracao(box,{predefinicao:p,gerenciar:true,aoSalvar:() => {
+    abaPredefinicoes(box); const msg = h('p','err'); mostrarFeedback(msg,'Predefinição salva com sucesso.',true); box.prepend(msg);
+  }});
+}
+function abaPredefinicoes(box) {
+  box.replaceChildren(h('h4',null,'Predefinições de Sorteios'),h('p','muted','Sua biblioteca de configurações reutilizáveis. Escolher um modelo abre um novo sorteio para revisão antes da publicação.'),
+    botao('Criar predefinição','',() => abrirEditorPredefinicao(box,null)));
+  const library = h('div'); box.append(library);
+  bibliotecaPredefinicoes(library, async p => painel('sorteios',{predefinicao:p}),true,box);
+}
+
+async function abaSorteios(box, entrada) {
+  const loading = h('p', 'muted', 'Carregando configuração do sorteio…'); box.append(loading);
+  const edit = entrada?.id ? {...entrada, ...await api('/api/admin/campanhas/' + entrada.id)} : null;
+  if (!box.isConnected) return;
+  loading.remove();
+  const c = edit || {}, err = h('p','err');
+  editorConfiguracao(box, {dados:c, campanha:edit, predefinicao:entrada?.predefinicao});
+  box.append(err);
   if (edit) box.append(" ", botao("Excluir este sorteio", "alt", () => rodar(err, async () => {
     if (!confirm("Excluir " + c.premio + " e todos os números escolhidos?")) return; await api("/api/admin/campanhas/" + c.id, "DELETE"); await carregar(); painel("sorteios"); })));
   if (edit && c.status === "CLOSED" && c.total === 0) {

@@ -68,5 +68,37 @@ test('migrações preservam dados antigos e adicionam a fila de recuperação se
     assert.equal(Number(mfa_until),0);assert.equal(mfa_role,null);assert.deepEqual(old,before10.sessions[i]);
   }
   assert.equal((await c.query('SELECT * FROM admin_mfa')).rows.length,0);
+  const before11={};
+  for(const table of ['users','sessions','tokens_email','tickets','pedidos','campaigns'])
+    before11[table]=(await c.query('SELECT * FROM '+table+' ORDER BY 1')).rows;
+  await c.query(migrations[10]);
+  for(const table of Object.keys(before11).filter(t=>t!=='campaigns'))
+    assert.deepEqual((await c.query('SELECT * FROM '+table+' ORDER BY 1')).rows,before11[table]);
+  const campaigns11=(await c.query('SELECT * FROM campaigns ORDER BY 1')).rows;
+  for(let i=0;i<campaigns11.length;i++){
+    const {inspect_link,modelo_3d_manual,...old}=campaigns11[i];
+    assert.equal(inspect_link,'');assert.equal(modelo_3d_manual,0);assert.deepEqual(old,before11.campaigns[i]);
+  }
+  assert.equal((await c.query('SELECT * FROM campaign_presets')).rows.length,0);
+  const columns11=(await c.query("SELECT data_type FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='campaign_presets' AND column_name='dados'")).rows;
+  assert.equal(columns11[0].data_type,'jsonb');
+  await c.query("UPDATE campaigns SET inspect_link='steam://legacy-item',modelo_3d_manual=1 WHERE id=41");
+  await c.query("INSERT INTO campaign_presets(nome,dados,criado_em,atualizado_em) VALUES('Modelo antigo',$1::jsonb,'antes','antes')",[JSON.stringify({premio:'Skin antiga',foto:'foto-preservada',inspect_link:'steam://legacy-item',modelo_3d_manual:1,max:10})]);
+  const before12={};
+  for(const table of ['users','sessions','tokens_email','tickets','pedidos','campaigns','campaign_presets'])
+    before12[table]=(await c.query('SELECT * FROM '+table+' ORDER BY 1')).rows;
+  await c.query(migrations[11]);
+  for(const table of Object.keys(before12).filter(t=>!['campaigns','campaign_presets'].includes(t)))
+    assert.deepEqual((await c.query('SELECT * FROM '+table+' ORDER BY 1')).rows,before12[table]);
+  const after12=(await c.query('SELECT * FROM campaigns ORDER BY id')).rows;
+  for(let i=0;i<after12.length;i++){
+    const {viewer_3d,viewer_3d_pendente,...old}=after12[i];
+    assert.equal(viewer_3d,null);assert.equal(viewer_3d_pendente,null);assert.deepEqual(old,before12.campaigns[i]);
+  }
+  const presets12=(await c.query('SELECT * FROM campaign_presets ORDER BY id')).rows;
+  for(let i=0;i<presets12.length;i++){
+    const {viewer_3d_pendente,...old}=presets12[i];
+    assert.equal(viewer_3d_pendente,null);assert.deepEqual(old,before12.campaign_presets[i]);
+  }
  } finally {await c.query('ROLLBACK');c.release();await pool.end();}
 });

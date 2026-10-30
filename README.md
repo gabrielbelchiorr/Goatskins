@@ -97,3 +97,7 @@ Fluxo: escolher números → `POST /api/campanhas/:id/pedidos` (o servidor lê o
 
 ## Antes de lançar (checklist)
 Veja `SEGURANCA.md` para a revisão atual e `PUBLICAR_EM_CASA.md` para os testes e a publicação. `AUDITORIA.md` preserva o relatório histórico de 06/10/2026.
+
+## Visualização 3D e predefinições
+
+Consulte [CS2Inspect e configuração de produção](docs/cs2inspect.md) e [uso das predefinições](docs/skins-3d-predefinicoes.md).

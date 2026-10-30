@@ -1,0 +1,29 @@
+/* Camada própria para manter o formulário administrativo intacto durante a prévia. */
+.skin-viewer{width:min(1100px,calc(100vw - 32px));max-width:none;max-height:calc(100dvh - 32px);margin:auto;padding:22px;overflow:auto;border:1px solid rgba(228,180,91,.28);border-radius:18px;background:linear-gradient(145deg,#182d49,#0c192e);color:var(--cream,#f6f2e9);box-shadow:0 30px 100px #0009;animation:skin-viewer-in .18s ease-out}
+.skin-viewer::backdrop{background:rgba(1,7,17,.82);backdrop-filter:blur(7px)}
+.skin-viewer-head{display:flex;gap:20px;align-items:flex-start;justify-content:space-between}
+.skin-viewer-eyebrow{margin:0 0 5px;color:var(--gold,#e4b45b);font-size:.69rem;font-weight:800;letter-spacing:.12em}
+.skin-viewer h2{margin:0;font-size:clamp(1.05rem,2.5vw,1.4rem);text-transform:none;line-height:1.3;color:inherit}
+.skin-viewer-close{flex:none;width:38px;height:38px;border:1px solid var(--line,rgba(255,255,255,.15));border-radius:10px;color:#fff;background:#ffffff12;font-size:1.5rem;line-height:1}
+.skin-viewer-close:hover{background:#ffffff25}
+.skin-viewer-description{margin:12px 0 16px;color:var(--muted,#b8c4d3);font-size:.82rem;line-height:1.55}
+.skin-viewer-viewport{position:relative;min-height:280px;height:min(58vh,620px);height:min(58dvh,620px);overflow:hidden;border:1px solid var(--line,rgba(255,255,255,.15));border-radius:12px;background:#0c192e}
+.skin-viewer-frame{display:block;width:100%;height:100%;border:0}
+.skin-viewer-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:13px;background:#0c192ef2;color:var(--cream,#f6f2e9);font-size:.9rem;pointer-events:none}
+.skin-viewer-spinner{width:24px;height:24px;border:2px solid #e4b45b35;border-top-color:var(--gold,#e4b45b);border-radius:50%;animation:skin-viewer-spin .8s linear infinite}
+.skin-viewer-status{min-height:1.4em;margin:10px 0 0;color:var(--muted,#b8c4d3);font-size:.76rem}
+.skin-viewer-status.is-error{color:#ffb4a8}
+.skin-viewer-footer{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:8px}
+.skin-viewer-footer p,.skin-viewer-help{margin:0;font-size:.76rem;line-height:1.5;color:var(--muted,#b8c4d3)}
+.skin-viewer-footer .skin-viewer-retry{flex:none;margin:0;padding:9px 13px;font-size:.77rem}
+.skin-viewer-help{margin-top:10px}
+.skin-viewer button:focus-visible,.skin-viewer iframe:focus-visible{outline:2px solid var(--gold,#e4b45b);outline-offset:3px}
+@keyframes skin-viewer-spin{to{transform:rotate(360deg)}}
+@keyframes skin-viewer-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:600px){
+  .skin-viewer{width:calc(100vw - 16px);max-height:calc(100dvh - 16px);padding:15px;border-radius:14px}
+  .skin-viewer-viewport{height:48dvh;min-height:250px}
+  .skin-viewer-footer{align-items:stretch;flex-direction:column;gap:10px}
+  .skin-viewer-footer .skin-viewer-retry{align-self:flex-start}
+}
+@media(prefers-reduced-motion:reduce){.skin-viewer,.skin-viewer-spinner{animation:none}}

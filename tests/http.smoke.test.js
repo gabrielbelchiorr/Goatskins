@@ -1,5 +1,6 @@
 /* Sobe o servidor de verdade com um banco FALSO (tests/helpers/pg-falso.js) e confere a camada HTTP: cabeçalhos, health check, limites, CSRF, arquivos. */
 const test = require("node:test"), assert = require("node:assert/strict"), { spawn } = require("node:child_process"), net = require("node:net"), path = require("node:path"), fs = require("node:fs"), os = require("node:os");
+const { freePort } = require('./helpers/free-port');
 const RAIZ = path.join(__dirname, "..");
 const DATA = fs.mkdtempSync(path.join(os.tmpdir(), "goat-smoke-"));
 let srv, PORT, BASE;
@@ -13,13 +14,6 @@ const ENV_HTTP = {
   TRUST_PROXY: "0", TRUST_PROXY_HOPS: "1", MP_ACCESS_TOKEN: "", MP_WEBHOOK_SECRET: "", MP_TESTE_APRO: "",
   MP_API_BASE: "https://api.mercadopago.com", PIX_MINUTOS: "30", RESERVA_SEGUNDOS: ""
 };
-async function portaLivre() {
-  const probe = net.createServer();
-  await new Promise((resolve, reject) => { probe.once("error", reject); probe.listen(0, "127.0.0.1", resolve); });
-  const port = probe.address().port;
-  await new Promise((resolve, reject) => probe.close(e => e ? reject(e) : resolve()));
-  return port;
-}
 async function parar(p) {
   if (!p?.pid || p.exitCode !== null || p.signalCode !== null) return;
   await new Promise(resolve => {
@@ -29,7 +23,7 @@ async function parar(p) {
   });
 }
 async function subir(extra = {}, statusEsperado = 200) {
-  const port = await portaLivre(), base = "http://127.0.0.1:" + port;
+  const port = await freePort(), base = "http://127.0.0.1:" + port;
   const p = spawn(process.execPath, ["--no-warnings", "-r", "./tests/helpers/pg-falso.js", "server.js"], {
     cwd: RAIZ, stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, ...ENV_HTTP, DATA_DIR: DATA, APP_URL: base, ...extra, PORT: String(port) }
@@ -70,9 +64,20 @@ test("cabeçalhos de segurança em páginas e na API", async () => {
   for (const u of ["/", "/api/estado", "/termos.html"]) {
     const r = await fetch(BASE + u), csp = r.headers.get("content-security-policy");
     assert.match(csp, /default-src 'self'/); assert.match(csp, /frame-ancestors 'none'/); assert.match(csp, /object-src 'none'/);
+    assert.match(csp, /frame-src https:\/\/challenges\.cloudflare\.com https:\/\/cs2inspect\.skin;/);
+    assert.doesNotMatch(csp, /(?:script-src|connect-src)[^;]*cs2inspect/);
+    assert.doesNotMatch(csp, /reskins/);
     assert.equal(r.headers.get("x-content-type-options"), "nosniff"); assert.equal(r.headers.get("x-frame-options"), "DENY"); assert.ok(r.headers.get("permissions-policy"));
   }
   assert.equal((await fetch(BASE + "/api/estado")).headers.get("cache-control"), "no-store");
+});
+
+test("assets do visualizador e das predefinições são públicos, com MIME correto", async () => {
+  for (const nome of ['cs2inspect.js', 'skin-viewer.js', 'skin-viewer.css', 'presets.css']) {
+    const r = await fetch(BASE + '/' + nome);
+    assert.equal(r.status, 200, nome);
+    assert.match(r.headers.get('content-type'), nome.endsWith('.js') ? /javascript/ : /css/);
+  }
 });
 test("CORS: nenhuma origem externa é autorizada", async () => {
   const r = await fetch(BASE + "/api/estado", { headers: { Origin: "https://evil.example" } });

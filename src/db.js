@@ -193,6 +193,30 @@ CREATE TABLE admin_mfa(
  recovery_hashes TEXT NOT NULL DEFAULT '[]'
 );
 `
+,
+/* 11: visualização opcional das skins e snapshots reutilizáveis. Não altera dados
+   operacionais nem cria vínculo entre predefinições e campanhas já publicadas. */ `
+ALTER TABLE campaigns ADD COLUMN inspect_link TEXT NOT NULL DEFAULT '';
+ALTER TABLE campaigns ADD COLUMN modelo_3d_manual INTEGER NOT NULL DEFAULT 0 CHECK(modelo_3d_manual IN (0,1));
+CREATE TABLE campaign_presets(
+ id BIGSERIAL PRIMARY KEY,
+ nome TEXT NOT NULL CHECK(length(nome) BETWEEN 1 AND 120),
+ dados JSONB NOT NULL CHECK(jsonb_typeof(dados)='object'),
+ versao INTEGER NOT NULL DEFAULT 1 CHECK(versao>0),
+ criado_por BIGINT REFERENCES users(id) ON DELETE SET NULL,
+ atualizado_por BIGINT REFERENCES users(id) ON DELETE SET NULL,
+ criado_em TEXT NOT NULL,
+ atualizado_em TEXT NOT NULL
+);
+CREATE INDEX ix_campaign_presets_nome ON campaign_presets(lower(nome));
+`
+,
+/* 12: configuração CS2Inspect. Somente colunas novas; links legados continuam
+   preservados e não são convertidos por aproximação nem alteram campanhas. */ `
+ALTER TABLE campaigns ADD COLUMN viewer_3d JSONB CHECK(viewer_3d IS NULL OR jsonb_typeof(viewer_3d)='object');
+ALTER TABLE campaigns ADD COLUMN viewer_3d_pendente INTEGER CHECK(viewer_3d_pendente IN (0,1));
+ALTER TABLE campaign_presets ADD COLUMN viewer_3d_pendente INTEGER CHECK(viewer_3d_pendente IN (0,1));
+`
 /* próximas alterações: acrescente novos itens a este array (nunca edite os já aplicados) */
 ];
 
