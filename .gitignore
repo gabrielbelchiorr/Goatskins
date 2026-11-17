@@ -11,3 +11,15 @@ node_modules/
 *.db
 *.sqlite
 *.sqlite3
+
+# Capturas e resultados de verifica��es locais
+validation/
+
+# Relatórios internos de segurança e revisões: o repositório é PÚBLICO.
+# Ficam só localmente (ou em local privado); não publicar.
+SECURITY_AUDIT_REPORT.md
+SECURITY_API_ROUTES.md
+SEGURANCA_*.md
+PENTEST_LOCAL.md
+REFACTOR_REPORT.md
+docs/revisao-*.md

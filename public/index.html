@@ -3,19 +3,31 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>GOATSKINS SORTEIOS</title>
-  <script src="page-loader.js?v=goatskins-loading-2"></script>
-  <link rel="stylesheet" href="style.css?v=goatskins-account-4">
-  <link rel="stylesheet" href="roulette.css?v=goatskins-roulette-1">
-  <link rel="icon" href="logo.jpg">
-  <meta name="description" content="Sorteios de skins de CS com prova de resultado verificável.">
+  <!-- O servidor regenera este bloco com URLs absolutas e, em ?sorteio=ID, com os dados do sorteio. -->
+  <!-- seo:inicio -->
+  <title>GOATSKINS — Sorteios de skins de CS2</title>
+  <meta name="description" content="Sorteios de skins de CS2 com números escolhidos por você, pagamento por Pix e resultado publicado no site.">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="GOATSKINS">
+  <meta property="og:title" content="GOATSKINS — Sorteios de skins de CS2">
+  <meta property="og:image" content="og-image.jpg">
+  <!-- seo:fim -->
+  <meta name="theme-color" content="#091423">
+  <link rel="icon" href="favicon-48.png" type="image/png" sizes="48x48">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="manifest" href="site.webmanifest">
+  <link rel="preload" href="fonts/barlow-semibold.woff2" as="font" type="font/woff2" crossorigin>
+  <!-- Folha de estilo única (style.css). Os CSS/JS recebem ?v=<hash do conteúdo> do servidor; não é preciso versionar à mão. -->
+  <script src="page-loader.js"></script>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <a class="skip-link" href="#conteudo">Pular para o conteúdo</a>
   <div id="pageLoader" class="page-loader">
     <div class="page-loader-content">
       <div class="page-loader-mark" aria-hidden="true">
         <span class="page-loader-orbit"></span>
-        <img src="logo-marca.webp" alt="" width="84" height="90">
+        <img src="logo-loader.webp" alt="" width="84" height="89">
       </div>
       <p class="page-loader-brand">GOAT<span>SKINS</span></p>
       <p id="loaderMessage" class="page-loader-message" role="status" aria-live="polite">Preparando seus sorteios...</p>
@@ -28,29 +40,22 @@
     <span></span><span></span><span></span>
   </button>
 
-  <!-- Faixa do topo: ocupa toda a largura -->
-  <header class="hero" id="inicio">
-    <div class="hero-identity">
-      <img class="hero-emblem" src="logo-marca.webp" alt="" width="58" height="62">
-      <div class="hero-txt">
-        <h1 id="heroTitle">GOATSKINS SORTEIOS</h1>
-        <p class="tag" id="heroSub">Escolha seus números e concorra a skins de CS.</p>
-      </div>
-    </div>
-    <div class="hero-actions">
-      <a class="whatsapp-group" href="https://chat.whatsapp.com/BBlILmZHHfTKPKTxkFyfEj" target="_blank" rel="noopener noreferrer" aria-label="Entrar no grupo do WhatsApp (abre em nova aba)">
-        <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M20.52 3.48A11.91 11.91 0 0 0 12.05 0C5.47 0 .11 5.35.1 11.94c0 2.1.55 4.16 1.6 5.98L0 24l6.24-1.64a11.94 11.94 0 0 0 5.8 1.48h.01c6.59 0 11.95-5.35 11.95-11.94 0-3.19-1.24-6.19-3.48-8.42ZM12.05 21.8a9.9 9.9 0 0 1-5.04-1.38l-.36-.22-3.7.97.99-3.6-.24-.37a9.85 9.85 0 0 1-1.51-5.26c0-5.47 4.45-9.91 9.92-9.91 2.65 0 5.14 1.03 7.01 2.91a9.85 9.85 0 0 1 2.9 7.01c0 5.47-4.45 9.92-9.97 9.85Zm5.44-7.42c-.3-.15-1.77-.87-2.04-.97-.28-.1-.48-.15-.68.15-.2.3-.77.97-.95 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.18-.3-.02-.46.13-.61.13-.13.3-.35.45-.52.15-.18.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.68-1.62-.93-2.22-.24-.58-.49-.5-.68-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.04 1.02-1.04 2.49 0 1.47 1.07 2.89 1.22 3.09.15.2 2.1 3.2 5.09 4.49.71.3 1.27.49 1.7.62.72.23 1.37.2 1.88.12.58-.09 1.77-.73 2.02-1.44.25-.7.25-1.3.17-1.43-.07-.12-.27-.2-.57-.35Z"/></svg><span>Entrar no grupo</span>
-      </a>
-      <div class="cta"><a class="btn" href="#ativos">Ver sorteios</a></div>
+  <header class="site-header">
+    <a class="header-brand" href="/" aria-label="GOATSKINS — início">
+      <img src="logo-nav.webp" alt="" width="44" height="47">
+      <span class="header-identity"><strong id="heroTitle">GOATSKINS SORTEIOS</strong><small id="heroSub">Escolha seus números e concorra a skins de CS.</small></span>
+    </a>
+    <div class="header-actions">
+      <a class="nav-community" href="https://chat.whatsapp.com/BBlILmZHHfTKPKTxkFyfEj" target="_blank" rel="noopener noreferrer" aria-label="Entrar no grupo do WhatsApp (abre em nova aba)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z"/></svg><span>Entrar no grupo</span></a>
+      <a class="btn header-campaigns" href="/#ativos">Ver sorteios</a>
       <div id="heroStats" class="chips"></div>
     </div>
   </header>
 
-  <div class="shell">
-    <!-- Menu lateral fixo -->
-    <aside class="side" id="menuLateral">
-      <a class="brand" href="#" aria-label="GOATSKINS"><img src="logo-marca.webp" alt="GOATSKINS"></a>
-      <nav class="menu">
+    <aside class="side" id="menuLateral" aria-label="Menu GOATSKINS">
+      <a class="sidebar-brand" href="/" aria-label="GOATSKINS — início"><img src="logo-loader.webp" alt="GOATSKINS" width="126" height="134"></a>
+      <div id="contaResumo" class="sidebar-account" hidden><span class="sidebar-avatar" aria-hidden="true"></span><span class="sidebar-account-text"><small>Conectado como</small><strong></strong></span></div>
+      <nav class="menu" aria-label="Navegação principal">
         <button id="loginBtn" class="nv login" type="button">Entrar / Cadastrar</button>
         <button class="nv on" data-view="sorteios" type="button">Sorteios</button>
         <button class="nv" data-view="historico" type="button">Histórico</button>
@@ -58,16 +63,36 @@
         <button id="contaBtn" class="nv" type="button" hidden>Minha conta</button>
         <button id="adminBtn" class="nv admin" type="button" hidden>Admin</button>
       </nav>
+      <p class="sidebar-note">GOATSKINS <span>Skins de CS2</span></p>
     </aside>
 
+  <div class="shell">
     <div class="content">
       <div id="faixa" class="faixa" hidden></div>
-      <main>
+      <main id="conteudo" tabindex="-1">
         <!-- SORTEIOS -->
         <section class="view" data-view="sorteios">
-          <h2 id="ativos">Sorteios ativos</h2>
-          <div id="gridAtivos" class="grid"></div>
-          <p id="noAtivos" class="muted" hidden>Nenhum sorteio ativo no momento.</p>
+          <header class="hero" id="inicio">
+            <div class="hero-copy">
+              <p class="hero-eyebrow">GOATSKINS / CS2</p>
+              <h1>Skins de CS2.<br><span>Sua chance de conquistar.</span></h1>
+              <p class="tag">Escolha seus números e acompanhe cada etapa até o resultado.</p>
+              <div class="hero-actions">
+                <a class="btn hero-cta" href="#ativos">Ver sorteios <span aria-hidden="true">→</span></a>
+                <a class="hero-how" href="#como-funciona">Como participar</a>
+              </div>
+            </div>
+            <div class="hero-fallback" aria-hidden="true"><span>CS2</span></div>
+            <a id="heroFeatured" class="hero-featured" hidden></a>
+          </header>
+
+          <div class="section-heading" id="ativos">
+            <div><h2>Sorteios ativos <span id="activeCount" class="section-count">0</span></h2></div>
+            <label class="campaign-sort" for="campaignSort"><span>Ordenar por</span><select id="campaignSort" aria-label="Ordenar sorteios"><option value="recent">Mais recentes</option><option value="price-asc">Menor preço</option><option value="prize-desc">Maior prêmio</option><option value="progress-desc">Mais preenchidos</option></select></label>
+          </div>
+          <p id="campaignResults" class="sr-only" role="status" aria-live="polite"></p>
+          <div id="gridAtivos" class="grid" aria-label="Sorteios ativos"></div>
+          <div id="noAtivos" class="empty-state" hidden><span class="empty-mark" aria-hidden="true">◇</span><h3>Nenhum sorteio ativo no momento</h3><p>Explore os resultados abaixo ou acompanhe as novidades na nossa comunidade.</p><a href="https://chat.whatsapp.com/BBlILmZHHfTKPKTxkFyfEj" target="_blank" rel="noopener noreferrer" class="btn alt">Entrar na comunidade ↗</a></div>
 
           <h2 class="gap">Sorteios esgotados</h2>
           <p class="muted">Vagas 100% preenchidas, aguardando a roleta.</p>
@@ -78,12 +103,12 @@
           <div id="gridRealizados" class="grid"></div>
           <p id="noRealizados" class="muted" hidden>Ainda não houve nenhum sorteio realizado.</p>
 
-          <h2 class="gap">Como funciona</h2>
+          <div class="section-heading how-heading" id="como-funciona"><div><h2>Como participar</h2></div><a href="/termos.html" class="section-help">Regras de participação ↗</a></div>
           <ol class="steps">
-            <li><b>1. Crie sua conta</b> e confirme o e-mail e informe o celular.</li>
-            <li><b>2. Escolha</b> seus números em um sorteio ativo.</li>
-            <li><b>3. Números completos?</b> O sorteio vai para a roleta.</li>
-            <li><b>4. Veja o ganhador</b> no Histórico.</li>
+            <li><span class="step-index" aria-hidden="true">01</span><b>Crie sua conta</b><p>Confirme seu e-mail e informe seu celular para participar.</p></li>
+            <li><span class="step-index" aria-hidden="true">02</span><b>Escolha seus números</b><p>Encontre sua skin e selecione os números disponíveis.</p></li>
+            <li><span class="step-index" aria-hidden="true">03</span><b>Confirme a participação</b><p>Nos sorteios pagos, conclua o Pix dentro do prazo da reserva.</p></li>
+            <li><span class="step-index" aria-hidden="true">04</span><b>Acompanhe o resultado</b><p>Com os números completos, o sorteio vai para a roleta. Veja o ganhador no Histórico.</p></li>
           </ol>
         </section>
 
@@ -109,7 +134,7 @@
           <p id="noPed" class="muted" hidden>Você ainda não fez nenhum pedido.</p>
         </section>
       </main>
-      <footer>GOATSKINS &copy; 2026. Não afiliado à Valve nem à Steam.<br><a href="/termos.html">Termos de uso</a> · <a href="/privacidade.html">Política de privacidade</a> · <a href="/cookies.html">Política de cookies</a> · <button type="button" class="cookie-settings" data-cookie-settings>Preferências de cookies</button></footer>
+      <footer><div class="footer-brand">GOAT<span>SKINS</span><p>Sorteios de skins de CS2.</p></div><div class="footer-links"><a href="/termos.html">Termos de uso</a><a href="/privacidade.html">Privacidade</a><a href="/cookies.html">Cookies</a><a href="mailto:ggoatskins@gmail.com">Contato: ggoatskins@gmail.com</a><button type="button" class="cookie-settings" data-cookie-settings>Preferências de cookies</button></div><p class="footer-note"><span class="age-badge" aria-hidden="true">18+</span> Participação permitida somente para maiores de 18 anos. GOATSKINS &copy; 2026. Não afiliado à Valve nem à Steam.</p></footer>
     </div>
   </div>
 
@@ -124,7 +149,6 @@
   </div>
 
   <div id="scrim" class="scrim" hidden></div>
-  <img class="mascote" src="mascote.webp" alt="" aria-hidden="true" width="720" height="984">
 
   <div id="modal" class="overlay" hidden>
     <div class="dialog" role="dialog" aria-modal="true">
@@ -132,8 +156,10 @@
       <div id="modalBody"></div>
     </div>
   </div>
-  <script src="cookie-consent.js?v=1"></script>
-  <script src="roulette.js?v=goatskins-roulette-1"></script>
-  <script src="script.js?v=goatskins-account-2"></script>
+  <script src="cookie-consent.js"></script>
+  <script src="roulette.js"></script>
+  <script src="cs2inspect.js"></script>
+  <script src="skin-viewer.js"></script>
+  <script src="script.js"></script>
 </body>
 </html>

@@ -8,17 +8,13 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const {spawn} = require('node:child_process');
 const url = require('../scripts/banco-teste').bancoTeste(process.env.TEST_DATABASE_URL);
 const cleanEnv = require('./helpers/ambiente-teste');
+const { freePort } = require('./helpers/free-port');
 const negative = process.env.GOATSKINS_MFA_NEGATIVE_CONTROL === '1';
 const schema = 'mfa_concurrency_' + crypto.randomBytes(12).toString('hex');
 const opts = {skip: !url, timeout: 30000};
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 let pool, child, base, tempDir, env, stderr = '';
 
-async function unusedPort() {
-  const server = require('node:net').createServer();
-  await new Promise((resolve, reject) => {server.once('error', reject); server.listen(0, '127.0.0.1', resolve);});
-  const port = server.address().port; await new Promise(resolve => server.close(resolve)); return port;
-}
 function run(args) {
   return new Promise((resolve, reject) => {
     const process = spawn(global.process.execPath, ['--no-warnings', ...args], {env, stdio: ['ignore', 'ignore', 'pipe']});
@@ -34,7 +30,7 @@ before(async () => {
   await pool.end();
   pool = new (require('pg').Pool)({connectionString: scoped.toString(), connectionTimeoutMillis: 5000, statement_timeout: 15000});
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'goatskins-mfa-concurrency-'));
-  base = 'http://127.0.0.1:' + await unusedPort();
+  base = 'http://127.0.0.1:' + await freePort();
   env = {...process.env, ...cleanEnv, DATABASE_URL: scoped.toString(), TESTE: '1', PG_POOL_MAX: '2',
     PORT: new URL(base).port, APP_URL: base, DATA_DIR: tempDir, MFA_ENCRYPTION_KEY: crypto.randomBytes(32).toString('hex'),
     MP_API_BASE: 'http://127.0.0.1:9', GOATSKINS_MFA_NEGATIVE_CONTROL: negative ? '1' : ''};

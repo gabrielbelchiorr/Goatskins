@@ -4,8 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Prévia da roleta | GOATSKINS</title>
-  <link rel="stylesheet" href="public/style.css">
-  <link rel="stylesheet" href="public/roulette.css">
+  <link rel="stylesheet" href="../public/style.css">
 </head>
 <body>
   <main class="legal">
@@ -15,13 +14,13 @@
     <p><button id="preview100" class="btn" type="button">Ver com 100 números</button></p>
     <p><button id="previewResult" class="btn alt" type="button">Ver um resultado já concluído</button></p>
   </main>
-  <script src="public/roulette.js"></script>
+  <script src="../public/roulette.js"></script>
   <script>
     function abrirPrevia(total, concluido) {
       const winner = { n: total === 100 ? 87 : 17, nome: 'Lucas M.' };
       window.GoatskinsRoulette.open({
         campaign: { id: 7, premio: 'AK-47 | Redline', desgaste: 'Field-Tested', ocupados: Array.from({ length: total }, (_, i) => i + 1) },
-        logoSrc: 'public/logo-marca.webp', preview: true, winner: concluido ? winner : null,
+        logoSrc: '../public/logo-marca.webp', preview: true, winner: concluido ? winner : null,
         draw: () => new Promise(resolve => setTimeout(() => resolve(winner), 450)),
         recover: () => Promise.resolve(null)
       });

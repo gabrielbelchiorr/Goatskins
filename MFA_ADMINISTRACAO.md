@@ -1,6 +1,6 @@
 # GOATSKINS — MFA obrigatório na administração
 
-Implementação local de28/10/2026, sobre `be7e03b`. **Não publicada. Não foi acessado o domínio, banco ou credenciais de produção nesta etapa.** O push da branch main pode disparar Render. A publicação foi autorizada posteriormente pelo proprietário, mas permanece condicionada à configuração e verificação da chave no Render.
+Implementação de 28/10/2026, sobre `be7e03b`, publicada com autorização no commit `d0e6321`. A configuração da chave foi confirmada pelo proprietário nessa implantação. As verificações iniciais de desenvolvimento foram locais; o histórico de publicação está em [SEGURANCA_PRODUCAO.md](SEGURANCA_PRODUCAO.md). O push da branch `main` pode disparar o Render.
 
 ## O que foi reaproveitado e alterado
 
@@ -67,4 +67,4 @@ Referências: [RFC6238](https://www.rfc-editor.org/rfc/rfc6238), [formato otpaut
 
 Após a autorização do proprietário, foi gerada uma chave criptograficamente aleatória e configurada somente no `.env` local, ignorado pelo Git. Uma cópia cifrada com Windows DPAPI foi guardada fora do repositório, em `%LOCALAPPDATA%/GOATSKINS/secrets/mfa-encryption-key.dpapi`, vinculada ao usuário Windows atual. Os valores não foram impressos nem incluídos no código ou nos relatórios. Essa cópia local não substitui um backup operacional independente e controlado.
 
-O acesso ao Render ainda depende da instalação e conexão da integração pelo proprietário. A chave não foi cadastrada no serviço e a atualização não foi publicada. Antes de configurar, preservar qualquer chave válida que já exista no Render; não sobrescrever uma chave utilizada por fatores ativos. Só publicar após confirmar a configuração. O pareamento de cada administrador precisa ser concluído pelo próprio titular, com seu aparelho e os códigos de recuperação.
+Na implantação autorizada de 28/10/2026, o proprietário confirmou o cadastro da chave no Render e a atualização foi publicada. Preserve a chave válida já configurada; não sobrescreva uma chave utilizada por fatores ativos. Este documento não verifica o estado atual do painel da hospedagem. O pareamento de cada administrador precisa ser concluído pelo próprio titular, com seu aparelho e os códigos de recuperação.

@@ -19,17 +19,23 @@ const server=http.createServer((req,res)=>{
    const bounds=await banner.boundingBox();assert(bounds.x>=0&&bounds.x+bounds.width<=width+1&&bounds.y>=0);
    await page.evaluate(()=>{localStorage.setItem('menu','0');sessionStorage.setItem('goatskins-confirmacao','fixture');});
    await page.reload();assert.equal(await page.locator('#menuBtn').getAttribute('aria-expanded'),width>820?'true':'false');
+   if(width>820){assert(await page.locator('#menuBtn').isVisible());assert(await page.locator('#menuLateral .menu [data-view="sorteios"]').isVisible());}
    await ctx.addCookies([{name:'sid',value:'sessao-ficticia',url:base,httpOnly:true,sameSite:'Lax'}]);
    await page.getByRole('button',{name:'Somente essenciais',exact:true}).click();await banner.waitFor({state:'hidden'});
    assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('goatskins-cookies'))),{version:1,preferences:false});
    assert.equal(await page.evaluate(()=>localStorage.getItem('menu')),null);assert.equal(await page.evaluate(()=>sessionStorage.getItem('goatskins-confirmacao')),'fixture');
    assert((await ctx.cookies()).some(c=>c.name==='sid'));
-   await page.locator('#menuBtn').click();assert.equal(await page.evaluate(()=>localStorage.getItem('menu')),null);
+   await page.locator('#menuBtn').click();
+   assert.equal(await page.evaluate(()=>localStorage.getItem('menu')),null);
    await page.reload();await banner.waitFor({state:'hidden'});
    await page.getByRole('button',{name:'Preferências de cookies',exact:true}).click();await banner.waitFor({state:'visible'});
    await page.getByRole('button',{name:'Aceitar cookies',exact:true}).click();
    assert.equal(await page.evaluate(()=>window.GoatskinsCookies.allowsPreferences()),true);
-   if(width>820){await page.locator('#menuBtn').click();assert.equal(await page.evaluate(()=>localStorage.getItem('menu')),'0');}
+   if(width>820){
+    await page.locator('#menuBtn').click();
+    assert.equal(await page.locator('#menuBtn').getAttribute('aria-expanded'),'false');
+    assert.equal(await page.evaluate(()=>localStorage.getItem('menu')),'0');
+   }
    for(const route of ['/cookies.html','/privacidade.html','/termos.html']){
     await page.goto(base+route);await banner.waitFor({state:'hidden'});
     await page.getByRole('button',{name:'Preferências de cookies',exact:true}).click();await banner.waitFor({state:'visible'});

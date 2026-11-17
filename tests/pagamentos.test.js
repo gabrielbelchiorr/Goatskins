@@ -1,4 +1,4 @@
-const ambienteTeste = require("./helpers/ambiente-teste");
+require("./helpers/ambiente-teste");
 /* Testes offline do fluxo de pagamento (sem banco real e sem rede): `node --test tests/pagamentos.test.js`
    O módulo "pg" é substituído por um banco falso em memória, e o fetch pelo Mercado Pago também. */
 process.env.NODE_ENV = "test"; process.env.TESTE = "1";

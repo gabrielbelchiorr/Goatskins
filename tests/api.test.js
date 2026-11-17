@@ -18,7 +18,7 @@ let srv;
 function sqlSync(sql, params = []) {
   const script = 'const {Pool,types}=require("pg");types.setTypeParser(20,Number);const q=JSON.parse(process.env.Q),p=new Pool({connectionString:process.env.TEST_DATABASE_URL});' +
     'p.query(q.sql,q.params).then(r=>{process.stdout.write(JSON.stringify(Array.isArray(r)?[]:r.rows));return p.end()}).catch(e=>{console.error(e.message);process.exit(1)})';
-  const r = spawnSync("node", ["-e", script], { cwd: path.join(__dirname, ".."), encoding: "utf8", env: { ...process.env, TEST_DATABASE_URL: TEST_URL, Q: JSON.stringify({ sql, params }) } });
+  const r = spawnSync(process.execPath, ["-e", script], { cwd: path.join(__dirname, ".."), encoding: "utf8", env: { ...process.env, TEST_DATABASE_URL: TEST_URL, Q: JSON.stringify({ sql, params }) } });
   if (r.status !== 0) throw new Error("sqlSync falhou: " + r.stderr);
   return JSON.parse(r.stdout || "[]");
 }
@@ -113,9 +113,9 @@ async function novoSorteio(adm, over = {}) {
 PODE && before(() => new Promise(r => mpServer.listen(MP_PORT, r)));
 PODE && before(async () => {
   sqlSync("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;"); // banco de teste limpo a cada execução
-  const r = spawnSync("node", ["--no-warnings", "server.js", "criar-admin", "admin@teste.com", "Admin1234", "Chefe"], { env, encoding: "utf8" });
+  const r = spawnSync(process.execPath, ["--no-warnings", "server.js", "criar-admin", "admin@teste.com", "Admin1234", "Chefe"], { env, encoding: "utf8" });
   assert.match(r.stdout, /SUPER_ADMIN pronto/, r.stderr);
-  srv = spawn("node", ["--no-warnings", "server.js"], { env, stdio: ["ignore", "ignore", "pipe"] });
+  srv = spawn(process.execPath, ["--no-warnings", "server.js"], { env, stdio: ["ignore", "ignore", "pipe"] });
   srv.stderr.on("data", d => { if (process.env.TEST_DEBUG === "1") process.stderr.write(d); });
   for (let i = 0; i < 50; i++) { try { await fetch(BASE + "/api/estado"); return; } catch (e) { await new Promise(r => setTimeout(r, 100)); } }
   throw new Error("servidor não subiu");
@@ -229,6 +229,9 @@ test("exclusão de conta anonimiza os dados (LGPD)", async () => {
 test("admin: painel, logs de auditoria e proteção de contas de administração", async () => {
   const adm = await adminLogado(), d = (await adm.get("/api/admin/dashboard")).dados;
   assert.ok(d.usuarios > 0 && Array.isArray(d.porSorteio));
+  // Pendências operacionais: números sempre presentes (zero quando não há nada a fazer).
+  assert.deepEqual(Object.keys(d.operacao).sort(), ["entregas", "estornos", "pix_pendentes", "pix_revisao", "prontos_para_sorteio", "receita", "reembolsos"]);
+  assert.ok(Object.values(d.operacao).every(v => typeof v === "number" && v >= 0));
   await novoSorteio(adm);
   assert.ok((await adm.get("/api/admin/logs")).dados.some(l => l.acao === "SORTEIO_CRIADO"));
   assert.equal((await adm.put("/api/admin/usuarios/1/status", { status: "SUSPENDED" })).status, 403); // não suspende SUPER_ADMIN
@@ -290,7 +293,7 @@ test("path traversal e arquivos sensíveis não são servidos", async () => {
 });
 
 test("produção recusa subir com configuração insegura", () => {
-  const r = spawnSync("node", ["--no-warnings", "-e", "require('./src/config')"], { env: { ...process.env, NODE_ENV: "production", APP_URL: "http://x.com", EMAIL_DRIVER: "console", TESTE: "" }, encoding: "utf8" });
+  const r = spawnSync(process.execPath, ["--no-warnings", "-e", "require('./src/config')"], { env: { ...process.env, NODE_ENV: "production", APP_URL: "http://x.com", EMAIL_DRIVER: "console", TESTE: "" }, encoding: "utf8" });
   assert.equal(r.status, 1); assert.match(r.stderr, /https/); assert.match(r.stderr, /EMAIL_DRIVER/);
 });
 
@@ -759,7 +762,7 @@ test('solicitação vencida não confirma e limpeza remove dados temporários',a
   const p=await novoUsuario(false), codigo=codigoDe(p.email);
   dbLer('UPDATE pending_registrations SET cadastro_expira=0 WHERE email=?',p.email);
   assert.equal((await confirmar(p.c,p.token,codigo)).status,400);
-  const r=spawnSync('node',['-e',"require('./src/registration').limpar().then(()=>require('./src/db').fechar()).catch(e=>{console.error(e.message);process.exit(1)})"],{cwd:path.join(__dirname,'..'),env,encoding:'utf8'});
+  const r=spawnSync(process.execPath,['-e',"require('./src/registration').limpar().then(()=>require('./src/db').fechar()).catch(e=>{console.error(e.message);process.exit(1)})"],{cwd:path.join(__dirname,'..'),env,encoding:'utf8'});
   assert.equal(r.status,0,r.stderr);assert.equal(dbLer('SELECT * FROM pending_registrations WHERE email=?',p.email).length,0);
 });
 

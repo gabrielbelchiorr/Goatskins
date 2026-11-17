@@ -5,9 +5,10 @@
   "description": "Sorteios de skins GOATSKINS (Node.js + PostgreSQL)",
   "scripts": {
     "start": "node --no-warnings server.js",
-    "test": "node --no-warnings --test --test-concurrency=1",
+    "test": "node --no-warnings --test --test-concurrency=1 \"tests/**/*.test.js\"",
     "test:ci": "node --no-warnings scripts/run-ci.js",
     "test:security:local": "node --no-warnings scripts/pentest-local.js",
+    "test:security:rigorous": "node --no-warnings scripts/security-audit.js",
     "admin": "node --no-warnings server.js criar-admin",
     "migrar-sqlite": "node --no-warnings scripts/migrar-sqlite.js",
     "backup": "node --no-warnings scripts/backup.js",

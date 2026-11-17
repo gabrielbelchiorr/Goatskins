@@ -1,6 +1,6 @@
 // GOATSKINS: simulador local do Mercado Pago para TESTES VISUAIS.
 // Nao recebe dinheiro e NAO deve ser usado em producao.
-// Execute num terminal separado: node mp-preview-local.js
+// Execute num terminal separado: node scripts/mp-preview-local.js
 "use strict";
 const http = require("node:http");
 if (process.env.NODE_ENV === "production") {

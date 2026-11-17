@@ -9,7 +9,16 @@ const PADRAO_VISUAL = { titulo: "GOATSKINS SORTEIOS", sub: "Escolha seus número
 const visual = async () => { const r = await db.get("SELECT v FROM settings WHERE k='visual'"); return r ? JSON.parse(r.v) : PADRAO_VISUAL; };
 
 /* Colunas públicas explícitas: a semente do sorteio NUNCA sai daqui antes da hora. */
-const COLS = "id, premio, desgaste, descricao, valor, cor, fim, max, max_por_usuario, preco_centavos, length(foto) fl, status, commit_hash"; // a foto sai por URL própria (cache), não dentro do JSON
+const COLS = "id, premio, desgaste, descricao, valor, cor, fim, max, max_por_usuario, preco_centavos, length(foto) fl, status, commit_hash, viewer_3d, viewer_3d_pendente, inspect_link"; // a foto sai por URL própria (cache), não dentro do JSON
+function configuracao3d(c) {
+  let config = null, invalida = false;
+  if (c.viewer_3d != null) {
+    try { config = require('../public/cs2inspect').normalize(c.viewer_3d); }
+    catch (_) { invalida = true; }
+  }
+  return { viewer_3d: config, reconfigurar_3d: !config && (invalida || c.viewer_3d_pendente === 1 ||
+    (c.viewer_3d_pendente == null && !!c.inspect_link)) };
+}
 async function estado(u) {
   require("./pedidos").finalizarVencidos().catch(e => console.error("[pix] varredura:", e.message));
   await liberarSeVencido(); // só toma a trava de escrita se houver reserva vencida (esta rota é a mais chamada do site)
@@ -25,22 +34,38 @@ async function estado(u) {
   reservas.forEach(r => (res[r.c] = res[r.c] || []).push(r.n)); tickets.forEach(r => (ocup[r.c] = ocup[r.c] || []).push(r.n));
   meusT.forEach(r => (meus[r.c] = meus[r.c] || []).push(r.n)); ganhadores.forEach(r => gan[r.campaign_id] = r);
   const nao = naoLidas.n, vis = { ...v }; vis.banner = vis.banner ? "/api/banner?v=" + vis.banner.length : "";
-  return { eu: u, naoLidas: nao, pix: mp.configurado(), s: vis, c: campanhas.map(c => ({
-    ...c, foto: c.fl ? "/api/campanhas/" + c.id + "/foto?v=" + c.fl : "", fl: undefined, preco: c.preco_centavos / 100, preco_centavos: undefined, reservados: res[c.id] || [], ocupados: ocup[c.id] || [], total: (ocup[c.id] || []).length, meus: meus[c.id] || [],
+  const embedKey = require('./config').CS2INSPECT_EMBED_KEY || '';
+  return { eu: u, naoLidas: nao, pix: mp.configurado(), s: vis, viewer3d: { key: embedKey, configurado: !!embedKey }, c: campanhas.map(c => ({
+    ...c, ...configuracao3d(c), inspect_link: undefined, viewer_3d_pendente: undefined,
+    foto: c.fl ? "/api/campanhas/" + c.id + "/foto?v=" + c.fl : "", fl: undefined, preco: c.preco_centavos / 100, preco_centavos: undefined, reservados: res[c.id] || [], ocupados: ocup[c.id] || [], total: (ocup[c.id] || []).length, meus: meus[c.id] || [],
     ganhador: gan[c.id] ? { n: gan[c.id].n, nome: abrev(gan[c.id].nome), data: gan[c.id].data, total: gan[c.id].total, eu: !!u && gan[c.id].user_id === u.id } : null })) };
 }
 
 function corpoCampanha(b, editar) {
+  const numero = (v, mensagem) => {
+    if (v === undefined || v === '') return 0;
+    if (!['number', 'string'].includes(typeof v) || !Number.isFinite(Number(v))) throw new Erro(mensagem);
+    return Number(v);
+  };
   const max = inteiro(b.max, 1, 100, "Vagas: de 1 a 100.");
   const d = { premio: txt(b.premio, 80, 1), desgaste: txt(b.desgaste || "", 40), descricao: txt(b.descricao || "", 500),
-    valor: Number(b.valor) || 0, cor: RE.hex.test(b.cor) ? b.cor : "#b3263a", max,
+    valor: numero(b.valor, "Valor inválido."), cor: RE.hex.test(b.cor) ? b.cor : "#b3263a", max,
     max_por_usuario: inteiro(b.max_por_usuario || 1, 1, max, "Limite por pessoa inválido."),
     fim: "" }; // sorteios não têm prazo: acontecem quando todos os números são escolhidos
   if (d.valor < 0 || d.valor > 1e7) throw new Erro("Valor inválido.");
-  const preco = Math.round((Number(b.preco_numero) || 0) * 100); // preço por número, em centavos (inteiro: sem erro de ponto flutuante)
+  const preco = Math.round(numero(b.preco_numero, "Preço por número inválido.") * 100); // preço por número, em centavos (inteiro: sem erro de ponto flutuante)
   if (!Number.isFinite(preco) || preco < 0 || preco > 1e6 || (preco > 0 && preco < 100)) throw new Erro("Preço por número: 0 (grátis) ou de R$ 1,00 a R$ 10.000,00.");
   d.preco_centavos = preco;
   d.foto = b.foto === undefined && editar ? undefined : foto(b.foto || "", 1.5e6);
+  if (b.inspect_link !== undefined || b.modelo_3d_manual !== undefined) throw new Erro('A configuração 3D antiga precisa ser refeita no CS2Inspect.');
+  if (b.reconfigurar_3d !== undefined && typeof b.reconfigurar_3d !== 'boolean') throw new Erro('Estado da configuração 3D inválido.');
+  if (b.viewer_3d === undefined && editar) d.viewer_3d = undefined;
+  else if (b.viewer_3d == null) d.viewer_3d = null;
+  else {
+    try { d.viewer_3d = require('../public/cs2inspect').normalize(b.viewer_3d); }
+    catch (e) { throw new Erro(e.message); }
+  }
+  d.viewer_3d_pendente = d.viewer_3d ? 0 : b.reconfigurar_3d === undefined && b.viewer_3d === undefined && editar ? undefined : b.reconfigurar_3d ? 1 : 0;
   return d;
 }
 
@@ -118,4 +143,4 @@ const rotas = [
       numeros: (await db.all("SELECT n FROM tickets WHERE campaign_id=? ORDER BY n", [id])).map(x => x.n), vencedor: w.n };
   }]
 ];
-module.exports = { rotas, corpoCampanha, sortear, calcularVencedor, novaSemente, visual, RE, txt, foto };
+module.exports = { rotas, corpoCampanha, configuracao3d, sortear, calcularVencedor, novaSemente, visual, imagem, RE, txt, foto };

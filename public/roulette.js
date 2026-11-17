@@ -41,7 +41,7 @@
     let metrics = { width: 900, ticket: 142, gap: 14 }, observer;
 
     const header = node("header", "roulette-header"), brand = node("div", "roulette-brand");
-    const logo = node("img"); logo.src = options.logoSrc || "logo-marca.webp";
+    const logo = node("img"); logo.src = options.logoSrc || "logo-nav.webp"; // 96px: exibido a 38px (antes: 290 KB)
     logo.alt = ""; logo.width = 38; logo.height = 42;
     const brandText = node("div");
     brandText.append(node("strong", null, "GOATSKINS"), node("small", null, "SORTEIO #" + c.id));

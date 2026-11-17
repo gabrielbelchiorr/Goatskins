@@ -1,0 +1,14 @@
+{
+  "name": "GOATSKINS — Sorteios de skins de CS2",
+  "short_name": "GOATSKINS",
+  "lang": "pt-BR",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#07101c",
+  "theme_color": "#091423",
+  "icons": [
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/favicon-48.png", "sizes": "48x48", "type": "image/png" }
+  ]
+}

@@ -1,7 +1,7 @@
 /* GOATSKINS – servidor HTTP (Node.js puro, sem dependências).
    Rodar:  node --no-warnings server.js
    Criar o primeiro SUPER_ADMIN:  node --no-warnings server.js criar-admin email@exemplo.com SuaSenha123 "Seu Nome" */
-const http = require("node:http"), fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
+const http = require("node:http"), path = require("node:path"), crypto = require("node:crypto");
 const cfg = require("./src/config"), { db, iniciar, fechar, agora, audit, ping, tx, comAutorizacao } = require("./src/db");
 const { Erro, ipDe, limite } = require("./src/http");
 const auth = require("./src/auth");
@@ -26,7 +26,7 @@ process.on("unhandledRejection", e => console.error("[rejeição não tratada]",
 process.on("uncaughtException", e => { console.error("[erro fatal]", e && (e.code || e.name)); process.exit(1); }); // o gerenciador (pm2/systemd) reinicia
 
 const security = require("./src/security");
-const ROTAS = [...security.rotas, ...auth.rotas, ...require("./src/mfa").rotas, ...require("./src/phone").rotas, ...require("./src/rifas").rotas, ...require("./src/pedidos").rotas, ...require("./src/admin").rotas];
+const ROTAS = [...security.rotas, ...auth.rotas, ...require("./src/mfa").rotas, ...require("./src/phone").rotas, ...require("./src/rifas").rotas, ...require("./src/pedidos").rotas, ...require("./src/admin").rotas, ...require("./src/predefinicoes").rotas];
 const PAPEIS_ADMIN = ["ADMIN", "SUPER_ADMIN"];
 
 async function despachar(req, res, rota, body) {
@@ -58,12 +58,16 @@ async function despachar(req, res, rota, body) {
   throw new Erro("Rota não encontrada.", 404);
 }
 
-const TIPOS = { ".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "text/javascript", ".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".ico": "image/x-icon" };
 // Apenas arquivos explicitamente usados pelo frontend podem ser servidos.
 // Uma extensao permitida (como .js, .html) nao deve tornar um backup publico.
 const PUBLICOS = new Set([
   'index.html','style.css','script.js','logo.jpg','logo-marca.webp','mascote.webp','cenario.webp',
-  'privacidade.html','termos.html','cookies.html','page-loader.js','roulette.js','roulette.css','cookie-consent.js'
+  'privacidade.html','termos.html','cookies.html','page-loader.js','roulette.js','cookie-consent.js',
+  'cs2inspect.js','skin-viewer.js',
+  'logo-nav.webp','logo-loader.webp','mascote-hero.webp',
+  'fonts/barlow-regular.woff2','fonts/barlow-semibold.woff2',
+  'fonts/barlow-condensed-bold.woff2','fonts/barlow-condensed-extrabold.woff2',
+  'og-image.jpg','apple-touch-icon.png','favicon-48.png','site.webmanifest'
 ]);
 function segredoOrigemValido(req) {
   if (!cfg.ORIGIN_VERIFY_SECRET) return true;
@@ -75,7 +79,7 @@ function segredoOrigemValido(req) {
 }
 function cabecalhos(res) {
   res.setHeader("X-Content-Type-Options", "nosniff"); res.setHeader("X-Frame-Options", "DENY"); res.setHeader("Referrer-Policy", "same-origin");
-  res.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com https://cs2inspect.skin; connect-src 'self' https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()"); res.setHeader("Cross-Origin-Opener-Policy", "same-origin"); res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
   if (cfg.PRODUCAO) res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
 }
@@ -113,7 +117,7 @@ const server = http.createServer((req, res) => {
           if (!body || typeof body !== "object" || Array.isArray(body)) throw new Erro("JSON deve ser um objeto.");
         }
         const r = await despachar(req, res, rota, body);
-        if (r && r.raw) { res.writeHead(200, { "Content-Type": r.tipo, "Cache-Control": "public, max-age=86400" }); return res.end(r.raw); }
+        if (r && r.raw) { res.writeHead(200, { "Content-Type": r.tipo, "Cache-Control": rota.startsWith('/api/admin/') ? "no-store" : "public, max-age=86400" }); return res.end(r.raw); }
         if (r && r.redirect) { res.writeHead(302, { Location: r.redirect }); return res.end(); }
         json(res, 200, r);
       } catch (e) {
@@ -124,6 +128,10 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (req.method !== "GET" && req.method !== "HEAD") { res.writeHead(405); return res.end(); }
+  // Carregado só aqui: as rotas de API não dependem do módulo de arquivos.
+  const estatico = require("./src/estatico");
+  const falhaEstatico = e => { console.error("[estatico] falha", e && (e.code || e.name)); if (!res.headersSent) { res.writeHead(500, { "Cache-Control": "no-store" }); } res.end(); };
+  if (rota === "/robots.txt" || rota === "/sitemap.xml" || rota === "/favicon.ico") return void estatico.especial(req, res, rota, url, PUBLICOS).catch(falhaEstatico);
   const PUB = path.join(cfg.raiz, "public");
   let f; try { f = path.join(PUB, decodeURIComponent(rota === "/" ? "/index.html" : rota)); } catch (e) { res.writeHead(400); return res.end(); }
   if (!f.startsWith(PUB + path.sep) || path.relative(PUB, f).split(path.sep).some(p => p.startsWith("."))) { res.writeHead(403); return res.end(); } // impede ../ e arquivos ocultos (.env, .git)
@@ -131,24 +139,22 @@ const server = http.createServer((req, res) => {
   // confidenciais mesmo com extensoes como .js e .html.
   const nome = path.relative(PUB, f).replace(/\\/g, '/');
   if (!PUBLICOS.has(nome)) { res.writeHead(404, { "Cache-Control": "no-store" }); return res.end(); }
-  // Um symlink com nome valido pode apontar para fora da pasta publica.
-  fs.lstat(f, (err, st) => {
-    if (err) { res.writeHead(404); return res.end("Não encontrado"); }
-    if (st.isSymbolicLink()) { res.writeHead(403); return res.end(); }
-    if (!st.isFile()) { res.writeHead(404); return res.end(); }
-    fs.readFile(f, (err, data) => {
-      if (err) { res.writeHead(404); return res.end("Não encontrado"); }
-      const ext = path.extname(f).toLowerCase();
-      res.writeHead(200, { "Content-Type": TIPOS[ext], "Cache-Control": ext === ".jpg" ? "public, max-age=86400" : "no-cache" });
-      res.end(req.method === "HEAD" ? undefined : data);
-    });
-  });
+  // Um symlink com nome valido pode apontar para fora da pasta publica (conferido em estatico.servir).
+  estatico.servir(req, res, nome, url, PUBLICOS).catch(falhaEstatico);
 });
 /* O balanceador do Render mantém conexões abertas por ~60 s; se o Node fechar antes (padrão 5 s) surgem 502 esporádicos. */
 server.keepAliveTimeout = 65e3; server.headersTimeout = 66e3; server.requestTimeout = 120e3;
 let pararRecuperacao = async () => {};
 async function main() {
   if (process.argv[2] === "criar-admin") return criarAdmin();
+  // Um servidor local apontado para o banco de produção processaria a fila de recuperação de senha
+  // e a varredura Pix de usuários reais (links gravados no emails.log local). Exige opt-in explícito.
+  if (cfg.BANCO_REMOTO_FORA_DE_PRODUCAO && !cfg.PERMITIR_BANCO_REMOTO) {
+    console.error("[config] DATABASE_URL aponta para um banco remoto (" + cfg.BANCO_REMOTO_FORA_DE_PRODUCAO + ") fora de produção.\n" +
+      "Use um PostgreSQL local para desenvolvimento. Se isso for intencional, defina PERMITIR_BANCO_REMOTO=1.");
+    process.exit(1);
+  }
+  if (cfg.BANCO_REMOTO_FORA_DE_PRODUCAO) console.warn("[config] ATENÇÃO: servidor de desenvolvimento conectado ao banco remoto " + cfg.BANCO_REMOTO_FORA_DE_PRODUCAO + " (PERMITIR_BANCO_REMOTO=1).");
   await iniciar(); // cria/atualiza as tabelas no PostgreSQL antes de aceitar requisições
   const registration = require("./src/registration");
   await registration.limpar();

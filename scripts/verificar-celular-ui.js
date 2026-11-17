@@ -27,16 +27,23 @@ const server=http.createServer((req,res)=>{
     await r.fulfill({json:data});
    });
    await page.goto(base);await page.waitForFunction(()=>!document.documentElement.classList.contains('page-loading'));
-   await page.evaluate(()=>{document.querySelector('main').style.minHeight='2200px';document.body.classList.add('menu-closed');});
-   const link=page.locator('.whatsapp-group');assert.equal(await link.count(),1);await link.waitFor({state:'visible'});
+   await page.evaluate(()=>{document.querySelector('main').style.minHeight='2200px';});
+   const header=page.locator('.site-header'),menu=page.locator('#menuBtn');
+   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+   if(width<=820){assert.equal(await menu.getAttribute('aria-expanded'),'false');assert((await header.boundingBox()).height<=80);}
+   else {assert(await menu.isVisible());assert(await page.locator('#menuLateral .menu [data-view="sorteios"]').isVisible());}
+   await page.evaluate(()=>window.scrollTo(0,700));await page.waitForTimeout(350);
+   assert(Math.abs((await header.boundingBox()).y)<2);
+   if(width<=820){await menu.click();assert.equal(await menu.getAttribute('aria-expanded'),'true');}
+   const link=page.locator('.nav-community');assert.equal(await link.count(),1);await link.waitFor({state:'visible'});
    assert.equal(await link.getAttribute('target'),'_blank');assert.equal(await link.getAttribute('rel'),'noopener noreferrer');
    const rect=await link.boundingBox();assert(rect.x>=0&&rect.x+rect.width<=width);
-   if(width<=820){const identity=await page.locator('.hero-identity').boundingBox();assert(identity.x+identity.width<=rect.x);assert((await page.locator('.hero').boundingBox()).height<=110);}
-   await page.evaluate(()=>window.scrollTo(0,700));await page.waitForTimeout(350);
-   assert(Math.abs((await page.locator('.hero').boundingBox()).y)<2);
+   assert(rect.y>=0&&rect.y+rect.height<=(await header.boundingBox()).height);
    const popupPromise=page.waitForEvent('popup');await link.click();const popup=await popupPromise;await popup.waitForLoadState();assert.equal(popup.url(),'https://chat.whatsapp.com/BBlILmZHHfTKPKTxkFyfEj');await popup.close();
    await page.screenshot({path:path.join(__dirname,`../validation/celular-header-${width}.png`)});
-   await page.locator('#menuBtn').click();await page.locator('#loginBtn').click();
+   if(width<=820&&await menu.getAttribute('aria-expanded')!=='true')await menu.click();
+   if(width<=820)assert.equal(await menu.getAttribute('aria-expanded'),'true');
+   await page.locator('#loginBtn').click();
    await page.getByRole('button',{name:'Criar conta',exact:true}).click();
    const tel=page.getByLabel('Celular com DDD');await tel.fill('11999999999');await tel.dispatchEvent('input');assert.equal(await tel.inputValue(),'(11) 99999-9999');
    pending=true;await page.reload();await page.getByRole('heading',{name:'Concluir cadastro'}).waitFor();

@@ -1,19 +1,40 @@
 /* Painel administrativo: tudo aqui exige papel ADMIN ou SUPER_ADMIN, conferido no servidor. */
 const { db, tx, liberar, agora, audit, novaSemente } = require("./db");
-const { Erro, RE, txt, foto, ipDe } = require("./http");
-const { corpoCampanha, sortear, visual } = require("./rifas");
+const { Erro, RE, txt, foto } = require("./http");
+const { corpoCampanha, configuracao3d, sortear, visual } = require("./rifas");
 
 const rotas = [
   ["GET", /^\/api\/admin\/dashboard$/, async () => {
     const um = async sql => (await db.get(sql)).n, hoje = agora().slice(0, 10), semana = new Date(Date.now() - 7 * 864e5).toISOString();
+    // Pendências operacionais primeiro: o painel abre mostrando o que exige ação.
+    const agoraMs = Date.now();
+    const [operacao, usuarios, verificados, sorteios, participacoes, participacoesHoje, participacoesSemana, porSorteio, ultimas] = await Promise.all([
+      db.get(`SELECT
+        (SELECT COALESCE(SUM(total_centavos),0) FROM pedidos WHERE status='PAID') receita_centavos,
+        (SELECT COUNT(*) FROM pedidos WHERE status='PENDING') pix_pendentes,
+        (SELECT COUNT(*) FROM pedidos WHERE status='PENDING' AND ((mp_creation_uncertain=1 AND criado_em<=?) OR (expira_em>0 AND expira_em<=?))) pix_revisao,
+        (SELECT COUNT(*) FROM pedidos WHERE status='REFUND_NEEDED') reembolsos,
+        (SELECT COUNT(*) FROM pedidos WHERE status='PAID' AND mp_status IN ('refunded','charged_back')) estornos,
+        (SELECT COUNT(*) FROM winners WHERE entregue_em IS NULL) entregas,
+        (SELECT COUNT(*) FROM campaigns c WHERE c.archived=0 AND c.status<>'DRAWN'
+          AND EXISTS(SELECT 1 FROM tickets t WHERE t.campaign_id=c.id)
+          AND (c.status='CLOSED' OR (SELECT COUNT(*) FROM tickets t WHERE t.campaign_id=c.id) >= c.max)) prontos_para_sorteio`,
+        [new Date(agoraMs - 5 * 60000).toISOString(), agoraMs - 15 * 60000]),
+      um("SELECT COUNT(*) n FROM users WHERE status!='DELETED'"),
+      um("SELECT COUNT(*) n FROM users WHERE email_verificado=1 AND status='ACTIVE'"),
+      db.all("SELECT status, COUNT(*) n FROM campaigns GROUP BY status"),
+      um("SELECT COUNT(*) n FROM tickets"),
+      db.get("SELECT COUNT(*) n FROM tickets WHERE criado_em>=?", [hoje]),
+      db.get("SELECT COUNT(*) n FROM tickets WHERE criado_em>=?", [semana]),
+      db.all("SELECT c.id, c.premio, c.max, c.status, COUNT(t.id) escolhidos FROM campaigns c LEFT JOIN tickets t ON t.campaign_id=c.id GROUP BY c.id ORDER BY c.id DESC"),
+      db.all("SELECT t.n, t.criado_em, c.premio, u.nome, u.email FROM tickets t JOIN campaigns c ON c.id=t.campaign_id JOIN users u ON u.id=t.user_id ORDER BY t.id DESC LIMIT 10")
+    ]);
+    const o = operacao || {};
     return {
-      usuarios: await um("SELECT COUNT(*) n FROM users WHERE status!='DELETED'"), verificados: await um("SELECT COUNT(*) n FROM users WHERE email_verificado=1 AND status='ACTIVE'"),
-      sorteios: await db.all("SELECT status, COUNT(*) n FROM campaigns GROUP BY status"),
-      participacoes: await um("SELECT COUNT(*) n FROM tickets"),
-      hoje: (await db.get("SELECT COUNT(*) n FROM tickets WHERE criado_em>=?", [hoje])).n,
-      semana: (await db.get("SELECT COUNT(*) n FROM tickets WHERE criado_em>=?", [semana])).n,
-      porSorteio: await db.all("SELECT c.id, c.premio, c.max, c.status, COUNT(t.id) escolhidos FROM campaigns c LEFT JOIN tickets t ON t.campaign_id=c.id GROUP BY c.id ORDER BY c.id DESC"),
-      ultimas: await db.all("SELECT t.n, t.criado_em, c.premio, u.nome, u.email FROM tickets t JOIN campaigns c ON c.id=t.campaign_id JOIN users u ON u.id=t.user_id ORDER BY t.id DESC LIMIT 10")
+      operacao: { receita: (o.receita_centavos || 0) / 100, pix_pendentes: o.pix_pendentes || 0, pix_revisao: o.pix_revisao || 0,
+        reembolsos: o.reembolsos || 0, estornos: o.estornos || 0, entregas: o.entregas || 0, prontos_para_sorteio: o.prontos_para_sorteio || 0 },
+      usuarios, verificados, sorteios, participacoes,
+      hoje: participacoesHoje.n, semana: participacoesSemana.n, porSorteio, ultimas
     };
   }, "admin"],
   ["GET", /^\/api\/admin\/usuarios$/, () => db.all("SELECT id, nome, email, role, status, email_verificado, criado_em FROM users ORDER BY id DESC LIMIT 200"), "admin"],
@@ -45,11 +66,17 @@ const rotas = [
   ["GET", /^\/api\/admin\/logs$/, () => db.all("SELECT l.quando, l.acao, l.detalhe, l.ip, u.email FROM audit_logs l LEFT JOIN users u ON u.id=l.user_id ORDER BY l.id DESC LIMIT 150"), "admin"],
   ["GET", /^\/api\/admin\/campanhas\/(\d+)\/participantes$/, ctx =>
     db.all("SELECT t.n, t.criado_em, u.nome, u.email FROM tickets t JOIN users u ON u.id=t.user_id WHERE t.campaign_id=? ORDER BY t.n", [Number(ctx.params[0])]), "admin"],
+  ["GET", /^\/api\/admin\/campanhas\/(\d+)$/, async ctx => {
+    const c = await db.get("SELECT id,premio,desgaste,descricao,valor,cor,max,max_por_usuario,foto,preco_centavos,status,viewer_3d,viewer_3d_pendente,inspect_link FROM campaigns WHERE id=?", [Number(ctx.params[0])]);
+    if (!c) throw new Erro("Sorteio não encontrado.", 404);
+    const { preco_centavos, inspect_link, viewer_3d_pendente, ...dados } = c;
+    return { ...dados, ...configuracao3d(c), preco_numero: preco_centavos / 100 };
+  }, "admin"],
   ["POST", /^\/api\/admin\/campanhas$/, async ctx => {
     const d = corpoCampanha(ctx.body, false), s = novaSemente(); // o compromisso (hash da semente) já nasce público
     await tx(async () => {
-      await db.run("INSERT INTO campaigns(premio,desgaste,descricao,valor,cor,fim,max,max_por_usuario,foto,seed,commit_hash,criado_por,criado_em,preco_centavos) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        [d.premio, d.desgaste, d.descricao, d.valor, d.cor, d.fim, d.max, d.max_por_usuario, d.foto, s.seed, s.commit, ctx.user.id, agora(), d.preco_centavos]);
+      await db.run("INSERT INTO campaigns(premio,desgaste,descricao,valor,cor,fim,max,max_por_usuario,foto,seed,commit_hash,criado_por,criado_em,preco_centavos,viewer_3d,viewer_3d_pendente) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?)",
+        [d.premio, d.desgaste, d.descricao, d.valor, d.cor, d.fim, d.max, d.max_por_usuario, d.foto, s.seed, s.commit, ctx.user.id, agora(), d.preco_centavos, d.viewer_3d ? JSON.stringify(d.viewer_3d) : null, d.viewer_3d_pendente]);
       await audit(ctx.user.id, "SORTEIO_CRIADO", d.premio, ctx.ip);
     });
     return { ok: true };
@@ -59,7 +86,7 @@ const rotas = [
     // dentro de tx: a mesma trava de escrita dos pedidos. Antes, o admin podia mudar preço/vagas no meio de uma compra (ler, conferir e gravar sem trava).
     await tx(async () => {
       await liberar();
-      const ant = await db.get("SELECT foto, status, preco_centavos FROM campaigns WHERE id=?", [id]);
+      const ant = await db.get("SELECT foto, status, preco_centavos, viewer_3d, viewer_3d_pendente FROM campaigns WHERE id=?", [id]);
       if (!ant) throw new Erro("Sorteio não encontrado.", 404);
       if (ant.status === "DRAWN") throw new Erro("Sorteio já realizado não pode ser editado.");
       const total = await db.get("SELECT COUNT(*) n, COALESCE(MAX(n),0) m FROM tickets WHERE campaign_id=?", [id]);
@@ -67,8 +94,10 @@ const rotas = [
       if (d.preco_centavos !== ant.preco_centavos && (total.n || (await db.get("SELECT COUNT(*) n FROM pedidos WHERE campaign_id=? AND status IN ('PENDING','PAID')", [id])).n))
         throw new Erro("Não é possível mudar o preço depois que há números vendidos ou pedidos em andamento.");
       if (d.max < Math.max(total.m, reservado.m)) throw new Erro("Já existem números escolhidos ou reservados até o " + Math.max(total.m, reservado.m) + "; as vagas não podem ser menores.");
-      await db.run("UPDATE campaigns SET premio=?,desgaste=?,descricao=?,valor=?,cor=?,fim=?,max=?,max_por_usuario=?,foto=?,preco_centavos=? WHERE id=?",
-        [d.premio, d.desgaste, d.descricao, d.valor, d.cor, d.fim, d.max, d.max_por_usuario, d.foto === undefined ? ant.foto : d.foto, d.preco_centavos, id]);
+      const viewer = d.viewer_3d === undefined ? ant.viewer_3d : d.viewer_3d;
+      await db.run("UPDATE campaigns SET premio=?,desgaste=?,descricao=?,valor=?,cor=?,fim=?,max=?,max_por_usuario=?,foto=?,preco_centavos=?,viewer_3d=?::jsonb,viewer_3d_pendente=? WHERE id=?",
+        [d.premio, d.desgaste, d.descricao, d.valor, d.cor, d.fim, d.max, d.max_por_usuario, d.foto === undefined ? ant.foto : d.foto, d.preco_centavos,
+          viewer ? JSON.stringify(viewer) : null, d.viewer_3d_pendente === undefined ? ant.viewer_3d_pendente : d.viewer_3d_pendente, id]);
       await audit(ctx.user.id, "SORTEIO_EDITADO", "campanha " + id, ctx.ip);
     });
     return { ok: true };

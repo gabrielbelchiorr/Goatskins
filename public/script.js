@@ -1,7 +1,7 @@
 /* Interface GOATSKINS */
 let S = { eu: null, naoLidas: 0, s: { titulo: "", sub: "", banner: "", cores: { gold: "#d4aa55", copper: "#b8651f", slate: "#102440", navy: "#0e1a33" } }, c: [] };
 let view = "sorteios";
-let sorteioAtual = null, pedidoPendente = null, buscandoPendente = false, pedidoPoll = null;
+let sorteioAtual = null, pedidoPendente = null, buscandoPendente = false, encerrarPedidoModal = null;
 const sorteioURL = Number(new URLSearchParams(location.search).get("sorteio"));
 if (Number.isInteger(sorteioURL) && sorteioURL > 0) { view = "detalhe"; sorteioAtual = sorteioURL; }
 
@@ -17,7 +17,9 @@ function $(id) { const e = document.getElementById(id); if (!e) throw new Error(
 function h(tag, cls, txt) { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
 const fmt = iso => iso.split("-").reverse().join("/");
 const dataHora = iso => new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
-const brl = v => "R$ " + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2 });
+const brl = v => "R$ " + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const plural = (n, um, varios) => n === 1 ? um : varios;
+const precoNumero = c => c.preco > 0 ? brl(c.preco) : "Grátis";
 const admin = () => !!S.eu && (S.eu.role === "ADMIN" || S.eu.role === "SUPER_ADMIN");
 
 /* Requisições à API com o cabeçalho exigido pela proteção CSRF. */
@@ -31,6 +33,7 @@ async function api(url, method, body, mfaRetry = false) {
     const retry = await fetch(url, {method: method || "GET", credentials:"same-origin", signal:AbortSignal.timeout(20000), headers:{"Content-Type":"application/json","X-Requested-With":"goatskins"}, body:JSON.stringify({...body,turnstileToken:token})});
     const result = await retry.json(); if(!retry.ok) throw new Error(result.erro || "Falha na verificação."); return result;
   }
+  if (!r.ok && d.tipo === 'MFA_REQUIRED') mfaConfirmadoAte = 0; // o servidor manda: a elevação acabou
   if (!r.ok && d.tipo === 'MFA_REQUIRED' && url.startsWith('/api/admin/') && !mfaRetry && admin()) {
     const retomar = retomarPainelAdmin;
     const verified = await exigirMfaAdmin();
@@ -48,7 +51,9 @@ async function api(url, method, body, mfaRetry = false) {
   return d;
 }
 async function carregar() {
-  S = await api("/api/estado"); render();
+  S = await api("/api/estado");
+  window.GoatSkinViewer?.configure?.({key:S.viewer3d?.key || ''});
+  render();
   window.GoatskinsLoading?.finish();
   if (S.eu && !S.eu.celular_preenchido && !admin()) return celularModal();
   await atualizarPendente();
@@ -77,9 +82,10 @@ let destinoAdmin = {aba:'painel', editar:undefined};
 let retomarPainelAdmin = null;
 const modalBackground = new Map();
 function openModal(wide, ...nodes) {
+  encerrarPedidoModal?.();
   if ($("modal").hidden) {
     modalOpener = document.activeElement;
-    document.querySelectorAll('.hero, .shell, #menuBtn, #scrim, #pendingPixBar, .cookie-banner').forEach(el => {
+    document.querySelectorAll('.site-header, #menuLateral, .shell, #menuBtn, #scrim, #pendingPixBar, .cookie-banner, .skip-link').forEach(el => {
       modalBackground.set(el, el.inert); el.inert = true;
     });
   }
@@ -92,19 +98,22 @@ function openModal(wide, ...nodes) {
 }
 function closeModal() {
   if (mfaPendente?.busy) return;
+  encerrarPedidoModal?.();
   if (mfaPendente) {
     const pending = mfaPendente; mfaPendente = null;
     $('modalBody').replaceChildren(); pending.resolve(false);
   }
   $("modal").hidden = true;
   modalBackground.forEach((inert, el) => { el.inert = inert; }); modalBackground.clear();
+  document.querySelector('.shell').inert = mobileMQ.matches && !document.body.classList.contains('menu-closed');
+  $('menuLateral').inert = document.body.classList.contains('menu-closed');
   if (modalOpener?.isConnected && !modalOpener.closest('[hidden], [inert]')) modalOpener.focus({preventScroll:true});
 }
 document.addEventListener('keydown', e => {
   if ($('modal').hidden || document.querySelector('dialog[open]')) return;
   if (e.key === 'Escape') { e.preventDefault(); closeModal(); return; }
   if (e.key !== 'Tab') return;
-  const focusable = [...$('modal').querySelectorAll('button:not(:disabled), input:not(:disabled), a[href], summary, [tabindex="0"]')]
+  const focusable = [...$('modal').querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex="0"]')]
     .filter(el => el.getClientRects().length && !el.closest('[hidden], [inert]'));
   const first = focusable[0], last = focusable[focusable.length - 1];
   if (!first) return;
@@ -135,7 +144,7 @@ function campo(rotulo, tipo, valor) {
 async function sairDaConta() {
   if (!confirm("Tem certeza de que deseja sair da sua conta?")) return;
   await api("/api/logout", "POST");
-  retomarPainelAdmin = null; destinoAdmin = {aba:'painel', editar:undefined};
+  retomarPainelAdmin = null; destinoAdmin = {aba:'painel', editar:undefined}; mfaConfirmadoAte = 0;
   closeModal();
   await carregar();
 }
@@ -143,7 +152,7 @@ function botao(texto, cls, fn) { const b = h("button", "btn" + (cls ? " " + cls 
 function aviso(titulo, msg) { openModal(false, h("h3", null, titulo), h("p", null, msg)); }
 function tabela(cab, linhas) {
   const t = h("table", "tabela"), tr = h("tr"); cab.forEach(c => tr.append(h("th", null, c))); t.append(tr);
-  linhas.forEach(l => { const r = h("tr"); l.forEach(c => r.append(h("td", null, c == null ? "" : String(c)))); t.append(r); });
+  linhas.forEach(l => { const r = h("tr"); l.forEach(c => r.append(h("td", /^R\$\s/.test(String(c)) ? 'money' : null, c == null ? "" : String(c)))); t.append(r); });
   const scroll = h("div", "table-scroll"); scroll.tabIndex = 0; scroll.setAttribute("role", "region");
   scroll.setAttribute("aria-label", "Tabela: " + cab.join(", ")); scroll.append(t); return scroll;
 }
@@ -204,11 +213,11 @@ function tituloConta(titulo, descricao, categoria = 'SUA CONTA GOATSKINS') {
 function abrirAuth(titulo, descricao, nodes, modo = '') {
   const shell = h('div', 'auth-shell'), visual = h('aside', 'auth-visual'), brand = h('div', 'auth-brand');
   visual.setAttribute('aria-label', 'GOATSKINS');
-  const logo = h('img'); logo.src = 'logo-marca.webp'; logo.alt = ''; logo.width = 44; logo.height = 48;
+  const logo = h('img'); logo.src = 'logo-nav.webp'; logo.alt = ''; logo.width = 44; logo.height = 47;
   const wordmark = h('span', null, 'GOAT'); wordmark.append(h('b', null, 'SKINS')); brand.append(logo, wordmark);
   const copy = h('div', 'auth-visual-copy'), headline = h('h2', null, 'Seu próximo'); headline.append(h('span', null, 'capítulo no CS.'));
   copy.append(h('p', 'auth-eyebrow', 'BEM-VINDO À GOATSKINS'), headline, h('p', null, 'Escolha seus números. Acompanhe os sorteios. Viva cada resultado.'));
-  const art = h('div', 'auth-art'), mascot = h('img'); mascot.src = 'mascote.webp'; mascot.alt = ''; mascot.width = 720; mascot.height = 984;
+  const art = h('div', 'auth-art'), mascot = h('img'); mascot.src = 'mascote-hero.webp'; mascot.alt = ''; mascot.width = 600; mascot.height = 820;
   art.setAttribute('aria-hidden', 'true'); art.append(mascot);
   visual.append(brand, copy, art, h('p', 'auth-visual-footer', 'SKINS DE CS. PERSONALIDADE GOAT.'));
   const panel = h('section', 'auth-panel');
@@ -236,11 +245,17 @@ function mensagemAuth(titulo, mensagem, textoAcao, acao, sucesso = true) {
 
 /* A autorização administrativa é sempre confirmada pelo servidor. Segredos e
    códigos de recuperação permanecem apenas neste modal, sem armazenamento web. */
+/* Evita uma ida ao servidor (/api/mfa/status) a cada clique no painel. É só um atalho de interface:
+   toda rota /api/admin/ continua exigindo a elevação no servidor; se ela expirar, a resposta
+   MFA_REQUIRED invalida este cache e reabre a confirmação (ver api()). */
+let mfaConfirmadoAte = 0;
+const MFA_CACHE_MS = 5 * 60000;
 function exigirMfaAdmin() {
   if (!admin()) return Promise.resolve(false);
+  if (mfaConfirmadoAte > Date.now() && !mfaPendente) return Promise.resolve(true);
   if (mfaPendente) return mfaPendente.promise;
   let resolver;
-  const pending = {promise:new Promise(resolve => { resolver = resolve; }), resolve:resolver};
+  const pending = {promise:new Promise(resolve => { resolver = resolve; }), resolve:ok => { if (ok) mfaConfirmadoAte = Date.now() + MFA_CACHE_MS; resolver(ok); }};
   mfaPendente = pending;
   const ativo = () => mfaPendente === pending;
   const terminar = () => {
@@ -386,46 +401,120 @@ function navegar(novaView) {
   history.pushState({}, "", u.pathname + u.search);
   render(); window.scrollTo(0, 0);
 }
-function abrirSorteio(id) {
+function abrirSorteio(id, ancora) {
   const c = S.c.find(x => x.id === id); if (!c) return;
   sorteioAtual = id; view = "detalhe";
   history.pushState({}, "", "?sorteio=" + encodeURIComponent(id));
-  render(); window.scrollTo(0, 0);
+  render();
+  const alvo = ancora && document.getElementById("sale-" + ancora);
+  if (alvo) alvo.scrollIntoView({ block: "start" }); else window.scrollTo(0, 0);
+}
+function botaoVisualizarSkin(c) {
+  if (!c.viewer_3d || !S.viewer3d?.key || !window.GoatCS2Inspect || !window.GoatSkinViewer) return null;
+  try { window.GoatCS2Inspect.normalize(c.viewer_3d); } catch (_) { return null; }
+  let error;
+  const button = botao("Visualizar em 3D", "alt skin-3d-button", () => {
+    try {
+      window.GoatSkinViewer.open({config:c.viewer_3d, title:c.premio});
+      error?.remove(); error = null;
+    } catch (e) {
+      if (!error) { error = h('p','err skin-3d-error'); button.insertAdjacentElement('afterend',error); }
+      mostrarFeedback(error,'Visualização 3D indisponível. ' + e.message);
+    }
+  });
+  return button;
 }
 function cardSorteio(c) {
   const pct = Math.round(Math.min(100, c.total / c.max * 100)), restante = c.max_por_usuario - c.meus.length, fechado = c.status !== "OPEN" || cheio(c);
   const card = h("article", "card"), prize = h("button", "prize");
+  // Uma única cor de destaque (a da marca): cor diferente por card não tinha significado e confundia a leitura.
+  card.classList.toggle('is-closed', fechado); card.classList.toggle('is-complete', !!c.ganhador);
+  const head = h('div', 'card-head');
+  head.append(h('span', 'card-state', c.ganhador ? 'Sorteio realizado' : fechado ? (cheio(c) ? 'Esgotado · aguardando sorteio' : 'Inscrições encerradas') : 'Inscrições abertas'));
   prize.type = "button"; prize.setAttribute("aria-label", (c.ganhador ? "Ver resultado de " : "Ver sorteio ") + c.premio);
   prize.addEventListener("click", () => c.ganhador ? roleta(c) : abrirSorteio(c.id));
-  if (c.foto) { prize.classList.add("photo"); const im = h("img"); im.src = c.foto; im.alt = c.premio; im.loading = "lazy"; prize.append(im); }
-  else { prize.textContent = c.premio; prize.style.backgroundColor = c.cor; }
-  if (c.valor) prize.append(h("span", "chip", "Skin " + brl(c.valor)));
-  if (fechado) prize.append(h("span", "badge", c.ganhador ? "Sorteio realizado" : cheio(c) ? "100% preenchido" : "Inscrições encerradas"));
+  if (c.foto) {
+    prize.classList.add("photo", "skeleton"); prize.setAttribute('aria-busy','true');
+    const im = h("img"); im.alt = c.premio;
+    im.loading = "lazy"; im.decoding = 'async'; im.width = 480; im.height = 300;
+    const imageReady = () => {prize.classList.remove('skeleton'); prize.removeAttribute('aria-busy');};
+    im.addEventListener('load', imageReady, {once:true});
+    im.addEventListener('error', () => { imageReady(); im.remove(); prize.classList.remove('photo'); prize.append(h('span', 'prize-missing', 'Imagem indisponível')); }, {once:true});
+    im.src = c.foto;
+    prize.append(im);
+  } else { prize.append(h('span', 'prize-missing', 'GOATSKINS')); }
   const info = h("div", "info");
-  info.append(h("h3", null, c.premio));
-  if (c.desgaste) info.append(h("p", "muted", c.desgaste));
-  if (c.descricao) info.append(h("p", "muted", c.descricao));
+  const title = h("h3", null, c.premio); title.title = c.premio; info.append(title);
+  if (c.desgaste) info.append(h("p", "muted card-wear", c.desgaste));
+  if (c.descricao) { const description = h("p", "muted card-description", c.descricao); description.title = c.descricao; info.append(description); }
+  if (c.valor) { const value = h('p', 'card-value'); value.append(h('span', null, 'Valor do prêmio'), h('strong', 'money', brl(c.valor))); info.append(value); }
+  const visualizar = botaoVisualizarSkin(c);
   if (c.ganhador) {
     const w = c.ganhador;
     info.append(h("p", null, "Ganhador(a): " + w.nome + " · Nº " + w.n + (w.eu ? " (você!)" : "")),
       h("p", "muted", "Realizado em " + fmt(w.data)),
       botao("Ver resultado", "alt buy-btn", () => roleta(c)));
-    card.append(prize, info); return card;
+    if (visualizar) info.append(visualizar);
+    card.append(head, prize, info); return card;
   }
-  if (c.preco > 0) info.append(h("p", "price", "Cada número: " + brl(c.preco)));
+  const price = h('div', 'price');
+  price.append(h('span', 'price-label', 'Por número'), h('strong', 'money', precoNumero(c)));
+  info.append(price);
   const bar = h("div", "bar"), fill = h("span"); fill.style.width = pct + "%"; bar.append(fill);
-  info.append(bar, h("p", "muted", c.total + " de " + c.max + " números " + (c.preco > 0 ? "vendidos" : "escolhidos") + " · " + pct + "%" + (c.reservados.length ? " · " + c.reservados.length + " reservado(s)" : "")));
-  const btn = botao(fechado ? "Ver sorteio encerrado" : restante <= 0 ? "Ver meus números" : "Ver sorteio e escolher números", "", () => abrirSorteio(c.id));
+  bar.setAttribute('role', 'progressbar'); bar.setAttribute('aria-label', 'Números preenchidos');
+  bar.setAttribute('aria-valuemin', '0'); bar.setAttribute('aria-valuemax', String(c.max)); bar.setAttribute('aria-valuenow', String(c.total));
+  const progress = h('div', 'card-progress-label'); progress.append(h('span', null, c.total + ' / ' + c.max + ' números ' + (c.preco > 0 ? 'vendidos' : 'escolhidos')), h('b', null, pct + '%'));
+  const available = Math.max(0, c.max - c.total - c.reservados.length);
+  info.append(progress, bar, h('p', 'card-availability', available + (available === 1 ? ' disponível' : ' disponíveis') + (c.reservados.length ? ' · ' + c.reservados.length + (c.reservados.length === 1 ? ' reservado' : ' reservados') : '')));
+  const btn = botao(fechado ? "Ver sorteio encerrado" : restante <= 0 ? "Ver meus números" : "Participar do sorteio", "", () => abrirSorteio(c.id));
   btn.classList.add("buy-btn"); info.append(btn);
+  if (visualizar) info.append(visualizar);
+  card.append(head, prize, info);
   if (admin()) {
-    if (fechado && c.total > 0) info.append(botao("Girar roleta", "alt", () => roleta(c)));
-    if (!fechado) info.append(botao("Encerrar inscrições", "alt sale-close-btn", async () => { if (confirm("Encerrar as inscrições de " + c.premio + "?")) { try { await api("/api/admin/campanhas/" + c.id + "/encerrar", "POST"); await carregar(); } catch (e) { alert(e.message); } } }));
-    info.append(botao("Editar", "alt sale-edit-btn", () => painel("sorteios", c)));
+    const controls = h('details', 'card-admin'), summary = h('summary', null, 'Gerenciar sorteio');
+    summary.setAttribute('aria-label', 'Ações administrativas de ' + c.premio);
+    const actions = h('div', 'card-admin-actions');
+    if (fechado && c.total > 0) actions.append(botao("Girar roleta", "alt", () => roleta(c)));
+    if (!fechado) actions.append(botao("Encerrar inscrições", "alt sale-close-btn", async () => { if (confirm("Encerrar as inscrições de " + c.premio + "?")) { try { await api("/api/admin/campanhas/" + c.id + "/encerrar", "POST"); await carregar(); } catch (e) { alert(e.message); } } }));
+    actions.append(botao("Editar", "alt sale-edit-btn", () => painel("sorteios", c)));
+    controls.append(summary, actions); card.append(controls);
   }
-  card.append(prize, info); return card;
+  return card;
 }
 function preencher(gid, nid, lista) {
   const g = $(gid); g.innerHTML = ""; lista.forEach(c => g.append(cardSorteio(c))); $(nid).hidden = lista.length > 0;
+}
+
+/* Ordering uses only the public campaign data; the home has no search input. */
+function renderCampanhas() {
+  const active = S.c.filter(c => !c.ganhador && c.status === 'OPEN' && !cheio(c));
+  const list = [...active];
+  const orders = {
+    recent: (a,b) => b.id - a.id,
+    'price-asc': (a,b) => a.preco - b.preco || b.id - a.id,
+    'prize-desc': (a,b) => (b.valor || 0) - (a.valor || 0) || b.id - a.id,
+    'progress-desc': (a,b) => b.total / b.max - a.total / a.max || b.id - a.id
+  };
+  list.sort(orders[$('campaignSort').value] || orders.recent);
+  $('gridAtivos').replaceChildren(...list.map(cardSorteio));
+  $('activeCount').textContent = String(active.length);
+  $('noAtivos').hidden = active.length > 0;
+  $('campaignResults').textContent = active.length + (active.length === 1 ? ' sorteio disponível para participar' : ' sorteios disponíveis para participar');
+}
+
+function renderDestaque(ativos) {
+  const featured = $('heroFeatured');
+  const c = [...ativos].filter(c => c.foto).sort((a,b) => (b.valor || 0) - (a.valor || 0) || b.id - a.id)[0];
+  featured.replaceChildren(); featured.hidden = !c;
+  $('inicio').classList.toggle('has-featured', !!c);
+  if (!c) return;
+  featured.href = '?sorteio=' + encodeURIComponent(c.id);
+  featured.setAttribute('aria-label', 'Ver sorteio de ' + c.premio);
+  featured.onclick = event => { if (event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); abrirSorteio(c.id); } };
+  const image = h('img'); image.src = c.foto; image.alt = ''; image.width = 520; image.height = 240; image.decoding = 'async'; image.fetchPriority = 'high';
+  image.addEventListener('error', () => { featured.hidden = true; $('inicio').classList.remove('has-featured'); }, {once:true});
+  const copy = h('span', 'featured-copy'); copy.append(h('small', null, 'Em destaque'), h('b', null, c.premio), h('span', 'money', c.preco > 0 ? brl(c.preco) + ' por número' : 'Participação gratuita'));
+  featured.append(image, copy);
 }
 
 function render() {
@@ -433,9 +522,9 @@ function render() {
   const pend = S.c.filter(c => !c.ganhador);
   const realizados = S.c.filter(c => c.ganhador).sort((a, b) => b.ganhador.data.localeCompare(a.ganhador.data) || b.id - a.id);
   const ativos = pend.filter(c => c.status === "OPEN" && !cheio(c));
-  preencher("gridAtivos", "noAtivos", ativos);
+  renderCampanhas(); renderDestaque(ativos);
   const hs = $("heroStats"); hs.innerHTML = "";
-  [[ativos.length, "sorteios ativos"], [S.c.filter(c => c.ganhador).length, "sorteios realizados"]]
+  [[ativos.length, plural(ativos.length, "sorteio ativo", "sorteios ativos")], [realizados.length, plural(realizados.length, "sorteio realizado", "sorteios realizados")]]
     .forEach(([n, t]) => { const d = h("div", "hchip"); d.append(h("b", null, String(n)), h("span", null, t)); hs.append(d); });
   preencher("gridEsgotados", "noEsgotados", pend.filter(c => c.status !== "OPEN" || cheio(c)));
   preencher("gridRealizados", "noRealizados", realizados);
@@ -445,9 +534,11 @@ function render() {
     const w = c.ganhador, li = h("li", "hrow");
     if (c.foto) { const im = h("img"); im.src = c.foto; im.alt = ""; li.append(im); }
     const t = h("div");
-    t.append(h("b", null, c.premio), h("p", "muted", (c.valor ? brl(c.valor) + " · " : "") + fmt(w.data) + " · " + w.total + " participantes"),
-      h("p", null, "Ganhador(a): " + w.nome + " · Nº " + w.n + (w.eu ? " (você!)" : "")),
-      botao("Ver resultado", "alt", () => roleta(c)));
+    const meta = h('p', 'muted'); if (c.valor) meta.append(h('span', 'money', brl(c.valor)), ' · '); meta.append(fmt(w.data) + ' · ' + w.total + ' participantes');
+    const acoes = h("div", "row-actions");
+    acoes.append(botao("Ver resultado", "alt", () => roleta(c)), botao("Ver sorteio", "alt", () => abrirSorteio(c.id)));
+    t.append(h("b", null, c.premio), meta,
+      h("p", null, "Ganhador(a): " + w.nome + " · Nº " + w.n + (w.eu ? " (você!)" : "")), acoes);
     li.append(t); hl.append(li);
   });
   $("noHist").hidden = S.c.some(c => c.ganhador);
@@ -455,14 +546,25 @@ function render() {
   const tl = $("ticketsList"); tl.innerHTML = ""; let tot = 0;
   S.c.forEach(c => {
     if (!c.meus.length) return; tot++;
-    const st = c.ganhador ? (c.ganhador.eu ? "Você ganhou!" : "Sorteio encerrado") : c.status !== "OPEN" || cheio(c) ? "Aguardando a roleta" : "Participando · " + c.total + "/" + c.max + " números";
-    const li = h("li", "hrow"), t = h("div");
-    t.append(h("b", null, c.premio), h("p", null, "Seus números: " + c.meus.join(", ")), h("p", "muted", st)); li.append(t); tl.append(li);
+    const st = c.ganhador ? (c.ganhador.eu ? "Você ganhou! Número sorteado: " + c.ganhador.n : "Sorteio realizado · número sorteado: " + c.ganhador.n) : c.status !== "OPEN" || cheio(c) ? "Números esgotados · aguardando o sorteio" : "Participando · " + c.total + "/" + c.max + " números preenchidos";
+    const li = h("li", "hrow" + (c.ganhador?.eu ? " is-winner" : "")), t = h("div");
+    if (c.foto) { const im = h("img"); im.src = c.foto; im.alt = ""; im.loading = "lazy"; li.append(im); }
+    const acoes = h("div", "row-actions"); acoes.append(botao("Ver sorteio", "alt", () => abrirSorteio(c.id)));
+    t.append(h("b", null, c.premio), h("p", null, plural(c.meus.length, "Seu número: ", "Seus números: ") + c.meus.map(n => String(n).padStart(2, "0")).join(", ")), h("p", "muted", st), acoes); li.append(t); tl.append(li);
   });
   $("noTickets").textContent = S.eu ? "Você ainda não participa de nenhum sorteio." : "Entre na sua conta para ver seus bilhetes.";
   $("noTickets").hidden = tot > 0;
 
-  $("loginBtn").textContent = S.eu ? "Sair (" + S.eu.nome.split(" ")[0] + ")" : "Entrar / Cadastrar";
+  // Conectado: identidade no topo e "Sair" como ação secundária no fim do menu (não como botão principal).
+  const loginLabel = S.eu ? "Sair da conta" : "Entrar / Cadastrar";
+  $("loginBtn").replaceChildren(h('span', 'login-label', loginLabel)); $('loginBtn').title = loginLabel;
+  $("loginBtn").classList.toggle("is-logout", !!S.eu);
+  const resumo = $("contaResumo"); resumo.hidden = !S.eu;
+  if (S.eu) {
+    resumo.querySelector(".sidebar-avatar").textContent = S.eu.nome.trim().slice(0, 1).toUpperCase();
+    resumo.querySelector("strong").textContent = S.eu.nome.trim().split(/\s+/)[0];
+    resumo.querySelector("strong").title = S.eu.nome;
+  }
   $("contaBtn").hidden = !S.eu; $("contaBtn").textContent = "Minha conta" + (S.naoLidas ? " (" + S.naoLidas + ")" : "");
   $("adminBtn").hidden = !admin();
   const f = $("faixa"); f.innerHTML = "";
@@ -475,7 +577,10 @@ function render() {
   }
   document.querySelectorAll(".view").forEach(v => { v.hidden = v.dataset.view !== view; });
   $("inicio").hidden = false; document.body.classList.remove("sem-hero");
-  document.querySelectorAll(".nv[data-view]").forEach(b => b.classList.toggle("on", b.dataset.view === view));
+  document.querySelectorAll(".nv[data-view]").forEach(b => {
+    const active = b.dataset.view === view || (view === 'detalhe' && b.dataset.view === 'sorteios');
+    b.classList.toggle("on", active); if (active) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  });
 }
 
 /* ---------- Página exclusiva da skin ---------- */
@@ -489,31 +594,49 @@ function renderDetalhe(c) {
   infos.append(h("span", "sale-eyebrow", "GOATSKINS / SORTEIO #" + c.id), h("h1", null, c.premio));
   if (c.desgaste) infos.append(h("p", "sale-wear", c.desgaste));
   if (c.descricao) infos.append(h("p", "muted", c.descricao));
+  if (c.valor) infos.append(h('p', 'sale-prize-value', 'Valor do prêmio: ' + brl(c.valor)));
+  const visualizar = botaoVisualizarSkin(c); if (visualizar) infos.append(visualizar);
+  const disponiveisTotal = Math.max(0, c.max - c.total - c.reservados.length), pct = Math.round(100 * c.total / c.max);
   const specs = h("div", "sale-specs");
-  [["VALOR DA COTA", brl(c.preco)], ["DISPONÍVEIS", String(Math.max(0,c.max-c.total-c.reservados.length))], ["PARTICIPAÇÕES", c.total + " / " + c.max]].forEach(([k,v]) => {
+  [["POR NÚMERO", precoNumero(c)], ["DISPONÍVEIS", String(disponiveisTotal)], ["PREENCHIDOS", c.total + " / " + c.max]].forEach(([k,v]) => {
     const s = h("div", "sale-spec"); s.append(h("small", null, k), h("strong", null, v)); specs.append(s);
   });
-  const barra = h("div", "sale-progress"), dentro = h("span"); dentro.style.width = Math.round(100*c.total/c.max) + "%";
-  barra.append(dentro); infos.append(specs,barra,h("p","muted",Math.round(100*c.total/c.max)+"% preenchido · "+c.reservados.length+" reservado(s) aguardando Pix"));
+  const barra = h("div", "sale-progress"), dentro = h("span"); dentro.style.width = pct + "%";
+  barra.setAttribute('role','progressbar'); barra.setAttribute('aria-label','Números preenchidos');
+  barra.setAttribute('aria-valuemin','0'); barra.setAttribute('aria-valuemax',String(c.max)); barra.setAttribute('aria-valuenow',String(c.total));
+  const situacao = pct + "% preenchido" + (c.reservados.length ? " · " + c.reservados.length + plural(c.reservados.length, " número reservado", " números reservados") + " aguardando Pix" : "");
+  barra.append(dentro); infos.append(specs, barra, h("p", "muted sale-status", situacao));
+  if (c.ganhador) {
+    const res = h("div", "sale-result");
+    res.append(h("small", null, "RESULTADO"), h("strong", null, "Número " + String(c.ganhador.n).padStart(2, "0")),
+      h("p", null, "Ganhador(a): " + c.ganhador.nome + (c.ganhador.eu ? " (você!)" : "") + " · " + fmt(c.ganhador.data)));
+    infos.append(res);
+  }
   top.append(visual,infos); root.append(voltar,top);
   if (c.ganhador) root.append(botao("Ver resultado do sorteio", "alt", () => roleta(c)));
   else if (admin() && !aberto && c.total > 0) root.append(botao("Abrir roleta", "", () => roleta(c)));
   const area = h("section","sale-numbers");
   const areaHead = h("div","sale-numbers-head");
-  areaHead.append(h("div",null),h("div","sale-legend","● Livre     ◉ Selecionado     ◈ Reservado     ✓ Vendido"));
-  areaHead.firstChild.append(h("span","sale-eyebrow","ESCOLHA A SUA SORTE"),h("h2",null,"Selecione seus números"));
+  const legenda = h("ul", "sale-legend"); legenda.setAttribute("aria-label", "Legenda dos números");
+  [["free", "Livre"], ["on", "Selecionado"], ["mine", "Seus números"], ["res", "Reservado (Pix pendente)"], ["sold", c.preco > 0 ? "Vendido" : "Escolhido"]]
+    .forEach(([k, t]) => { const li = h("li"); li.append(h("i", "sw sw-" + k), t); legenda.append(li); });
+  areaHead.append(h("div",null), legenda);
+  areaHead.firstChild.append(h("span","sale-eyebrow","PARTICIPAÇÃO"),h("h2",null,"Selecione seus números"));
   area.append(areaHead);
   if (!aberto || !restante) {
-    const texto = !aberto ? "Este sorteio não está aceitando novos números." : "Você já atingiu seu limite de números neste sorteio.";
+    const texto = c.ganhador ? "Este sorteio já foi realizado." : !aberto ? "Este sorteio não está aceitando novos números." : "Você já atingiu seu limite de números neste sorteio.";
     area.append(h("p","muted",texto));
-  }
+  } else area.append(h("p", "muted sale-limit", "Você pode escolher " + plural(restante, "mais 1 número", "até " + restante + " números") + " neste sorteio" + (c.meus.length ? " (já tem " + c.meus.length + ")." : ".")));
   const sel = new Set(), grade = h("div","sale-grid"), err = h("p","err");
   const checkout = h("div","sale-checkout"), resumo = h("div","sale-checkout-total"), finalizar = botao(c.preco > 0 ? "GARANTIR NÚMEROS · PIX" : "CONFIRMAR NÚMEROS");
+  resumo.setAttribute('role','status'); resumo.setAttribute('aria-live','polite'); err.setAttribute('role','alert');
   finalizar.classList.add("sale-pay-btn");
   const botoes = [];
   function atualizar() {
     for (const [n,b] of botoes) { b.classList.toggle("on",sel.has(n)); b.setAttribute("aria-pressed",String(sel.has(n))); }
-    resumo.replaceChildren(h("small",null,sel.size+" NÚMERO(S) SELECIONADO(S)"),h("strong",null,brl(c.preco*sel.size)));
+    const escolhidos = [...sel].sort((a,b)=>a-b).map(n=>String(n).padStart(2,"0")).join(", ");
+    resumo.replaceChildren(h("small",null,sel.size+plural(sel.size," número selecionado"," números selecionados")+(escolhidos ? ": " + escolhidos : "")),
+      h("strong",null,c.preco > 0 ? brl(c.preco*sel.size) : "Grátis"));
     finalizar.disabled = !sel.size || !aberto || !restante;
   }
   const disponiveis = [];
@@ -525,6 +648,7 @@ function renderDetalhe(c) {
     else { disponiveis.push(n); if(!aberto || !restante) b.disabled=true; else b.addEventListener("click",()=>{
       if(sel.has(n))sel.delete(n);else if(sel.size<restante)sel.add(n);atualizar();
     }); }
+    b.setAttribute('aria-label','Número '+String(n).padStart(2,'0')+' · '+(b.title || (aberto && restante ? 'Disponível' : 'Indisponível')));
     botoes.push([n,b]);grade.append(b);
   }
   if (aberto && restante) {
@@ -556,8 +680,25 @@ function renderDetalhe(c) {
       } catch(e) {err.textContent=e.message; finalizar.disabled=false;finalizar.textContent=c.preco>0?"GARANTIR NÚMEROS · PIX":"CONFIRMAR NÚMEROS";}
     }));
   }
-  atualizar();root.append(area);
+  atualizar();root.append(area, regrasSorteio(c));
 }
+
+/* Regras exibidas a partir dos dados reais do sorteio e do comportamento do servidor. */
+function regrasSorteio(c) {
+  const box = h("section", "sale-info"); box.id = "sale-regras";
+  const lista = h("dl", "sale-rules");
+  const item = (t, d) => { const w = h("div"); w.append(h("dt", null, t), h("dd", null, d)); lista.append(w); };
+  item("Preço", c.preco > 0 ? brl(c.preco) + " por número. O total é calculado pelo servidor." : "Participação gratuita.");
+  item("Números", c.max + plural(c.max, " número no total (01).", " números no total (01 a " + String(c.max).padStart(2, "0") + ").") + " Até " + c.max_por_usuario + plural(c.max_por_usuario, " número", " números") + " por pessoa.");
+  item("Requisitos", "Conta com e-mail confirmado, celular com DDD e idade mínima de 18 anos.");
+  if (c.preco > 0) item("Pagamento", "Pix pelo Mercado Pago. Os números escolhidos ficam reservados por 5 minutos enquanto o Pix é pago, e a confirmação é automática. Pix não pago dentro do prazo libera os números.");
+  item("Quando acontece", "Quando todos os números forem preenchidos. Se a organização encerrar as inscrições antes, participam apenas os números já confirmados.");
+  item("Resultado", "Definido pelo servidor no momento do sorteio. O número sorteado e o nome abreviado do ganhador aparecem nesta página e no Histórico.");
+  const termos = h("a", null, "Leia os Termos de uso"); termos.href = "/termos.html";
+  box.append(h("span", "sale-eyebrow", "TRANSPARÊNCIA"), h("h2", null, "Como funciona este sorteio"), lista, termos);
+  return box;
+}
+
 
 /* ---------- Conta: entrar, cadastrar, recuperar senha ---------- */
 function authModal(modo, emailInicial = "") {
@@ -674,35 +815,6 @@ function confirmarCadastroModal() {
 }
 function verificarEmailModal() { return confirmacaoPendente ? confirmarCadastroModal() : authModal("entrar"); }
 
-/* ---------- Escolher números ---------- */
-function escolherNumeros(c) {
-  if (!S.eu) return authModal("entrar");
-  if (!S.eu.email_verificado) return verificarEmailModal();
-  const restante = c.max_por_usuario - c.meus.length, sel = new Set(), grid = h("div", "numgrid"), err = h("p", "err");
-  const ok = botao(c.preco > 0 ? "Gerar Pix" : "Confirmar números"); ok.disabled = true;
-  for (let n = 1; n <= c.max; n++) {
-    const b = h("button", "num", String(n)); b.type = "button";
-    if (c.meus.includes(n)) { b.classList.add("mine"); b.disabled = true; }
-    else if (c.ocupados.includes(n)) b.disabled = true;
-    else if (c.reservados.includes(n)) { b.disabled = true; b.classList.add("res"); b.title = "Reservado: aguardando pagamento"; }
-    else b.addEventListener("click", () => {
-      if (sel.has(n)) sel.delete(n); else if (sel.size < restante) sel.add(n);
-      b.classList.toggle("on", sel.has(n)); ok.disabled = sel.size === 0; ok.textContent = sel.size ? (c.preco > 0 ? "Gerar Pix de " + brl(c.preco * sel.size) + ": " : "Confirmar: ") + [...sel].sort((x, y) => x - y).join(", ") : (c.preco > 0 ? "Gerar Pix" : "Confirmar números");
-    });
-    grid.append(b);
-  }
-  ok.addEventListener("click", async () => {
-    if (ok.disabled) return; const rotulo = ok.textContent; ok.disabled = true; ok.textContent = c.preco > 0 ? "Gerando Pix..." : "Confirmando..."; err.textContent = ""; // evita clique duplo (dois pedidos)
-    try {
-      if (c.preco > 0) { const p = await api("/api/campanhas/" + c.id + "/pedidos", "POST", { numeros: [...sel] }); await carregar(); return pedidoModal(p); }
-      const r = await api("/api/campanhas/" + c.id + "/numeros", "POST", { numeros: [...sel] }); await carregar();
-      openModal(false, h("h3", null, "Você está dentro!"), h("p", "center", "Seus números em " + c.premio + ":"), h("div", "big", r.numeros.join(", ")),
-        h("p", "muted center", r.completo ? "Vagas completas! O sorteio vai para a roleta em breve." : "Acompanhe em Meus bilhetes."));
-    } catch (e) { err.textContent = e.message; ok.disabled = sel.size === 0; ok.textContent = rotulo; await carregar(); }
-  });
-  openModal(false, h("h3", null, c.premio), h("p", "muted", "Escolha até " + restante + " número(s). Riscado = indisponível" + (c.preco > 0 ? " (inclui números reservados por quem está pagando). Cada número custa " + brl(c.preco) + "." : ".")), grid, err, ok);
-}
-
 /* ---------- Pix: sessão persistente no banco, com contagem baseada no servidor ---------- */
 const STATUS_PEDIDO = { PENDING: "Aguardando pagamento", PAID: "Pago", EXPIRED: "Expirado", CANCELED: "Cancelado", FAILED: "Não concluído", REFUND_NEEDED: "Reembolso em andamento", REFUNDED: "Reembolsado" };
 const MSG_PEDIDO = { EXPIRED: "O prazo terminou. O sistema só libera os números depois de cancelar a cobrança no Mercado Pago.",
@@ -714,13 +826,17 @@ const relogio = expira => {
 };
 function desenharBarra() {
   const b=$("pendingPixBar"), p=pedidoPendente;
-  if (!S.eu || !p || p.status!=="PENDING" || Number(p.expira_em)<=Date.now() || !p.pix) { b.hidden=true; return; }
-  b.hidden=false;$("pendingPixTitle").textContent="Pagamento pendente · "+p.premio;
-  $("pendingPixCountdown").textContent="PIX RESERVADO POR "+relogio(p.expira_em);
+  // Roda a cada segundo: só escreve no DOM quando algo muda (evita recálculo de estilo à toa).
+  const mostrar = !!(S.eu && p && p.status==="PENDING" && Number(p.expira_em)>Date.now() && p.pix);
+  if (b.hidden === mostrar) b.hidden = !mostrar;
+  if (!mostrar) return;
+  const titulo = "Pagamento pendente · "+p.premio, contador = "PIX RESERVADO POR "+relogio(p.expira_em);
+  if ($("pendingPixTitle").textContent !== titulo) $("pendingPixTitle").textContent = titulo;
+  if ($("pendingPixCountdown").textContent !== contador) $("pendingPixCountdown").textContent = contador;
 }
 async function atualizarPendente() {
   if (!S.eu) {pedidoPendente=null;desenharBarra();return;}
-  if (buscandoPendente) return;
+  if (document.hidden || buscandoPendente) return;
   buscandoPendente=true;
   try {pedidoPendente=await api("/api/pedidos/pendente");desenharBarra();}
   catch(e) { /* mantém a barra anterior até termos resposta do servidor */ }
@@ -735,21 +851,27 @@ setInterval(()=>{if(S.eu)atualizarPendente();},15000);
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&S.eu)atualizarPendente();});
 
 function pedidoModal(p0) {
-  if(pedidoPoll){clearInterval(pedidoPoll);pedidoPoll=null;}
-  let p=p0;
+  let p=p0, encerrado=false, contador=null, consulta=null, consultando=false;
   const box=h("div","pix-checkout"), card=h("div","pix-panel"), err=h("p","err");
+  // Os dois timers pertencem a esta instância da janela. Uma resposta que chega
+  // depois de fechar ou trocar a janela não pode redesenhar nem parar a seguinte.
+  const limpar=()=>{
+    encerrado=true;clearInterval(contador);clearInterval(consulta);
+    if(encerrarPedidoModal===limpar)encerrarPedidoModal=null;
+  };
+  const atual=()=>!encerrado&&encerrarPedidoModal===limpar&&box.isConnected&&!$("modal").hidden;
   const desenhar = () => {
     card.innerHTML="";
     if (p.status==="PAID") {
       card.append(h("span","pix-success","✓ PAGAMENTO APROVADO"),h("h2",null,"Números garantidos!"),
         h("p","muted center",p.premio),h("div","big",p.numeros.join(", ")));
-      if(pedidoPoll){clearInterval(pedidoPoll);pedidoPoll=null;}
+      limpar();
       atualizarPendente();carregar().catch(()=>{});return;
     }
     if(p.status!=="PENDING") {
       card.append(h("h2",null,"Pedido "+(STATUS_PEDIDO[p.status]||p.status).toLowerCase()),
         h("p","muted center",MSG_PEDIDO[p.status]||"Verifique seus pedidos."));
-      if(pedidoPoll){clearInterval(pedidoPoll);pedidoPoll=null;}
+      limpar();
       atualizarPendente();carregar().catch(()=>{});return;
     }
     const aindaValido=Number(p.expira_em)>Date.now();
@@ -783,21 +905,26 @@ function pedidoModal(p0) {
     };
     countdown.tick=tick;
   };
-  box.append(card,err);desenhar();openModal(false,box);$("modalBody").parentElement.classList.add("pix-dialog");
+  box.append(card,err);openModal(false,box);encerrarPedidoModal=limpar;desenhar();$("modalBody").parentElement.classList.add("pix-dialog");
+  if(p.status!=="PENDING")return;
   // Redesenha somente quando o estado muda; o contador não reinicia ao recarregar a página.
-  pedidoPoll=setInterval(async()=>{
-    if(!box.isConnected||$("modal").hidden){clearInterval(pedidoPoll);pedidoPoll=null;return;}
+  contador=setInterval(()=>{
+    if(!atual()){limpar();return;}
     const rel=card.querySelector(".pix-countdown");if(rel&&rel.tick)rel.tick();
   },1000);
   let chamadas=0;
-  const pollStatus=setInterval(async()=>{
-    if(!box.isConnected||$("modal").hidden||p.status!=="PENDING") {clearInterval(pollStatus);return;}
+  consulta=setInterval(async()=>{
+    if(!atual()){limpar();return;}
+    if(document.hidden||consultando||p.status!=="PENDING")return;
+    consultando=true;
     try{
       const antes=p.status, antesPix=!!p.pix;
-      p=++chamadas%2===0 ? await api("/api/pedidos/"+p.id+"/atualizar","POST") : await api("/api/pedidos/"+p.id);
+      const resposta=++chamadas%2===0 ? await api("/api/pedidos/"+p.id+"/atualizar","POST") : await api("/api/pedidos/"+p.id);
+      if(!atual())return;
+      p=resposta;
       if(p.status!==antes||!!p.pix!==antesPix)desenhar();
-      if(p.status!=="PENDING") {clearInterval(pollStatus);await atualizarPendente();}
     } catch(e) { /* falha de rede: mantém o pedido, tenta de novo na próxima consulta */ }
+    finally {consultando=false;}
   },10000);
   atualizarPendente();
 }
@@ -806,8 +933,8 @@ async function carregarPedidos() {
   if(!S.eu){vazio.hidden=true;return;}
   try {
     const ps=await api("/api/pedidos");vazio.hidden=ps.length>0;
-    ps.forEach(p=>{const li=h("li","hrow"), t=h("div");t.append(h("b",null,p.premio),
-      h("p",null,"Números: "+p.numeros.join(", ")+" · "+brl(p.total)),
+    ps.forEach(p=>{const li=h("li","hrow"), t=h("div"), numbers=h('p',null,'Números: '+p.numeros.join(', ')+' · '); numbers.append(h('span','money',brl(p.total))); t.append(h("b",null,p.premio),
+      numbers,
       h("p","muted",STATUS_PEDIDO[p.status]||p.status));
       if(p.status==="PENDING")t.append(botao(p.pix?"Voltar ao Pix":"Acompanhar pedido","alt",()=>pedidoModal(p)));
       li.append(t);ul.append(li);
@@ -873,42 +1000,343 @@ async function conta() {
 }
 
 /* ---------- Painel admin ---------- */
+/* O modal do painel é montado uma vez; trocar de aba só troca o corpo. A aba fica ativa na hora,
+   o corpo anterior segura a altura (sem "pulo") e o foco continua no botão clicado. */
+let painelAtual = null;
 async function painel(aba, editar, mensagem = '') {
   destinoAdmin = {aba, editar};
   if (!await exigirMfaAdmin()) return;
-  const tabs = h("div", "tabs");
-  [["painel", "Painel"], ["sorteios", "Sorteios"], ["pedidos", "Pedidos"], ["entregas", "Entregas"], ["usuarios", "Usuários"], ["logs", "Logs"], ["visual", "Aparência"]].forEach(([k, nome]) =>
-    tabs.append(botao(nome, k === aba ? "on" : "", () => painel(k))));
-  const corpo = h("div");
-  const titulo = h("h3", null, "Painel GOATSKINS");
-  retomarPainelAdmin = () => openModal(true, titulo, tabs, corpo);
-  retomarPainelAdmin();
+  const corpo = h("div", "admin-body"); corpo.setAttribute("aria-busy", "true");
+  const aberto = painelAtual && painelAtual.tabs.isConnected && !$("modal").hidden;
+  if (aberto) {
+    corpo.style.minHeight = painelAtual.corpo.offsetHeight + "px";
+    painelAtual.corpo.replaceWith(corpo); painelAtual.corpo = corpo;
+  } else {
+    const tabs = h("div", "tabs");
+    [["painel", "Painel"], ["sorteios", "Sorteios"], ["predefinicoes", "Predefinições de Sorteios"], ["pedidos", "Pedidos"], ["entregas", "Entregas"], ["usuarios", "Usuários"], ["logs", "Logs"], ["visual", "Aparência"]].forEach(([k, nome]) => {
+      const b = botao(nome, "", () => painel(k)); b.dataset.aba = k; tabs.append(b);
+    });
+    painelAtual = { titulo: h("h3", null, "Painel GOATSKINS"), tabs, corpo };
+    openModal(true, painelAtual.titulo, tabs, corpo);
+  }
+  painelAtual.tabs.querySelectorAll("[data-aba]").forEach(b => {
+    b.classList.toggle("on", b.dataset.aba === aba);
+    if (b.dataset.aba === aba) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  });
+  const atual = painelAtual;
+  retomarPainelAdmin = () => openModal(true, atual.titulo, atual.tabs, atual.corpo);
+  const carregando = h("p", "muted admin-loading", "Carregando…"); corpo.append(carregando);
   if (mensagem) { const note = h('p', 'err'); mostrarFeedback(note, mensagem, true); corpo.append(note); }
-  const f = { painel: abaPainel, sorteios: abaSorteios, pedidos: abaPedidos, entregas: abaEntregas, usuarios: abaUsuarios, logs: abaLogs, visual: abaVisual }[aba];
-  Promise.resolve(f(corpo, editar)).catch(e => corpo.append(h("p", "err", e.message)));
+  const f = { painel: abaPainel, sorteios: abaSorteios, predefinicoes: abaPredefinicoes, pedidos: abaPedidos, entregas: abaEntregas, usuarios: abaUsuarios, logs: abaLogs, visual: abaVisual }[aba];
+  Promise.resolve(f(corpo, editar)).catch(e => corpo.append(h("p", "err", e.message)))
+    .finally(() => { carregando.remove(); corpo.style.minHeight = ""; corpo.removeAttribute("aria-busy"); });
 }
 
 async function abaPainel(box) {
-  const d = await api("/api/admin/dashboard");
+  const d = await api("/api/admin/dashboard"), o = d.operacao || {};
+  // O que exige ação aparece primeiro, com atalho para a aba onde ela é resolvida.
+  const pend = h("section", "admin-ops"); pend.setAttribute("aria-label", "Pendências operacionais");
+  const receita = h("div", "admin-op is-neutral"); receita.append(h("small", null, "Receita confirmada"), h("strong", "money", brl(o.receita || 0)));
+  pend.append(receita);
+  [["Pix aguardando pagamento", o.pix_pendentes, "pedidos", false], ["Pix para revisar", o.pix_revisao, "pedidos", true], ["Reembolsos a fazer", o.reembolsos, "pedidos", true],
+    ["Estornos/chargebacks", o.estornos, "pedidos", true], ["Prêmios a entregar", o.entregas, "entregas", true], ["Prontos para sortear", o.prontos_para_sorteio, "sorteios", true]]
+    .forEach(([t, v, aba, alerta]) => {
+      const n = Number(v) || 0, b = botao("", "admin-op" + (alerta && n ? " is-alert" : ""), () => painel(aba));
+      b.append(h("small", null, t), h("strong", null, String(n))); pend.append(b);
+    });
+  box.append(pend);
   [["Usuários", d.usuarios], ["E-mail confirmado", d.verificados], ["Números escolhidos", d.participacoes], ["Hoje", d.hoje], ["Últimos 7 dias", d.semana]]
     .forEach(([t, v]) => { const s = h("div", "stat", t); s.prepend(h("b", null, String(v))); box.append(s); });
   box.append(h("h4", null, "Sorteios"), tabela(["Sorteio", "Status", "Escolhidos"], d.porSorteio.map(s => [s.premio, s.status, s.escolhidos + "/" + s.max])),
     h("h4", null, "Últimas escolhas"), tabela(["Quando", "Sorteio", "Nº", "Pessoa"], d.ultimas.map(u => [dataHora(u.criado_em), u.premio, u.n, u.nome + " (" + u.email + ")"])));
 }
 
-function abaSorteios(box, edit) {
-  const c = edit || { premio: "", desgaste: "", descricao: "", valor: "", preco: 0, cor: "#b3263a", max: 100, max_por_usuario: 1 };
-  const f = { premio: campo("Skin (ex.: AK-47 | Redline)", "text", c.premio), desgaste: campo("Desgaste (ex.: Field-Tested)", "text", c.desgaste),
-    descricao: campo("Descrição", "text", c.descricao), valor: campo("Valor da skin (R$, só exibição)", "number", c.valor), preco: campo("Preço por número (R$; 0 = grátis)", "number", c.preco),
-    max: campo("Números (máx. 100)", "number", c.max), mpu: campo("Números por pessoa", "number", c.max_por_usuario), cor: campo("Cor (se não tiver foto)", "color", c.cor), foto: campo("Foto da skin", "file") };
-  f.foto.i.accept = "image/*"; f.preco.i.step = "0.01"; f.preco.i.min = "0";
-  const par = (a, b) => { const r = h("div", "two"); r.append(a.w, b.w); return r; }, err = h("p", "err");
-  const ok = botao(edit ? "Salvar alterações" : "Adicionar sorteio", "", () => {
-    const d = { premio: f.premio.i.value, desgaste: f.desgaste.i.value, descricao: f.descricao.i.value, valor: f.valor.i.value, preco_numero: f.preco.i.value, max: f.max.i.value, max_por_usuario: f.mpu.i.value, cor: f.cor.i.value };
-    const enviar = foto => rodar(err, async () => { if (foto !== undefined) d.foto = foto; await api(edit ? "/api/admin/campanhas/" + c.id : "/api/admin/campanhas", edit ? "PUT" : "POST", d); await carregar(); painel("sorteios"); });
-    const file = f.foto.i.files[0]; file ? lerFoto(file, enviar) : enviar(undefined);
+/* Um modelo contém somente os campos configuráveis. Aplicar preenche este formulário;
+   a publicação continua sendo uma ação independente, validada pelo servidor. */
+const CONFIGURACAO_VAZIA = {premio:'', desgaste:'', descricao:'', valor:0, preco_numero:0, cor:'#b3263a', max:100, max_por_usuario:1, foto:'', viewer_3d:null, reconfigurar_3d:false};
+async function imagemConfiguracao(file) {
+  if (!file || !file.type.startsWith('image/') || file.size > 15e6) throw new Error('Selecione uma imagem de até 15 MB.');
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Não foi possível ler a imagem. Escolha o arquivo novamente.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Este arquivo não é uma imagem compatível.'));
+      img.onload = () => {
+        try {
+          const k = Math.min(1, IMG_MAX / img.width), canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * k)); canvas.height = Math.max(1, Math.round(img.height * k));
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', .82));
+        } catch (_) { reject(new Error('Não foi possível preparar a imagem. Tente outro arquivo.')); }
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
   });
-  box.append(par(f.premio, f.desgaste), f.descricao.w, par(f.valor, f.preco), par(f.max, f.mpu), f.cor.w, f.foto.w, err, ok);
+}
+function resumoConfiguracao(d, foto = d.foto) {
+  const card = h('article', 'preset-preview');
+  if (foto) { const img = h('img'); img.src = foto; img.alt = d.premio || 'Skin'; img.loading = 'lazy'; card.append(img); }
+  const info = h('div', 'preset-preview-info');
+  info.append(h('strong', null, d.premio || 'Skin sem nome'));
+  if (d.desgaste) info.append(h('p', 'muted', d.desgaste));
+  if (d.descricao) info.append(h('p', 'muted', d.descricao));
+  const cost = h('p', 'muted', d.max + ' números · ' + d.max_por_usuario + ' por pessoa · ');
+  cost.append(h('span', 'money', Number(d.preco_numero) ? brl(d.preco_numero) + ' por número' : 'Grátis')); info.append(cost);
+  if (Number(d.valor)) {const value=h('p','muted','Valor da skin: ');value.append(h('span','money',brl(d.valor)));info.append(value);}
+  if (d.reconfigurar_3d) info.append(h('p', 'preset-3d-warning', 'Visualização 3D precisa ser configurada novamente.'));
+  const visualizar = botaoVisualizarSkin(d); if (visualizar) info.append(visualizar);
+  card.append(info); return card;
+}
+/* Campos estruturados: nenhum link ou iframe arbitrário pode entrar no modelo. */
+function camposVisualizador3d(titulo) {
+  const section = h('section','skin-config'), status = h('p','muted'), enabled = campo('Ativar visualização 3D','checkbox');
+  enabled.w.classList.add('preset-check'); status.setAttribute('role','status');
+  const fields = h('fieldset','skin-config-fields');
+  const select = (rotulo, options) => {
+    const w=h('div','form-field'), i=h('select'), label=h('label',null,rotulo); i.id='campo-'+crypto.randomUUID(); label.htmlFor=i.id;
+    options.forEach(([value,text])=>{const option=h('option',null,text);option.value=value;i.append(option);}); w.append(label,i);return {w,i};
+  };
+  const par=(a,b)=>{const row=h('div','two');row.append(a.w,b.w);return row;};
+  const modo=select('Identificação no CS2Inspect',[['name','Nome no Mercado Steam'],['item','Identificador do catálogo'],['weapon','Modelo e paint index']]);
+  const nome=campo('Nome Steam da skin','text'), item=campo('Identificador oficial (ex.: ak-47/redline)','text'), weapon=campo('Identificador do modelo (ex.: ak47)','text'), paint=campo('Paint index (opcional)','number');
+  nome.i.maxLength=200; item.i.maxLength=160; weapon.i.maxLength=80;
+  nome.i.placeholder='AK-47 | Redline (Field-Tested)'; item.i.placeholder='ak-47/redline'; weapon.i.placeholder='ak47';
+  Object.assign(paint.i,{min:0,max:2147483647,step:1});
+  const wear=campo('Float (wear)','number'), seed=campo('Pattern seed','number'), st=campo('StatTrak','checkbox'), nametag=campo('Name tag (opcional)','text');
+  Object.assign(wear.i,{min:0,max:1,step:'any',required:true}); Object.assign(seed.i,{min:0,max:1000,step:1,required:true}); nametag.i.maxLength=20; st.w.classList.add('preset-check');
+  const view=select('Visualização inicial',[['item','Rotação do item'],['hands','Primeira pessoa, quando compatível']]);
+  const manual=campo('Representação ilustrativa (atributos podem diferir do prêmio)','checkbox'); manual.w.classList.add('preset-check');
+  const compatibility=h('p','muted'); compatibility.textContent='Confira os atributos do prêmio. O provedor pode ajustar o float ao intervalo permitido da skin.';
+  const stickerFieldset=h('fieldset','skin-stickers'), stickerList=h('div','skin-sticker-list'), rows=[];
+  stickerFieldset.append(h('legend',null,'Stickers (quando compatíveis)'),h('p','muted','Use o índice oficial do sticker. Posições são contadas de 0 a 4.'),stickerList);
+  const adicionar=botao('Adicionar sticker','alt',()=>addSticker());
+  const addSticker=(data={})=>{
+    if(rows.length>=5)return;
+    const box=h('section','skin-sticker'), slot=campo('Slot do sticker','number'), index=campo('Índice do sticker','number');
+    const livre=[0,1,2,3,4].find(n=>!rows.some(row=>Number(row.slot.i.value)===n));
+    Object.assign(slot.i,{min:0,max:4,step:1,required:true,value:data.slot??livre});Object.assign(index.i,{min:1,max:2147483647,step:1,required:true,value:data.index??''});
+    const advanced=h('details','skin-sticker-advanced'), x=campo('Deslocamento X','number'),y=campo('Deslocamento Y','number'),rotation=campo('Rotação (graus)','number'),scrape=campo('Desgaste do sticker','number');
+    [x,y,rotation].forEach(f=>f.i.step='any');Object.assign(scrape.i,{min:0,max:1,step:'any'});
+    for(const [field,key]of [[x,'x'],[y,'y'],[rotation,'rotation'],[scrape,'wear']])if(data[key]!==undefined)field.i.value=data[key];
+    advanced.append(h('summary',null,'Posição e desgaste opcionais'),par(x,y),par(rotation,scrape));
+    const row={box,slot,index,x,y,rotation,scrape}; rows.push(row);
+    box.append(par(slot,index),advanced,botao('Remover sticker','alt',()=>{rows.splice(rows.indexOf(row),1);box.remove();adicionar.disabled=rows.length>=5;}));stickerList.append(box);adicionar.disabled=rows.length>=5;
+  };
+  stickerFieldset.append(adicionar);
+  const charmFieldset=h('fieldset','skin-charm'), charm=campo('Índice do charm (opcional)','number'), charmSeed=campo('Pattern seed do charm (opcional)','number');
+  Object.assign(charm.i,{min:1,max:2147483647,step:1});Object.assign(charmSeed.i,{min:0,max:2147483647,step:1});
+  charmFieldset.append(h('legend',null,'Charm (quando compatível)'),par(charm,charmSeed));
+  let pendente=false;
+  const atualizar=()=>{
+    fields.hidden=!enabled.i.checked;fields.disabled=!enabled.i.checked;
+    nome.w.hidden=modo.i.value!=='name';nome.i.disabled=modo.i.value!=='name';nome.i.required=modo.i.value==='name';
+    item.w.hidden=modo.i.value!=='item';item.i.disabled=modo.i.value!=='item';item.i.required=modo.i.value==='item';
+    weapon.w.hidden=paint.w.hidden=modo.i.value!=='weapon';weapon.i.disabled=paint.i.disabled=modo.i.value!=='weapon';weapon.i.required=modo.i.value==='weapon';
+    const selector=modo.i.value==='name'?nome.i.value:modo.i.value==='item'?item.i.value:weapon.i.value;
+    const luvas=/gloves|hand[- ]?wraps|luvas|bandagens/i.test(selector), faca=/karambit|bayonet|knife|butterfly|falchion|shadow daggers|bowie|navaja|stiletto|talon|kukri/i.test(selector);
+    st.i.disabled=luvas;stickerFieldset.disabled=charmFieldset.disabled=luvas||faca;
+    compatibility.textContent=luvas?'Luvas não usam StatTrak, stickers ou charms. Confira o float e o padrão do prêmio.':faca?'Stickers e charms não se aplicam a facas. A primeira pessoa depende da compatibilidade do modelo.':'Confira os atributos do prêmio. O provedor pode ajustar o float ao intervalo permitido da skin.';
+    status.classList.toggle('preset-3d-warning',pendente);
+    status.textContent=pendente?'Visualização 3D precisa ser configurada novamente. Os demais dados foram preservados.':!S.viewer3d?.key?'A chave pública do CS2Inspect ainda não foi configurada no servidor. Você pode salvar os dados; a prévia estará disponível após a configuração.':enabled.i.checked?'Configure os atributos e abra a prévia antes de salvar.':'Opcional. O botão 3D aparece quando há configuração válida.';
+  };
+  enabled.i.addEventListener('change',()=>{if(!enabled.i.checked)pendente=false;atualizar();});modo.i.addEventListener('change',atualizar);[nome,item,weapon].forEach(f=>f.i.addEventListener('input',atualizar));
+  const aplicar=(config,reconfigurar)=>{
+    const d=config||{};pendente=!!reconfigurar&&!config;enabled.i.checked=!!config;
+    modo.i.value=d.item?'item':d.weapon?'weapon':'name';nome.i.value=d.name||'';item.i.value=d.item||'';weapon.i.value=d.weapon||'';paint.i.value=d.paint??'';
+    wear.i.value=d.wear??.06;seed.i.value=d.seed??1;st.i.checked=!!d.stattrak;nametag.i.value=d.nametag||'';view.i.value=d.view||'item';manual.i.checked=d.manual!==false;
+    rows.splice(0);stickerList.replaceChildren();adicionar.disabled=false;(d.stickers||[]).forEach(addSticker);charm.i.value=d.charm?.index??'';charmSeed.i.value=d.charm?.seed??'';atualizar();
+  };
+  const ler=()=>{
+    if(!enabled.i.checked)return {viewer_3d:null,reconfigurar_3d:pendente};
+    if(!window.GoatCS2Inspect)throw new Error('O validador 3D não carregou. Atualize a página.');
+    if([...fields.querySelectorAll('input,select')].some(field=>!field.reportValidity()))throw new Error('Confira os campos da visualização 3D.');
+    const d={wear:Number(wear.i.value),seed:Number(seed.i.value),stattrak:!st.i.disabled&&st.i.checked,nametag:nametag.i.value.trim(),view:view.i.value,manual:manual.i.checked,stickers:[],charm:null};
+    if(modo.i.value==='name')d.name=nome.i.value.trim();else if(modo.i.value==='item')d.item=item.i.value.trim();else{d.weapon=weapon.i.value.trim();if(paint.i.value!=='')d.paint=Number(paint.i.value);}
+    if(!stickerFieldset.disabled)d.stickers=rows.map(row=>{const s={slot:Number(row.slot.i.value),index:Number(row.index.i.value)};for(const [field,key]of [[row.x,'x'],[row.y,'y'],[row.rotation,'rotation'],[row.scrape,'wear']])if(field.i.value!=='')s[key]=Number(field.i.value);return s;});
+    if(!charmFieldset.disabled&&charm.i.value!==''){d.charm={index:Number(charm.i.value)};if(charmSeed.i.value!=='')d.charm.seed=Number(charmSeed.i.value);}else if(!charmFieldset.disabled&&charmSeed.i.value!=='')throw new Error('Informe o índice do charm antes do seu pattern seed.');
+    return {viewer_3d:window.GoatCS2Inspect.normalize(d),reconfigurar_3d:false};
+  };
+  const preview=botao('Prévia 3D','alt',()=>{try{const d=ler();if(!d.viewer_3d)throw new Error('Ative e configure a visualização 3D antes de abrir a prévia.');window.GoatSkinViewer.open({config:d.viewer_3d,title:titulo()||'Prévia da skin'});}catch(error){status.textContent=error.message;status.classList.add('preset-3d-warning');}});
+  const help=h('a','preset-help','Consultar catálogo e parâmetros do CS2Inspect');help.href='https://cs2inspect.skin/docs/api';help.target='_blank';help.rel='noopener noreferrer';
+  fields.append(modo.w,nome.w,item.w,par(weapon,paint),par(wear,seed),st.w,nametag.w,view.w,compatibility,stickerFieldset,charmFieldset,manual.w);
+  const actions=h('div','preset-actions');actions.append(preview,botao('Remover visualização 3D','alt',()=>aplicar(null,false)));
+  section.append(h('h4',null,'Visualização 3D da skin'),enabled.w,fields,actions,status,help);
+  return {w:section,aplicar,ler};
+}
+function editorConfiguracao(box, {dados = {}, campanha = null, predefinicao = null, gerenciar = false, aoSalvar}) {
+  let origem = predefinicao || null, fotoAtual = '';
+  const shell = h('section', 'raffle-config'), source = h('div', 'preset-source');
+  const f = {
+    premio:campo('Skin (ex.: AK-47 | Redline)', 'text'), desgaste:campo('Desgaste (ex.: Field-Tested)', 'text'),
+    descricao:campo('Descrição', 'text'), valor:campo('Valor da skin (R$, só exibição)', 'number'),
+    preco_numero:campo('Preço por número (R$; 0 = grátis)', 'number'), max:campo('Números (máx. 100)', 'number'),
+    max_por_usuario:campo('Números por pessoa', 'number'), cor:campo('Cor (se não tiver foto)', 'color'),
+    foto:campo('Foto da skin', 'file')
+  };
+  Object.assign(f.premio.i, {required:true, maxLength:80}); f.desgaste.i.maxLength = 40; f.descricao.i.maxLength = 500;
+  Object.assign(f.valor.i, {min:0, max:10000000, step:'.01'});
+  Object.assign(f.preco_numero.i, {min:0, max:10000, step:'.01', required:true});
+  Object.assign(f.max.i, {min:1, max:100, step:1, required:true});
+  Object.assign(f.max_por_usuario.i, {min:1, max:100, step:1, required:true});
+  f.foto.i.accept = 'image/*';
+  const nome = campo('Nome da predefinição', 'text', origem?.nome || ''); nome.i.maxLength = 100;
+  const viewer = camposVisualizador3d(()=>f.premio.i.value);
+  const err = h('p', 'err'), preview = h('div', 'raffle-preview'), image = h('div', 'preset-current-image');
+  err.setAttribute('aria-live', 'polite');
+  const atualizaFoto = () => {
+    image.replaceChildren();
+    if (fotoAtual) { const img = h('img'); img.src = fotoAtual; img.alt = 'Imagem configurada'; image.append(img); }
+  };
+  const aplicar = (d, modelo) => {
+    const values = {...CONFIGURACAO_VAZIA, ...d};
+    Object.entries(f).forEach(([k, field]) => { if (k !== 'foto') field.i.value = values[k] ?? ''; });
+    viewer.aplicar(values.viewer_3d,values.reconfigurar_3d || modelo?.reconfigurar_3d); fotoAtual = values.foto || ''; f.foto.i.value = '';
+    origem = modelo || null; nome.i.value = origem?.nome || '';
+    preview.replaceChildren();
+    atualizaFoto(); atualizaOrigem();
+  };
+  const ler = async () => {
+    if (!form.reportValidity()) throw new Error('Confira os campos destacados antes de continuar.');
+    const max = Number(f.max.i.value), mpu = Number(f.max_por_usuario.i.value), preco = Number(f.preco_numero.i.value);
+    if (mpu > max) throw new Error('O limite por pessoa não pode ser maior que a quantidade de números.');
+    if (preco > 0 && preco < 1) throw new Error('Preço por número: grátis ou a partir de R$ 1,00.');
+    const configuracao3d=viewer.ler();
+    if (f.foto.i.files[0]) { fotoAtual = await imagemConfiguracao(f.foto.i.files[0]); f.foto.i.value = ''; atualizaFoto(); }
+    return {premio:f.premio.i.value.trim(), desgaste:f.desgaste.i.value.trim(), descricao:f.descricao.i.value.trim(),
+      valor:Number(f.valor.i.value), preco_numero:preco, max, max_por_usuario:mpu, cor:f.cor.i.value,
+      foto:fotoAtual, ...configuracao3d};
+  };
+  let ocupado = false;
+  const executar = async (button, fn) => {
+    if (ocupado) return; ocupado = true;
+    const text = button.textContent; button.disabled = true; button.textContent = 'Aguarde…'; shell.setAttribute('aria-busy', 'true'); mostrarFeedback(err, '');
+    try { await fn(); }
+    catch (error) { mostrarFeedback(err, error.message); }
+    finally { ocupado = false; button.disabled = false; button.textContent = text; shell.removeAttribute('aria-busy'); }
+  };
+  const acao = (text, cls, fn) => { const bt = botao(text, cls); bt.addEventListener('click', () => executar(bt, fn)); return bt; };
+  const salvarModelo = async (original) => {
+    const d = await ler(), titulo = nome.i.value.trim() || d.premio + ' — Modelo padrão';
+    if (original && !origem) throw new Error('Selecione uma predefinição para atualizar.');
+    if (original && !confirm('Salvar alterações em “' + origem.nome + '”? Sorteios já criados continuam independentes.')) return;
+    const saved = await api('/api/admin/predefinicoes' + (original ? '/' + origem.id : ''), original ? 'PUT' : 'POST',
+      {nome:titulo, dados:d, ...(original ? {versao:origem.versao} : {})});
+    origem = saved; nome.i.value = saved.nome; atualizaOrigem(); mostrarFeedback(err, 'Predefinição salva na biblioteca.', true);
+    if (gerenciar && aoSalvar) aoSalvar(saved);
+  };
+  const salvarOriginal = acao('Salvar alterações na predefinição original', 'alt', () => salvarModelo(true));
+  const salvarNova = acao('Salvar como predefinição', 'alt', () => salvarModelo(false));
+  const atualizaOrigem = () => {
+    source.replaceChildren(); source.hidden = !origem;
+    if (origem) source.append(h('strong', null, 'Predefinição: ' + origem.nome), h('p', 'muted', 'Os campos são uma cópia editável. Criar o sorteio não modifica a predefinição.'));
+    salvarOriginal.hidden = !origem; salvarNova.textContent = origem ? 'Salvar como nova predefinição' : 'Salvar como predefinição';
+  };
+  const submit = botao(gerenciar ? (origem ? 'Salvar alterações na predefinição original' : 'Salvar predefinição') : campanha ? 'Salvar alterações' : 'Adicionar sorteio'); submit.type = 'submit';
+  const form = h('form', 'raffle-editor');
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    executar(submit, async () => {
+      if (gerenciar) return salvarModelo(!!origem);
+      const d = await ler();
+      await api('/api/admin/campanhas' + (campanha ? '/' + campanha.id : ''), campanha ? 'PUT' : 'POST', d);
+      await carregar(); await painel('sorteios', undefined, campanha ? 'Sorteio atualizado.' : 'Novo sorteio criado com participantes e números independentes.');
+    });
+  });
+  const par = (a,b) => { const row = h('div','two'); row.append(a.w,b.w); return row; };
+  shell.append(h('h4', null, gerenciar ? 'Configuração reutilizável' : campanha ? 'Editar sorteio' : 'Novo sorteio'), source);
+  if (!gerenciar && !campanha) {
+    const picker = h('section', 'preset-picker'); picker.hidden = true;
+    shell.append(botao('Utilizar predefinição', 'alt', () => {
+      picker.hidden = !picker.hidden;
+      if (!picker.hidden && !picker.childNodes.length) bibliotecaPredefinicoes(picker, async saved => {
+        if (!confirm('Preencher o formulário com “' + saved.nome + '”? Os valores atuais serão substituídos.')) return;
+        aplicar(saved.dados, saved); picker.hidden = true; mostrarFeedback(err, 'Predefinição aplicada. Revise a prévia e confirme para criar o sorteio.', true);
+      });
+    }), picker);
+  }
+  form.append(par(f.premio, f.desgaste), f.descricao.w, par(f.valor,f.preco_numero), par(f.max,f.max_por_usuario), f.cor.w, f.foto.w, image,
+    botao('Remover imagem', 'alt', () => { fotoAtual = ''; f.foto.i.value = ''; atualizaFoto(); }));
+  form.append(viewer.w);
+  const modelo = h('section','preset-save'); modelo.append(h('h4',null,gerenciar ? 'Nome na biblioteca' : 'Guardar esta configuração'), nome.w);
+  if (!gerenciar) { const actions = h('div','preset-actions'); actions.append(salvarOriginal,salvarNova); modelo.append(actions); }
+  form.append(modelo, acao('Prévia do sorteio', 'alt', async () => {
+    const d = await ler(); preview.replaceChildren(h('p','muted','Prévia. Nenhum sorteio foi publicado.'),resumoConfiguracao(d));
+  }), preview, err, submit);
+  if (!gerenciar) form.append(h('p','muted','Revise os dados antes de confirmar. Cada novo sorteio recebe números, participantes, pagamentos e resultado próprios.'));
+  shell.append(form); box.append(shell); aplicar(predefinicao?.dados || dados, predefinicao);
+}
+function bibliotecaPredefinicoes(box, selecionar, gerenciar = false, areaGerenciador = box) {
+  const search = campo('Pesquisar por predefinição ou skin', 'search'); search.i.placeholder = 'Ex.: AK-47 ou Redline'; search.i.maxLength = 100;
+  const status = h('p','muted'), lista = h('div','preset-list'); status.setAttribute('role','status');
+  box.append(search.w,status,lista);
+  let generation = 0, timer;
+  const recarregar = async mensagem => {
+    const atual = ++generation; status.textContent = mensagem || 'Carregando predefinições…'; lista.setAttribute('aria-busy','true');
+    try {
+      const rows = await api('/api/admin/predefinicoes?q=' + encodeURIComponent(search.i.value.trim()));
+      if (atual !== generation || !box.isConnected) return;
+      lista.replaceChildren(); status.textContent = rows.length ? rows.length + ' predefinição(ões) encontrada(s).' : search.i.value ? 'Nenhuma predefinição corresponde à pesquisa.' : 'Sua biblioteca está vazia. Cadastre uma predefinição para reutilizar a configuração da skin.';
+      rows.forEach(p => {
+        const card = h('article','preset-card'), title = h('h4',null,p.nome), error = h('p','err');
+        card.append(title,resumoConfiguracao(p.dados,p.foto));
+        const actions = h('div','preset-actions');
+        const agir = (text, fn, cls = 'alt') => {
+          const bt = botao(text,cls,async () => {
+            bt.disabled = true; mostrarFeedback(error,'');
+            try { await fn(); } catch (e) { mostrarFeedback(error,e.message); } finally { bt.disabled = false; }
+          }); actions.append(bt); return bt;
+        };
+        const full = () => api('/api/admin/predefinicoes/' + p.id);
+        agir(gerenciar ? 'Criar sorteio' : 'Selecionar', async () => selecionar(await full()), '');
+        const details = h('details','preset-details'), summary = h('summary',null,'Visualizar detalhes'), content = h('div');
+        details.append(summary,content);
+        details.addEventListener('toggle', async () => {
+          if (!details.open || content.childNodes.length) return;
+          content.textContent = 'Carregando detalhes…';
+          try { const saved = await full(); content.replaceChildren(resumoConfiguracao(saved.dados),h('p','muted','Atualizada em ' + dataHora(saved.atualizado_em))); }
+          catch (e) { content.replaceChildren(h('p','err',e.message)); }
+        });
+        if (gerenciar) {
+          agir('Editar', async () => abrirEditorPredefinicao(areaGerenciador,await full()));
+          agir('Duplicar', async () => { await api('/api/admin/predefinicoes/' + p.id + '/duplicar','POST',{}); await recarregar(); status.textContent = 'Predefinição duplicada. Você pode editar a cópia.'; });
+          agir('Excluir', async () => {
+            if (!confirm('Excluir a predefinição “' + p.nome + '”? Os sorteios criados com ela serão preservados.')) return;
+            await api('/api/admin/predefinicoes/' + p.id,'DELETE',{versao:p.versao}); await recarregar(); status.textContent = 'Predefinição excluída. Os sorteios foram preservados.';
+          });
+        }
+        card.append(actions,details,error); lista.append(card);
+      });
+    } catch (e) {
+      if (atual !== generation || !box.isConnected) return;
+      lista.replaceChildren(botao('Tentar novamente','alt',() => recarregar())); status.textContent = e.message;
+    } finally { if (atual === generation) lista.removeAttribute('aria-busy'); }
+  };
+  search.i.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { if (box.isConnected) recarregar(); },250); });
+  recarregar();
+}
+function abrirEditorPredefinicao(box, p) {
+  box.replaceChildren(botao('← Voltar à biblioteca','alt',() => abaPredefinicoes(box)));
+  editorConfiguracao(box,{predefinicao:p,gerenciar:true,aoSalvar:() => {
+    abaPredefinicoes(box); const msg = h('p','err'); mostrarFeedback(msg,'Predefinição salva com sucesso.',true); box.prepend(msg);
+  }});
+}
+function abaPredefinicoes(box) {
+  box.replaceChildren(h('h4',null,'Predefinições de Sorteios'),h('p','muted','Sua biblioteca de configurações reutilizáveis. Escolher um modelo abre um novo sorteio para revisão antes da publicação.'),
+    botao('Criar predefinição','',() => abrirEditorPredefinicao(box,null)));
+  const library = h('div'); box.append(library);
+  bibliotecaPredefinicoes(library, async p => painel('sorteios',{predefinicao:p}),true,box);
+}
+
+async function abaSorteios(box, entrada) {
+  const loading = h('p', 'muted', 'Carregando configuração do sorteio…'); box.append(loading);
+  const edit = entrada?.id ? {...entrada, ...await api('/api/admin/campanhas/' + entrada.id)} : null;
+  if (!box.isConnected) return;
+  loading.remove();
+  const c = edit || {}, err = h('p','err');
+  editorConfiguracao(box, {dados:c, campanha:edit, predefinicao:entrada?.predefinicao});
+  box.append(err);
   if (edit) box.append(" ", botao("Excluir este sorteio", "alt", () => rodar(err, async () => {
     if (!confirm("Excluir " + c.premio + " e todos os números escolhidos?")) return; await api("/api/admin/campanhas/" + c.id, "DELETE"); await carregar(); painel("sorteios"); })));
   if (edit && c.status === "CLOSED" && c.total === 0) {
@@ -955,22 +1383,30 @@ function abaSorteios(box, edit) {
 }
 
 async function abaPedidos(box) {
-  const d = await api("/api/admin/pedidos"), err = h("p", "err"), st = h("div", "stat", "Receita confirmada"); st.prepend(h("b", null, brl(d.receita))); box.append(st, err);
+  const d = await api("/api/admin/pedidos"), err = h("p", "err"), st = h("div", "stat", "Receita confirmada"); st.prepend(h("b", 'money', brl(d.receita))); box.append(st, err);
   const revisao = d.pedidos.filter(p => p.revisao_pagamento);
   if (revisao.length) {
     box.append(h("h4", null, "Pagamentos que precisam de revisão"),
       h("p", "muted", "As reservas continuam protegidas. Confira estes pedidos no provedor antes de qualquer intervenção; a reconciliação automática continua ativa."));
     revisao.forEach(p => {
       const row = h("div", "arow");
-      row.append(h("span", null, p.nome + " · " + p.premio + " · " + brl(p.total)),
+      const value = h('span',null,p.nome+' · '+p.premio+' · ');value.append(h('span','money',brl(p.total)));
+      row.append(value,
         h("p", "mono", "Referência: " + p.id + " · Order: " + (p.mp_order_id || "criação ainda não confirmada")));
       box.append(row);
     });
   }
+  const estornos = d.pedidos.filter(p => p.estorno_mp);
+  if (estornos.length) {
+    box.append(h("h4", null, "Estornos e chargebacks detectados no Mercado Pago"),
+      h("p", "muted", "Estes pedidos foram pagos e depois estornados no provedor. Os números continuam no sorteio: decida manualmente, conforme os Termos, antes de realizar o sorteio."));
+    estornos.forEach(p => { const row = h("div", "arow"), value = h("span", null, p.nome + " · " + p.email + " · " + p.premio + " · Nº " + JSON.parse(p.numeros).join(",") + " · ");
+      value.append(h("span", "money", brl(p.total)), " · " + (p.estorno_mp === "charged_back" ? "chargeback" : "estorno") + " · ref. " + (p.mp_order_id || "-")); row.append(value); box.append(row); });
+  }
   const rb = d.pedidos.filter(p => p.status === "REFUND_NEEDED");
-  if (rb.length) { box.append(h("h4", null, "Reembolsos pendentes (devolva no painel do Mercado Pago e marque aqui)")); rb.forEach(p => { const row = h("div", "arow"); row.append(h("span", null, p.nome + " · " + p.email + " · " + p.premio + " · Nº " + JSON.parse(p.numeros).join(",") + " · " + brl(p.total) + " · ref. " + (p.mp_order_id || "-")),
+  if (rb.length) { box.append(h("h4", null, "Reembolsos pendentes (devolva no painel do Mercado Pago e marque aqui)")); rb.forEach(p => { const row = h("div", "arow"), value=h('span',null,p.nome + ' · ' + p.email + ' · ' + p.premio + ' · Nº ' + JSON.parse(p.numeros).join(',') + ' · ');value.append(h('span','money',brl(p.total)), ' · ref. ' + (p.mp_order_id || '-')); row.append(value,
     botao("Marcar reembolsado", "alt", () => rodar(err, async () => { if (!confirm("Confirma que o reembolso já foi realizado no Mercado Pago?")) return; await api("/api/admin/pedidos/" + p.id + "/reembolsado", "POST"); painel("pedidos"); }))); box.append(row); }); }
-  box.append(h("h4", null, "Pedidos"), tabela(["Quando", "Sorteio", "Pessoa", "Números", "Total", "Status"], d.pedidos.map(p => [dataHora(p.criado_em), p.premio, p.nome, JSON.parse(p.numeros).join(","), brl(p.total), STATUS_PEDIDO[p.status] || p.status])));
+  box.append(h("h4", null, "Pedidos"), tabela(["Quando", "Sorteio", "Pessoa", "Números", "Total", "Status"], d.pedidos.map(p => [dataHora(p.criado_em), p.premio, p.nome, JSON.parse(p.numeros).join(","), brl(p.total), (STATUS_PEDIDO[p.status] || p.status) + (p.estorno_mp ? " · estornado no MP" : "")])));
 }
 
 async function abaEntregas(box) {
@@ -981,9 +1417,21 @@ async function abaEntregas(box) {
 }
 
 async function abaUsuarios(box) {
-  const us = await api("/api/admin/usuarios"), err = h("p", "err"); box.append(err);
+  const us = await api("/api/admin/usuarios"), err = h("p", "err");
+  const busca = campo("Filtrar por nome, e-mail, papel ou status", "search"); busca.i.maxLength = 120; busca.i.placeholder = "Ex.: maria@ ou SUSPENDED";
+  const contagem = h("p", "muted"); contagem.setAttribute("role", "status");
+  const sem = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const linhas = [];
+  const filtrar = () => {
+    const q = sem(busca.i.value.trim()); let n = 0;
+    linhas.forEach(([row, texto]) => { row.hidden = !!q && !texto.includes(q); if (!row.hidden) n++; });
+    contagem.textContent = n + plural(n, " usuário exibido", " usuários exibidos") + " (de " + us.length + "; até 200 mais recentes).";
+  };
+  busca.i.addEventListener("input", filtrar);
+  box.append(busca.w, contagem, err);
   us.forEach(u => {
     const row = h("div", "arow"), bt = h("span");
+    linhas.push([row, sem([u.nome, u.email, u.role, u.status].join(" "))]);
     row.append(h("span", null, u.nome + " · " + (u.email || "sem e-mail") + " · " + u.role + " · " + u.status + (u.email_verificado ? "" : " · e-mail pendente")));
     if (u.role !== "SUPER_ADMIN" && u.id !== S.eu.id && u.status !== "DELETED") {
       const alvo = u.status === "ACTIVE" ? "SUSPENDED" : "ACTIVE";
@@ -992,6 +1440,7 @@ async function abaUsuarios(box) {
     }
     row.append(bt); box.append(row);
   });
+  filtrar();
 }
 
 async function abaLogs(box) {
@@ -1016,18 +1465,31 @@ function abaVisual(box) {
 /* ---------- Menu lateral (botão de 3 barras) ---------- */
 const mobileMQ = window.matchMedia("(max-width: 820px)");
 function menuAberto(aberto, guardar) {
+  const restoreFocus = !aberto && $('menuLateral').contains(document.activeElement);
   document.body.classList.toggle("menu-closed", !aberto);
   $("menuBtn").setAttribute("aria-expanded", String(aberto));
+  $('menuBtn').setAttribute('aria-label', aberto ? 'Fechar menu' : 'Abrir menu');
+  $('menuLateral').inert = !$('modal').hidden || !aberto;
+  if ($('modal').hidden) document.querySelector('.shell').inert = aberto && mobileMQ.matches;
   $("scrim").hidden = !(aberto && mobileMQ.matches);
+  if (restoreFocus) $('menuBtn').focus({preventScroll:true});
   if (guardar && !mobileMQ.matches && window.GoatskinsCookies?.allowsPreferences()) { try { localStorage.setItem("menu", aberto ? "1" : "0"); } catch (e) { /* sem storage: tudo bem */ } }
 }
 $("menuBtn").addEventListener("click", () => menuAberto(document.body.classList.contains("menu-closed"), true));
 $("scrim").addEventListener("click", () => menuAberto(false));
 document.addEventListener("keydown", e => { if (!e.defaultPrevented && !document.querySelector('dialog[open]') && e.key === "Escape" && mobileMQ.matches && !document.body.classList.contains("menu-closed")) menuAberto(false); });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Tab' || !mobileMQ.matches || document.body.classList.contains('menu-closed') || !$('modal').hidden) return;
+  const nodes = [$('menuBtn'), ...$('menuLateral').querySelectorAll('button:not([hidden]),a[href]')].filter(el => el.getClientRects().length);
+  const index = nodes.indexOf(document.activeElement);
+  e.preventDefault();
+  nodes[index < 0 ? (e.shiftKey ? nodes.length - 1 : 0) : (index + (e.shiftKey ? -1 : 1) + nodes.length) % nodes.length].focus();
+});
 mobileMQ.addEventListener("change", () => menuAberto(!mobileMQ.matches));
 (() => { let pref = null; try { if (window.GoatskinsCookies?.allowsPreferences()) pref = localStorage.getItem("menu"); } catch (e) { /* ignora */ } menuAberto(mobileMQ.matches ? false : pref !== "0"); })();
 
 /* ---------- Início ---------- */
+$('campaignSort').addEventListener('change', renderCampanhas);
 $("closeBtn").addEventListener("click", closeModal);
 document.querySelectorAll(".nv[data-view]").forEach(b => b.addEventListener("click", () => {
   if (mobileMQ.matches) menuAberto(false);
@@ -1099,10 +1561,10 @@ function mascaraCelular(input) {
     input.value = n.length > 2 ? '('+n.slice(0,2)+') '+n.slice(2,7)+(n.length>7?'-'+n.slice(7):'') : n;
   });
 }
-// A altura varia com a largura, o banner e o título configurados no painel.
+// Anchor offsets follow only the sticky navigation, independently from the campaign banner.
 new ResizeObserver(entries => {
   document.documentElement.style.setProperty('--header-height', entries[0].target.getBoundingClientRect().height + 'px');
-}).observe($('inicio'));
+}).observe(document.querySelector('.site-header'));
 
 async function celularModal() {
   const p=await api('/api/celular'),tel=campo('Celular com DDD','tel',(p.celular||'').replace(/^\+55/,''));

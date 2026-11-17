@@ -6,17 +6,12 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const { spawn } = require('node:child_process');
 const url = require('../scripts/banco-teste').bancoTeste(process.env.TEST_DATABASE_URL);
 const cleanEnv = require('./helpers/ambiente-teste');
+const { freePort } = require('./helpers/free-port');
 const schema = 'rigorous_auth_' + crypto.randomBytes(12).toString('hex');
 const opts = { skip: !url, timeout: 30000 }, PASSWORD = 'LocalAuditSenha123';
 let pool, store, auth, child, base, dir, hash, errors = '';
 const sha = s => crypto.createHash('sha256').update(s).digest('hex');
 
-async function freePort() {
-  const server = require('node:net').createServer();
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-  const port = server.address().port;
-  await new Promise(resolve => server.close(resolve)); return port;
-}
 before(async () => {
   if (!url) return;
   const Pool = require('pg').Pool, setup = new Pool({ connectionString: url });

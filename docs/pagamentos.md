@@ -2,7 +2,7 @@
 
 O painel Admin > Pedidos destaca criação incerta há pelo menos cinco minutos e pedidos pendentes há quinze minutos além do prazo de checkout. Pedidos pendentes antigos têm prioridade na lista. O alerta não cancela cobranças, confirma pagamentos nem libera números.
 
-1. Registre a referência do pedido, Order (quando houver), horário, valor e números. Use o painel autenticado com MFA. Evite copiar dados pessoais para canais públicos.
+1. Registre a referência do pedido, Order (quando houver), horário, valor e números. Use o painel com uma conta de administrador. Evite copiar dados pessoais para canais públicos.
 2. Confira na conta correta do Mercado Pago a cobrança correspondente. Compare referência externa, Order, valor e situação; não use comprovante enviado pelo comprador como confirmação.
 3. Se houve pagamento, a confirmação deve passar pela consulta autenticada ao provedor e pelo fluxo de reconciliação existente. Verifique se o pedido ficou PAID ou REFUND_NEEDED e se os números correspondem. Pagamento tardio com número indisponível exige reembolso.
 4. Se o provedor confirmar cancelamento/expiração, a rotina existente deve atualizar o pedido e liberar a reserva. Quando a Order é conhecida, ela consulta antes de cancelar; não desfaz pagamento já confirmado.

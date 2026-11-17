@@ -7,18 +7,9 @@ const { spawn } = require('node:child_process');
 const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
+const { freePort } = require('./helpers/free-port');
 const root = path.join(__dirname, '..');
 let child, port, base;
-
-async function freePort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once('error', reject); server.listen(0, '127.0.0.1', resolve);
-  });
-  const result = server.address().port;
-  await new Promise((resolve, reject) => server.close(e => e ? reject(e) : resolve()));
-  return result;
-}
 
 async function stop() {
   if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;

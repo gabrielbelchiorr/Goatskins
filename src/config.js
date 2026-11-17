@@ -146,7 +146,23 @@ module.exports = {
   EMAIL_FROM: e.EMAIL_FROM || "GOATSKINS <onboarding@resend.dev>",
   MFA_ENCRYPTION_KEY: e.MFA_ENCRYPTION_KEY || "",
 
+  // Pública: os domínios autorizados são definidos no painel CS2Inspect.
+  // Uma chave ausente/inválida desativa apenas o visualizador 3D.
+  CS2INSPECT_EMBED_KEY: /^pk_[A-Za-z0-9_-]{8,120}$/.test((e.CS2INSPECT_EMBED_KEY || '').trim())
+    ? e.CS2INSPECT_EMBED_KEY.trim() : '',
+
   PRODUCAO: cfgProd.PRODUCAO,
+
+  // Fora de produção, um DATABASE_URL remoto (ex.: banco do Render) só é aceito pelo servidor
+  // com PERMITIR_BANCO_REMOTO=1. O valor é apenas o host, nunca a URL com senha.
+  BANCO_REMOTO_FORA_DE_PRODUCAO: (() => {
+    if (cfgProd.PRODUCAO || !cfgProd.dbUrl) return "";
+    try {
+      const host = new URL(cfgProd.dbUrl).hostname.toLowerCase();
+      return ["localhost", "127.0.0.1", "[::1]", "::1", ""].includes(host) ? "" : host;
+    } catch (_) { return ""; }
+  })(),
+  PERMITIR_BANCO_REMOTO: e.PERMITIR_BANCO_REMOTO === "1",
 
   // Opcional: chave enviada apenas pelo proxy de borda confiável.
   // Não habilite sem configurar o proxy para injetá-la.

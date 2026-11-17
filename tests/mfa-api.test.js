@@ -6,6 +6,7 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const { spawn } = require('node:child_process');
 const url = require('../scripts/banco-teste').bancoTeste(process.env.TEST_DATABASE_URL);
 const cleanEnv = require('./helpers/ambiente-teste');
+const { freePort } = require('./helpers/free-port');
 const schema = 'mfa_api_' + crypto.randomBytes(12).toString('hex');
 const PASSWORD = 'MfaFixtureSenha123', sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const cases = { skip: !url, timeout: 45000 };
@@ -23,15 +24,8 @@ function run(args, overrides = {}) {
   });
 }
 
-async function unusedPort() {
-  const socket = require('node:net').createServer();
-  await new Promise((resolve, reject) => { socket.once('error', reject); socket.listen(0, '127.0.0.1', resolve); });
-  const port = socket.address().port;
-  await new Promise(resolve => socket.close(resolve)); return port;
-}
-
 async function start(overrides = {}) {
-  const port = await unusedPort(), base = 'http://127.0.0.1:' + port;
+  const port = await freePort(), base = 'http://127.0.0.1:' + port;
   const child = spawn(process.execPath, ['--no-warnings', 'server.js'], {
     env: { ...env, PORT: String(port), APP_URL: base, ...overrides }, stdio: ['ignore', 'ignore', 'pipe']
   });

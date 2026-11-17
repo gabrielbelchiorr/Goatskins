@@ -70,7 +70,13 @@ function aplicarNoBanco(pedidoId, o) {
     await liberar();
     const p = await db.get("SELECT * FROM pedidos WHERE id=?", [pedidoId]), r = interpretar(o, p), agoraIso = agora();
     if (p.status === "PAID" || p.status === "REFUND_NEEDED" || p.status === "REFUNDED") {
-      if (p.status === "PAID" && o && ["refunded", "charged_back"].includes(o.status)) await audit(p.user_id, "PAGAMENTO_ESTORNADO_NO_MP", "pedido " + p.id + " (" + o.status + ")");
+      // Estorno/chargeback depois da confirmação: os números continuam no sorteio (não se altera um
+      // resultado por decisão automática), mas o pedido fica marcado para a revisão administrativa.
+      // Registrado uma vez por mudança de estado, e só para a Order deste pedido.
+      if (p.status === "PAID" && o && o.id === p.mp_order_id && ["refunded", "charged_back"].includes(o.status) && p.mp_status !== o.status) {
+        await db.run("UPDATE pedidos SET mp_status=?, atualizado_em=? WHERE id=? AND status='PAID'", [o.status, agoraIso, p.id]);
+        await audit(p.user_id, "PAGAMENTO_ESTORNADO_NO_MP", "pedido " + p.id + " (" + o.status + ")");
+      }
       return { status: p.status };
     }
     if (r.motivo) await audit(p.user_id, "PAGAMENTO_IGNORADO", "pedido " + p.id + ": " + r.motivo);
@@ -119,15 +125,15 @@ function aplicarNoBanco(pedidoId, o) {
 }
 
 async function registrarOrder(pedidoId, o) {
-      const pm = o && o.transactions && o.transactions.payments && o.transactions.payments[0] && o.transactions.payments[0].payment_method || {};
-      if (!RE_MP_ID.test(String(o.id || ""))) throw new Error("resposta sem id de order");
-      // Diagnóstico do Pix (sem segredos e sem o código completo): mostra o que o Mercado Pago devolveu e se o "copia e cola" é um BR Code íntegro.
-      console.log("[pix] order criada status=" + String(o.status || "").slice(0, 30) + " detalhe=" + String(o.status_detail || "").slice(0, 40) + " metodo=" + String(pm.id || "?").slice(0, 20) +
-        " qr_tamanho=" + (typeof pm.qr_code === "string" ? pm.qr_code.length : "AUSENTE") + " qr_crc_ok=" + brcodeOk(pm.qr_code) + " qr_inicio=" + (typeof pm.qr_code === "string" ? pm.qr_code.slice(0, 14) : "-"));
-      await db.run("UPDATE pedidos SET mp_creation_uncertain=0, mp_order_id=?, mp_status=?, qr_code=?, qr_code_base64=?, ticket_url=?, atualizado_em=? WHERE id=?", [
-        o.id, String(o.status || "").slice(0, 40), typeof pm.qr_code === "string" && pm.qr_code.length < 1500 ? pm.qr_code : null,
-        typeof pm.qr_code_base64 === "string" && pm.qr_code_base64.length < 40000 && B64.test(pm.qr_code_base64) ? pm.qr_code_base64 : null,
-        typeof pm.ticket_url === "string" && HOST_OK.test(pm.ticket_url) ? pm.ticket_url : null, agora(), pedidoId]);
+  const pm = o && o.transactions && o.transactions.payments && o.transactions.payments[0] && o.transactions.payments[0].payment_method || {};
+  if (!RE_MP_ID.test(String(o.id || ""))) throw new Error("resposta sem id de order");
+  // Diagnóstico do Pix (sem segredos e sem o código completo): mostra o que o Mercado Pago devolveu e se o "copia e cola" é um BR Code íntegro.
+  console.log("[pix] order criada status=" + String(o.status || "").slice(0, 30) + " detalhe=" + String(o.status_detail || "").slice(0, 40) + " metodo=" + String(pm.id || "?").slice(0, 20) +
+    " qr_tamanho=" + (typeof pm.qr_code === "string" ? pm.qr_code.length : "AUSENTE") + " qr_crc_ok=" + brcodeOk(pm.qr_code) + " qr_inicio=" + (typeof pm.qr_code === "string" ? pm.qr_code.slice(0, 14) : "-"));
+  await db.run("UPDATE pedidos SET mp_creation_uncertain=0, mp_order_id=?, mp_status=?, qr_code=?, qr_code_base64=?, ticket_url=?, atualizado_em=? WHERE id=?", [
+    o.id, String(o.status || "").slice(0, 40), typeof pm.qr_code === "string" && pm.qr_code.length < 1500 ? pm.qr_code : null,
+    typeof pm.qr_code_base64 === "string" && pm.qr_code_base64.length < 40000 && B64.test(pm.qr_code_base64) ? pm.qr_code_base64 : null,
+    typeof pm.ticket_url === "string" && HOST_OK.test(pm.ticket_url) ? pm.ticket_url : null, agora(), pedidoId]);
 }
 
 /* O prazo de RESERVA_MS pode ser 5 minutos, mas o Pix do MP fica pagável por pelo menos 30.
@@ -159,7 +165,7 @@ async function finalizarVencidos() {
         console.error("[pix] cancelamento/consulta pendente: pedido " + p.id + " | " + e.message);
       }
     }
-    await tx(() => liberar()); // pedidos que nem chegaram a gerar Order
+    await liberarSeVencido(); // pedidos que nem chegaram a gerar Order (só toma a trava quando há o que liberar)
   })().finally(() => { varreduraAtiva = null; });
   return varreduraAtiva;
 }
@@ -195,7 +201,7 @@ const rotas = [
       if (comprados + reservados + lista.length > c.max_por_usuario) throw new Erro("Limite de " + c.max_por_usuario + " número(s) por pessoa neste sorteio.");
       const total = c.preco_centavos * lista.length, agoraIso = agora();
       const id = await db.insert("INSERT INTO pedidos(public_id,user_id,campaign_id,numeros,total_centavos,expira_em,criado_em,atualizado_em,mp_creation_uncertain) VALUES(?,?,?,?,?,?,?,?,1)",
-        [publicId, u.id, campId, JSON.stringify(lista.sort((a, b) => a - b)), total, Date.now() + cfg.RESERVA_MS, agoraIso, agoraIso]);
+        [publicId, u.id, campId, JSON.stringify(lista), total, Date.now() + cfg.RESERVA_MS, agoraIso, agoraIso]);
       for (const n of lista) {
         if (await db.get("SELECT 1 FROM tickets WHERE campaign_id=? AND n=?", [campId, n])) throw new Erro("O número " + n + " já foi vendido.");
         try { await db.run("INSERT INTO reservas(campaign_id,n,pedido_id) VALUES(?,?,?)", [campId, n, id]); }   // PRIMARY KEY (campanha, número): garantia final
@@ -273,8 +279,8 @@ const rotas = [
   ["GET", /^\/api\/admin\/pedidos$/, async () => {
     await liberarSeVencido();
     return { receita: (await db.get("SELECT COALESCE(SUM(total_centavos),0) n FROM pedidos WHERE status='PAID'")).n / 100,
-      pedidos: (await db.all("SELECT p.public_id id, p.status, (p.total_centavos/100.0)::float8 total, p.numeros, p.criado_em, p.pago_em, p.mp_order_id, p.mp_creation_uncertain, p.expira_em, c.premio, u.nome, u.email FROM pedidos p JOIN campaigns c ON c.id=p.campaign_id JOIN users u ON u.id=p.user_id ORDER BY CASE WHEN p.status='PENDING' THEN 0 ELSE 1 END, CASE WHEN p.status='PENDING' THEN p.id END ASC, p.id DESC LIMIT 200"))
-        .map(p => ({ ...p, revisao_pagamento: precisaRevisao(p) })) };
+      pedidos: (await db.all("SELECT p.public_id id, p.status, (p.total_centavos/100.0)::float8 total, p.numeros, p.criado_em, p.pago_em, p.mp_order_id, p.mp_creation_uncertain, p.mp_status, p.expira_em, c.premio, u.nome, u.email FROM pedidos p JOIN campaigns c ON c.id=p.campaign_id JOIN users u ON u.id=p.user_id ORDER BY CASE WHEN p.status='PENDING' THEN 0 ELSE 1 END, CASE WHEN p.status='PENDING' THEN p.id END ASC, p.id DESC LIMIT 200"))
+        .map(({ mp_status, ...p }) => ({ ...p, revisao_pagamento: precisaRevisao(p), estorno_mp: p.status === "PAID" && ["refunded", "charged_back"].includes(mp_status) ? mp_status : null })) };
   }, "admin"],
   ["POST", /^\/api\/admin\/pedidos\/([a-f0-9]{32})\/reembolsado$/, async ctx => { // o admin devolve o dinheiro no painel do Mercado Pago e marca aqui
     await tx(async () => {

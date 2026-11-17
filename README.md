@@ -1,99 +1,56 @@
-# GOATSKINS – sorteios de skins com números pagos via Pix
+﻿# GOATSKINS
 
-Node.js 22.13+ com **PostgreSQL** (única dependência: a biblioteca `pg`). Cada sorteio tem um **preço por número** (0 = grátis) cobrado por **Pix via Mercado Pago (Orders API)**.
+Site de sorteios de skins com cadastro por e-mail, painel administrativo e pagamento por Pix pelo Mercado Pago.
 
-O cadastro exige celular brasileiro com DDD (normalizado para E.164) e confirmação de e-mail. **Não há SMS nem dependência de Twilio**; preencher um celular não verifica sua posse e números repetidos são permitidos. Veja [as regras e a configuração no Render](SMS_RENDER.md). Contas antigas podem entrar e completar o celular antes de participar; a migração 7 preserva os dados e remove apenas a exclusividade anterior do celular.
+## Desenvolvimento
 
-**Pacote de 12/10/2026:** siga [PUBLICAR_EM_CASA.md](PUBLICAR_EM_CASA.md) para aplicar os arquivos, testar no Windows e concluir Render/Cloudflare. A revisão e as limitações verificadas estão em [SEGURANCA.md](SEGURANCA.md). Abra `PREVIA_LOADING.html` e `PREVIA_ROLETA.html` localmente para visualizar o loading e a nova tela da roleta sem iniciar o servidor.
+Requisitos: Node.js 22.13 ou superior e PostgreSQL.
 
-## Rodar
-1. Instale o Node.js (LTS, 22.13 ou mais novo) e rode `npm ci`.
-2. Tenha um PostgreSQL local. Exemplo com Docker: `docker run --name goatskins-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=goatskins -p 5432:5432 -d postgres:16`
-3. Copie `.env.example` para `.env` e confira o `DATABASE_URL` (o padrão já aponta para o Docker acima).
-4. Crie o SUPER_ADMIN: `node --no-warnings server.js criar-admin seuemail@x.com SuaSenha123 "Seu Nome"` (as tabelas são criadas automaticamente na primeira execução)
-5. Inicie: `npm start` e abra http://localhost:3000
-6. Testes:
-   - `npm run test:unit` — offline, sem banco (pagamentos/webhook com banco falso, senhas, limites, configuração de produção).
-   - `node --test tests/http.smoke.test.js` — sobe o servidor com banco falso e confere cabeçalhos, CSRF, health check, limites e path traversal.
-   - `TEST_DATABASE_URL=postgresql://.../goatskins_test npm run test:api` — testes de API ponta a ponta contra um PostgreSQL **real e descartável**. Ele APAGA todas as tabelas desse banco e se recusa a rodar se o nome do banco não contiver `test`. **Rode antes de cada deploy.**
-   - `npm test` roda tudo (os testes de API aparecem como "skipped" sem `TEST_DATABASE_URL`).
-7. Backup: `npm run backup` (usa `pg_dump`, precisa do cliente PostgreSQL instalado).
-8. Vindo do SQLite antigo: `DATABASE_URL=... npm run migrar-sqlite -- caminho/goatskins.db` (veja "Migrar do SQLite").
+1. Execute `npm ci`.
+2. Copie `.env.example` para `.env` e configure os serviços.
+3. Crie o administrador: `node --no-warnings server.js criar-admin email@exemplo.com SuaSenha123 "Seu Nome"`.
+4. Execute `npm start` e abra `http://localhost:3000`.
 
-Em desenvolvimento com `EMAIL_DRIVER=console`, os e-mails aparecem em `data/emails.log`: o cadastro usa o código de seis dígitos, e a recuperação usa o link. Em produção é necessário o Resend com remetente verificado.
+As migrações rodam ao iniciar. Com `EMAIL_DRIVER=console`, os e-mails locais ficam em `data/emails.log`.
 
 ## Estrutura
-```
-server.js          servidor HTTP, roteador, arquivos estáticos
-src/config.js      variáveis de ambiente (.env)
-src/db.js          PostgreSQL (pool), migrações versionadas, transações, auditoria
-src/auth.js        cadastro, login, sessão, e-mail, senha, conta, notificações
-src/rifas.js       listagem pública, escolha de números, sorteio verificável
-src/admin.js       painel: dashboard, usuários, logs, sorteios, aparência
-src/mail.js        envio de e-mail (console ou Resend)
-src/http.js        validação, limite de tentativas, utilidades
-public/            site (HTML, CSS, JS, termos, privacidade)
-tests/*.test.js    testes (unitários, smoke HTTP, API com PostgreSQL de teste); tests/helpers/pg-falso.js = banco falso
-scripts/backup.js  backup do banco (pg_dump)
-scripts/migrar-sqlite.js  copia os dados do SQLite antigo para o PostgreSQL
+
+```text
+public/       páginas, estilos, imagens e JavaScript do navegador
+src/          autenticação, sorteios, pagamentos e acesso ao banco
+scripts/      backup, migração e verificações
+tests/        testes automatizados e auxiliares
+previews/     prévias locais de carregamento e roleta
+docs/         configuração e operação
+server.js     servidor HTTP e rotas
 ```
 
-## Banco de dados (PostgreSQL)
-```
-users ──< sessions            users(id, nome, email*, telefone, hash, role USER|ADMIN|SUPER_ADMIN, status,
-users ──< tokens_email                email_verificado, falhas, bloqueado_ate, consentimento_em, criado_em...)
-users ──< notifications       campaigns(id, premio, desgaste, descricao, valor, max, max_por_usuario, status OPEN|CLOSED|DRAWN,
-users ──< tickets >── campaigns        seed (secreta), commit_hash (pública), criado_por, criado_em...)
-campaigns ──1 winners         tickets(campaign_id, user_id, n, criado_em)  UNIQUE(campaign_id, n)  <- impede número repetido
-audit_logs, settings          winners(campaign_id, user_id, n, total, snapshot_hash, seed_revelada, metodo, sorteado_em)
-```
-Índices em tickets (campanha/número e usuário), sessions, tokens, notificações, logs e status. Migrações automáticas ao iniciar (tabela `schema_migrations`; novas alterações entram como novos itens no array `MIGRACOES` de `src/db.js`).
-Datas continuam como texto ISO (como no SQLite) para manter o código simples.
-**Concorrência:** cada transação (`tx`) pega uma trava de escrita do PostgreSQL (`pg_advisory_xact_lock`), o equivalente ao `BEGIN IMMEDIATE` do SQLite: as checagens de limite e reserva rodam uma por vez. A garantia final contra número repetido continua sendo `UNIQUE(campaign_id, n)` em `tickets` e a chave primária de `reservas`.
+## Testes
 
-## Migrar do SQLite
-1. Tenha o arquivo `goatskins.db` antigo (versão 4 do esquema; se estiver mais antigo, abra a versão SQLite do sistema uma vez para atualizar).
-2. Com o PostgreSQL de destino **vazio**: `DATABASE_URL="<url>" npm run migrar-sqlite -- caminho/goatskins.db` (para o banco do Render, use a **External Database URL** no seu computador).
-3. O script copia usuários, admins, sorteios, números, ganhadores, pedidos, reservas, notificações, auditoria e aparência, mantém os ids, acerta as sequências e confere as contagens. Roda numa transação (falhou = nada gravado). Sessões de login não são copiadas: todos entram de novo.
+- `npm run test:unit`: testes sem banco.
+- `npm test`: suíte geral; testes que precisam de banco são ignorados quando ele não está configurado.
+- `npm run test:ci`: suíte completa com `TEST_DATABASE_URL` apontando para um PostgreSQL local descartável chamado `goatskins_test`.
+- `npm run test:security:rigorous`: suíte completa com bloqueio de rede externa dos processos Node, inventário de rotas, consulta de dependências e evidências em `validation/`.
 
-## API
-Pública: `GET /api/estado`, `GET /api/campanhas/:id/verificacao`, `POST /api/registro|login|esqueci-senha|redefinir-senha`, `GET /api/verificar-email`
-Logado: `POST /api/logout|reenviar-verificacao|campanhas/:id/numeros|conta/senha|conta/excluir`, `GET|PUT /api/conta`, `GET /api/notificacoes`
-Pagamento: `POST /api/campanhas/:id/pedidos`, `GET /api/pedidos`, `GET /api/pedidos/:id`, `POST /api/pedidos/:id/atualizar`, `POST /api/webhooks/mercadopago` (assinatura)
-Admin: `/api/admin/dashboard|usuarios|logs|campanhas|visual|pedidos|ganhadores`, `.../campanhas/:id/encerrar|sortear|participantes` (papel conferido no servidor)
+Os testes de integração apagam as tabelas do banco de teste. Não use o banco de produção.
 
-## Sorteio auditável (commit-reveal)
-1. Ao criar o sorteio o servidor gera uma semente secreta e publica só o **hash** dela (compromisso).
-2. Depois do sorteio a semente é revelada. Vencedor = `números[HMAC-SHA256(semente, sha256(números)) mod N]`.
-3. Qualquer pessoa confere em Histórico > "Ver prova".
-Limite honesto: quem opera o servidor ainda decide *quando* encerrar. Para reduzir isso, o próximo passo seria misturar uma fonte externa (como o beacon público drand).
+## Documentação
 
-## Segurança implementada
-scrypt assíncrono + sal, comparação em tempo constante, tentativa de login reservada de forma atômica no banco (força bruta paralela não passa), e-mail de aviso ao trocar a senha, link de redefinição em fragmento (#), corpo máximo de 100 KB fora do painel, cookie HttpOnly/SameSite, sessões com hash no banco e expiração, bloqueio por conta (5 falhas = 15 min) e por IP, CSRF por cabeçalho, consultas parametrizadas, validação de toda entrada, permissões no servidor (USER/ADMIN/SUPER_ADMIN), CSP e demais cabeçalhos, proteção contra path traversal, semente nunca exposta, logs de auditoria, nome do ganhador abreviado, exclusão de conta (LGPD), mínimo de dados (sem CPF).
+- [Configuração e publicação](docs/configuracao.md)
+- [Arquitetura e mapa do repositório](docs/arquitetura.md)
+- [Testes e ferramentas locais](docs/testes.md)
+- [Segurança](docs/seguranca.md)
+- [Operação de pagamentos](docs/pagamentos.md)
+- [Visualização 3D e predefinições de sorteios](docs/skins-3d-predefinicoes.md)
+- [Redesign premium: componentes, validação e capturas](docs/redesign-premium.md)
+- [Refinamento visual atual: sidebar, banner e cards](docs/refinamento-visual.md)
 
-## O que depende de você
-- **E-mail real**: crie conta em resend.com, verifique seu domínio, gere a API key e coloque `EMAIL_DRIVER=resend`, `EMAIL_API_KEY=...`, `EMAIL_FROM=...` no `.env`.
-- **Textos legais**: `public/termos.html` e `public/privacidade.html` são modelos; preencha o contato e peça revisão jurídica antes de qualquer uso real.
+Relatórios detalhados de auditoria, pentest e revisões ficam fora deste repositório público (ver `.gitignore`). Os guias acima descrevem a configuração e a operação atuais.
 
-## Colocar no ar (versão gratuita e acadêmica)
-- Frontend e backend saem juntos: o próprio Node serve a pasta `public`. O banco agora é um PostgreSQL separado, então o servidor não precisa de disco persistente.
-- **Render:** Build Command `npm ci`, Start Command `npm start`. Variáveis: `NODE_ENV=production`, `APP_URL` com sua origem principal HTTPS, `TRUST_PROXY=1`, `DATABASE_URL` (Internal Database URL do PostgreSQL do Render), mais as de e-mail, Turnstile e Mercado Pago. A configuração completa está em `PUBLICAR_EM_CASA.md`; o servidor recusa configurações inseguras.
-- **VPS própria:** instalar Node 22+ e PostgreSQL, criar `.env`; rodar com `pm2` ou `systemd`; colocar o **Caddy** na frente (HTTPS automático); apontar o domínio para o IP.
-- Backup: use os backups do serviço de banco (confira o que o seu plano do Render inclui) e/ou `npm run backup` (`pg_dump`, arquivos em `data/backups/`). Restaurar = `pg_restore --clean --no-owner -d "<url>" arquivo.dump`.
-- Health check: `GET /healthz` (leve; responde 503 se o banco não responder). Configure-o como *Health Check Path* no Render e no UptimeRobot (aceita HEAD). Não use `/api/estado`, que é pesada.
-- `TRUST_PROXY=1` é obrigatório no Render. Se, em Admin > Logs, todas as pessoas aparecerem com o mesmo IP, defina também `TRUST_PROXY_HOPS=2` (quantos proxies confiáveis existem na frente do Node).
-- Custo estimado (confira os preços atuais): domínio .com.br ≈ R$ 40/ano; VPS pequena ≈ R$ 25–60/mês; e-mail (Resend) tem plano gratuito para baixo volume; Caddy, HTTPS e UptimeRobot gratuitos. **Total aproximado: R$ 30–65/mês.**
+As prévias `previews/loading.html` e `previews/roleta.html` funcionam sem servidor. O simulador Pix roda com `node scripts/mp-preview-local.js` e não processa pagamentos reais.
 
+## Banco de dados
 
-## Pagamentos (Mercado Pago, Pix)
-Fluxo: escolher números → `POST /api/campanhas/:id/pedidos` (o servidor lê o preço no banco, reserva os números numa transação e cria a Order Pix) → usuário paga → Mercado Pago chama `POST /api/webhooks/mercadopago` → o servidor valida a **assinatura**, **consulta a Order na API do Mercado Pago**, confere status/valor/referência e só então marca `PAID` e converte a reserva em número vendido.
+`npm run backup` cria um backup com `pg_dump`. A verificação usa `pg_restore`; ambos precisam estar instalados. Mantenha as cópias fora do disco efêmero da hospedagem e teste a restauração em banco separado.
 
-- Estados do pedido: `PENDING`, `PAID`, `EXPIRED`, `CANCELED`, `FAILED`, `REFUND_NEEDED`, `REFUNDED`.
-- Reserva = tabela `reservas` com chave primária (sorteio, número): o banco impede dois pedidos no mesmo número. Vence junto com o Pix (+5 min).
-- Pagamento que chega depois da reserva vencer: se o número continua livre, é vendido; se não, o pedido vira `REFUND_NEEDED` (aparece em Admin > Pedidos para devolver no painel do Mercado Pago e marcar como reembolsado).
-- Sorteio com Pix pendente não pode ser sorteado; preço não muda depois de haver vendas.
-- Variáveis: `MP_ACCESS_TOKEN`, `MP_WEBHOOK_SECRET`, `PIX_MINUTOS` (ver `.env.example`).
-- Teste no sandbox: crie a Order com `payer.first_name = "APRO"` (ver doc do Mercado Pago) e confira que o webhook chega.
-
-## Antes de lançar (checklist)
-Veja `SEGURANCA.md` para a revisão atual e `PUBLICAR_EM_CASA.md` para os testes e a publicação. `AUDITORIA.md` preserva o relatório histórico de 06/10/2026.
+Para migrar uma base SQLite antiga para um PostgreSQL vazio, use `npm run migrar-sqlite -- caminho/goatskins.db`, com `DATABASE_URL` definido para o destino. A migração preserva dados e IDs, mas exige novo login.
