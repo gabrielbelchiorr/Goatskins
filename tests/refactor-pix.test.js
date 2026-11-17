@@ -69,6 +69,10 @@ test('A paid or canceled Pix screen does not start unnecessary polling timers', 
 }));
 
 test('Hidden tabs pause Pix requests and resume by visibility refresh', cases, async()=>fixture(async({cdp,requests,statusCalls})=>{
+  // A consulta inicial (carregar) pode ainda estar em voo; atualizarPendente ignora chamadas sobrepostas
+  // de propósito. Sob carga, abrir o Pix antes disso tornava a contagem abaixo intermitente.
+  await until(()=>requests.some(r=>r.pathname==='/api/pedidos/pendente'));
+  await until(()=>cdp.evaluate('!buscandoPendente'));
   await open(cdp);await until(()=>requests.filter(r=>r.pathname==='/api/pedidos/pendente').length>=2);
   const before=requests.filter(r=>r.pathname==='/api/pedidos/pendente').length;
   await cdp.evaluate('window.__hidden=true; __runIntervals(10000); __runIntervals(15000)');

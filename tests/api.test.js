@@ -374,13 +374,16 @@ test("webhook válido mas pagamento ainda pendente NÃO marca como pago", async 
 test("pagamento confirmado: números viram vendidos; webhook repetido é idempotente", async () => {
   const adm = await adminLogado(), s = await pagoSorteio(adm), { c } = await novoUsuario();
   const p = (await pedir(c, s, [6, 7])).dados, id = ultimoMp(); mpEstado(id, "pago");
-  const antes = dbLer("SELECT COUNT(*) n FROM notifications WHERE titulo='Pagamento confirmado!'")[0].n;
+  // Conta só as notificações do dono deste pedido: a varredura em segundo plano pode confirmar,
+  // legitimamente, pedidos de outros testes (reserva de 3 s) e mudar uma contagem global.
+  const notifSql = "SELECT COUNT(*) n FROM notifications n JOIN pedidos p ON p.user_id=n.user_id WHERE p.public_id=? AND n.titulo='Pagamento confirmado!'";
+  const antes = dbLer(notifSql, p.id)[0].n;
   const rs = await Promise.all(Array.from({ length: 6 }, () => webhook(id)));   // 6 entregas ao mesmo tempo (o MP reenvia)
   assert.ok(rs.every(r => r.status === 200));
   assert.equal((await c.get("/api/pedidos/" + p.id)).dados.status, "PAID");
   const e = await estadoDe(c, s); assert.deepEqual(e.meus, [6, 7]); assert.deepEqual(e.reservados, []); assert.equal(e.total, 2);
   assert.equal(dbLer("SELECT COUNT(*) n FROM tickets WHERE campaign_id=?", s.id)[0].n, 2);
-  assert.equal(dbLer("SELECT COUNT(*) n FROM notifications WHERE titulo='Pagamento confirmado!'")[0].n, antes + 1);
+  assert.equal(dbLer(notifSql, p.id)[0].n, antes + 1);
   assert.equal((await webhook(id)).status, 200); assert.equal((await c.get("/api/pedidos/" + p.id)).dados.status, "PAID");
   assert.ok((await pedir(c, s, [6])).status >= 400);                          // já vendido
 });
