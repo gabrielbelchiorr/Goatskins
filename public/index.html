@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <!-- O servidor regenera este bloco com URLs absolutas e, em ?sorteio=ID, com os dados do sorteio. -->
   <!-- seo:inicio -->
   <title>GOATSKINS — Sorteios de skins de CS2</title>
@@ -12,7 +12,7 @@
   <meta property="og:title" content="GOATSKINS — Sorteios de skins de CS2">
   <meta property="og:image" content="og-image.jpg">
   <!-- seo:fim -->
-  <meta name="theme-color" content="#091423">
+  <meta name="theme-color" content="#0e0d0c">
   <link rel="icon" href="favicon-48.png" type="image/png" sizes="48x48">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="manifest" href="site.webmanifest">
@@ -137,6 +137,14 @@
       <footer><div class="footer-brand">GOAT<span>SKINS</span><p>Sorteios de skins de CS2.</p></div><div class="footer-links"><a href="/termos.html">Termos de uso</a><a href="/privacidade.html">Privacidade</a><a href="/cookies.html">Cookies</a><a href="mailto:ggoatskins@gmail.com">Contato: ggoatskins@gmail.com</a><button type="button" class="cookie-settings" data-cookie-settings>Preferências de cookies</button></div><p class="footer-note"><span class="age-badge" aria-hidden="true">18+</span> Participação permitida somente para maiores de 18 anos. GOATSKINS &copy; 2026. Não afiliado à Valve nem à Steam.</p></footer>
     </div>
   </div>
+
+  <!-- Navegação inferior no celular (alcance do polegar). Espelha os itens do menu lateral; no desktop fica oculta. -->
+  <nav id="tabbar" class="tabbar" aria-label="Navegação rápida">
+    <button class="tab" data-view="sorteios" type="button"><span>Sorteios</span></button>
+    <button class="tab" data-view="historico" type="button"><span>Histórico</span></button>
+    <button class="tab" data-view="bilhetes" type="button"><span>Bilhetes</span></button>
+    <button id="tabConta" class="tab" type="button"><span>Entrar</span></button>
+  </nav>
 
   <!-- Barra de Pix persistente; restaurada a partir do pedido da conta no servidor -->
   <div id="pendingPixBar" class="pending-pix" hidden role="status" aria-live="polite">

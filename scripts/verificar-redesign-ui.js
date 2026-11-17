@@ -26,7 +26,7 @@ completed.ganhador.n = proofWinner; completed.commit_hash = sha(proofSeed);
 const proof = {status:'DRAWN',commit_hash:sha(proofSeed),seed:proofSeed,snapshot_hash:proofSnapshot,metodo:'HMAC-SHA256(semente, sha256(numeros)) mod N',sorteado_em:'2026-11-01T12:00:00.000Z',numeros:proofNumbers,vencedor:proofWinner};
 let mode = 'normal', user = null;
 const order = {id:'a'.repeat(32),campanha:1,premio:names[0],numeros:[5,6],total:5.78,status:'PENDING',expira_em:Date.now()+300000,criado_em:new Date().toISOString(),pix:{qr_code:'FIXTURE LOCAL SEM PAGAMENTO REAL',qr_code_base64:null,ticket_url:null}};
-function state() { return {eu:user,naoLidas:0,pix:true,viewer3d:{key:'',configurado:false},s:{titulo:'GOATSKINS SORTEIOS',sub:'Escolha seus números e concorra a skins de CS.',banner:'',cores:{gold:'#d4aa55',copper:'#b8651f',slate:'#102440',navy:'#0e1a33'}},c:mode==='empty'?[]:[...campaigns,closed,completed]}; }
+function state() { return {eu:user,naoLidas:0,pix:true,viewer3d:{key:'',configurado:false},s:{titulo:'GOATSKINS SORTEIOS',sub:'Escolha seus números e concorra a skins de CS.',banner:'',cores:{gold:'#f08a2b',copper:'#c4621a',slate:'#0e0d0c',navy:'#181716'}},c:mode==='empty'?[]:[...campaigns,closed,completed]}; }
 async function api(method,route,body) {
   if(route==='/api/estado') return mode==='error'?{status:503,data:{erro:'Fixture de indisponibilidade local.'}}:{data:state()};
   if(route==='/api/pedidos/pendente') return {data:null};
@@ -125,7 +125,7 @@ async function main() {
       assert.match(await b.cdp.evaluate('document.querySelector("#gridAtivos .card h3").textContent'),/Bloodsport.*QA #2/);
       await b.cdp.evaluate('campaignSort.value="recent";campaignSort.dispatchEvent(new Event("change",{bubbles:true}))');
     });
-    await check('Valores monetários usam o mesmo dourado em todos os tons de card',async()=>{
+    await check('Valores monetários usam a mesma cor em todos os cards',async()=>{
       const result=await b.cdp.evaluate(`(()=>{const nodes=[...document.querySelectorAll('#gridAtivos .card-value strong,#gridAtivos .price strong,#heroFeatured .money')];const probe=document.createElement('span');probe.className='money';document.body.append(probe);const expected=getComputedStyle(probe).color;probe.remove();return {count:nodes.length,expected,colors:nodes.map(n=>getComputedStyle(n).color)}})()`);
       assert(result.count>=12); assert(result.colors.every(color=>color===result.expected));
       assert.equal(await b.cdp.evaluate('document.querySelectorAll("#gridAtivos .card-admin").length'),0,'Visitantes não veem controles administrativos');
@@ -196,7 +196,9 @@ async function main() {
       await b.cdp.evaluate('document.querySelectorAll(".sale-grid .num")[6].click()');
       for(const width of widths) {
         await viewport(b,width); await measure(b,'detail-'+width);
-        assert.equal(await b.cdp.evaluate('document.querySelector(".sale-checkout").getBoundingClientRect().top>=document.querySelector(".sale-grid").getBoundingClientRect().bottom-1'),true,'Resumo deve ficar após a grade de números.');
+        // O resumo vem depois da grade no fluxo e, com seleção, acompanha a rolagem (sticky) sem sair da seção.
+        assert.equal(await b.cdp.evaluate('!!(document.querySelector(".sale-grid").compareDocumentPosition(document.querySelector(".sale-checkout"))&Node.DOCUMENT_POSITION_FOLLOWING)&&document.querySelector(".sale-checkout").classList.contains("has-selection")&&getComputedStyle(document.querySelector(".sale-checkout")).position==="sticky"'),true,'Resumo com seleção deve vir após a grade e acompanhar a rolagem.');
+        assert.equal(await b.cdp.evaluate('(()=>{const c=document.querySelector(".sale-checkout");scrollTo({top:document.documentElement.scrollHeight,behavior:"instant"});const ok=c.getBoundingClientRect().top>=document.querySelector(".sale-grid").getBoundingClientRect().bottom-1;scrollTo({top:0,behavior:"instant"});return ok;})()'),true,'Depois de rolar a grade, o resumo fica após os números.');
         if([390,1440].includes(width)) {
           await capture(b,'detail-'+width);
           await b.cdp.evaluate('document.querySelector(".sale-numbers").scrollIntoView({block:"start"})');

@@ -1,5 +1,7 @@
 /* Interface GOATSKINS */
-let S = { eu: null, naoLidas: 0, s: { titulo: "", sub: "", banner: "", cores: { gold: "#d4aa55", copper: "#b8651f", slate: "#102440", navy: "#0e1a33" } }, c: [] };
+// Paleta padrão da marca: grafite quase preto, blocos cinza-grafite e laranja como destaque.
+const CORES_PADRAO = { gold: "#f08a2b", copper: "#c4621a", slate: "#0e0d0c", navy: "#181716" };
+let S = { eu: null, naoLidas: 0, s: { titulo: "", sub: "", banner: "", cores: { ...CORES_PADRAO } }, c: [] };
 let view = "sorteios";
 let sorteioAtual = null, pedidoPendente = null, buscandoPendente = false, encerrarPedidoModal = null;
 const sorteioURL = Number(new URLSearchParams(location.search).get("sorteio"));
@@ -85,7 +87,7 @@ function openModal(wide, ...nodes) {
   encerrarPedidoModal?.();
   if ($("modal").hidden) {
     modalOpener = document.activeElement;
-    document.querySelectorAll('.site-header, #menuLateral, .shell, #menuBtn, #scrim, #pendingPixBar, .cookie-banner, .skip-link').forEach(el => {
+    document.querySelectorAll('.site-header, #menuLateral, .shell, #menuBtn, #scrim, #tabbar, #pendingPixBar, .cookie-banner, .skip-link').forEach(el => {
       modalBackground.set(el, el.inert); el.inert = true;
     });
   }
@@ -152,7 +154,8 @@ function botao(texto, cls, fn) { const b = h("button", "btn" + (cls ? " " + cls 
 function aviso(titulo, msg) { openModal(false, h("h3", null, titulo), h("p", null, msg)); }
 function tabela(cab, linhas) {
   const t = h("table", "tabela"), tr = h("tr"); cab.forEach(c => tr.append(h("th", null, c))); t.append(tr);
-  linhas.forEach(l => { const r = h("tr"); l.forEach(c => r.append(h("td", /^R\$\s/.test(String(c)) ? 'money' : null, c == null ? "" : String(c)))); t.append(r); });
+  // data-label: no celular cada linha vira um cartão e a célula mostra o nome da coluna (CSS).
+  linhas.forEach(l => { const r = h("tr"); l.forEach((c, i) => { const td = h("td", /^R\$\s/.test(String(c)) ? 'money' : null, c == null ? "" : String(c)); td.dataset.label = cab[i]; r.append(td); }); t.append(r); });
   const scroll = h("div", "table-scroll"); scroll.tabIndex = 0; scroll.setAttribute("role", "region");
   scroll.setAttribute("aria-label", "Tabela: " + cab.join(", ")); scroll.append(t); return scroll;
 }
@@ -379,10 +382,12 @@ function exigirMfaAdmin() {
 /* ---------- Aparência vinda do servidor ---------- */
 function aplicarAparencia() {
   const s = S.s, root = document.documentElement.style;
-  // Paletas antigas eram muito claras no fundo; migramos SOMENTE a exibição para um azul profundo.
-  // Cores personalizadas pelo administrador continuam funcionando normalmente.
-  const corAnterior = String(s.cores.slate || "").toLowerCase();
-  if (corAnterior === "#1f47e6" || corAnterior === "#3d4556") s.cores.slate = "#102440";
+  // As paletas padrão antigas (azul-marinho + dourado) são exibidas com a paleta atual da marca.
+  // Só a exibição muda: nada é gravado até o administrador salvar a aparência, e cores
+  // personalizadas por ele continuam valendo normalmente.
+  const k = c => String(c || "").toLowerCase();
+  if (k(s.cores.gold) === "#d4aa55" && k(s.cores.copper) === "#b8651f" && k(s.cores.navy) === "#0e1a33" &&
+      ["#102440", "#3d4556", "#1f47e6"].includes(k(s.cores.slate))) s.cores = { ...CORES_PADRAO };
   root.setProperty("--gold", s.cores.gold); root.setProperty("--copper", s.cores.copper);
   root.setProperty("--slate", s.cores.slate); root.setProperty("--site-bg", s.cores.slate);
   root.setProperty("--navy", s.cores.navy);
@@ -390,7 +395,7 @@ function aplicarAparencia() {
   $("heroTitle").textContent = s.titulo; $("heroSub").textContent = s.sub;
   const hero = $("inicio");
   hero.classList.toggle("has-banner", !!s.banner);
-  hero.style.backgroundImage = s.banner ? 'linear-gradient(rgba(7,11,22,.5),rgba(7,11,22,.75)), url("' + s.banner + '")' : ""; // sem banner: volta ao fundo padrão do CSS
+  hero.style.backgroundImage = s.banner ? 'linear-gradient(rgba(10,9,8,.55),rgba(10,9,8,.8)), url("' + s.banner + '")' : ""; // sem banner: volta ao fundo padrão do CSS
 }
 
 /* ---------- Telas ---------- */
@@ -566,6 +571,10 @@ function render() {
     resumo.querySelector("strong").title = S.eu.nome;
   }
   $("contaBtn").hidden = !S.eu; $("contaBtn").textContent = "Minha conta" + (S.naoLidas ? " (" + S.naoLidas + ")" : "");
+  const tabConta = $("tabConta"), rotuloConta = S.eu ? "Conta" : "Entrar";
+  tabConta.replaceChildren(h("span", null, rotuloConta));
+  if (S.eu && S.naoLidas) tabConta.append(h("i", "tab-badge", String(Math.min(S.naoLidas, 99))));
+  tabConta.setAttribute("aria-label", S.eu ? "Minha conta" + (S.naoLidas ? ", " + S.naoLidas + plural(S.naoLidas, " notificação não lida", " notificações não lidas") : "") : "Entrar ou cadastrar");
   $("adminBtn").hidden = !admin();
   const f = $("faixa"); f.innerHTML = "";
   f.hidden = !(S.eu && !S.eu.email_verificado);
@@ -577,7 +586,7 @@ function render() {
   }
   document.querySelectorAll(".view").forEach(v => { v.hidden = v.dataset.view !== view; });
   $("inicio").hidden = false; document.body.classList.remove("sem-hero");
-  document.querySelectorAll(".nv[data-view]").forEach(b => {
+  document.querySelectorAll(":is(.nv,.tab)[data-view]").forEach(b => {
     const active = b.dataset.view === view || (view === 'detalhe' && b.dataset.view === 'sorteios');
     b.classList.toggle("on", active); if (active) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
@@ -638,6 +647,7 @@ function renderDetalhe(c) {
     resumo.replaceChildren(h("small",null,sel.size+plural(sel.size," número selecionado"," números selecionados")+(escolhidos ? ": " + escolhidos : "")),
       h("strong",null,c.preco > 0 ? brl(c.preco*sel.size) : "Grátis"));
     finalizar.disabled = !sel.size || !aberto || !restante;
+    checkout.classList.toggle("has-selection", sel.size > 0); // com seleção, o resumo fica fixo ao rolar a grade
   }
   const disponiveis = [];
   for(let n=1;n<=c.max;n++) {
@@ -1023,6 +1033,9 @@ async function painel(aba, editar, mensagem = '') {
     b.classList.toggle("on", b.dataset.aba === aba);
     if (b.dataset.aba === aba) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
   });
+  // No celular as abas formam uma linha rolável: mantém a aba ativa à vista.
+  const abaAtiva = painelAtual.tabs.querySelector("[aria-current=page]"), linha = painelAtual.tabs;
+  if (abaAtiva && linha.scrollWidth > linha.clientWidth) linha.scrollLeft = Math.max(0, abaAtiva.offsetLeft - linha.offsetLeft - 20);
   const atual = painelAtual;
   retomarPainelAdmin = () => openModal(true, atual.titulo, atual.tabs, atual.corpo);
   const carregando = h("p", "muted admin-loading", "Carregando…"); corpo.append(carregando);
@@ -1491,12 +1504,18 @@ mobileMQ.addEventListener("change", () => menuAberto(!mobileMQ.matches));
 /* ---------- Início ---------- */
 $('campaignSort').addEventListener('change', renderCampanhas);
 $("closeBtn").addEventListener("click", closeModal);
-document.querySelectorAll(".nv[data-view]").forEach(b => b.addEventListener("click", () => {
+document.querySelectorAll(":is(.nv,.tab)[data-view]").forEach(b => b.addEventListener("click", () => {
   if (mobileMQ.matches) menuAberto(false);
   navegar(b.dataset.view); if (view === "bilhetes" && !S.eu) authModal("entrar"); if (view === "bilhetes") carregarPedidos();
 }));
 $("loginBtn").addEventListener("click", async () => { if (S.eu) { try { await sairDaConta(); } catch (e) { aviso("Não foi possível sair", e.message); } } else if (confirmacaoPendente) confirmarCadastroModal(); else authModal("entrar"); });
 $("contaBtn").addEventListener("click", () => conta().catch(e => aviso("Ops", e.message)));
+// Aba "Conta"/"Entrar" da barra inferior: nunca faz logout (a saída fica no menu lateral).
+$("tabConta").addEventListener("click", () => {
+  if (mobileMQ.matches) menuAberto(false);
+  if (S.eu) conta().catch(e => aviso("Ops", e.message));
+  else if (confirmacaoPendente) confirmarCadastroModal(); else authModal("entrar");
+});
 $("adminBtn").addEventListener("click", () => painel("painel"));
 carregar().then(async () => {
   const q = new URLSearchParams(location.search);
