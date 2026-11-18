@@ -1,6 +1,6 @@
 /* Interface GOATSKINS */
 // Paleta padrão da marca: grafite quase preto, blocos cinza-grafite e laranja como destaque.
-const CORES_PADRAO = { gold: "#f08a2b", copper: "#c4621a", slate: "#0e0d0c", navy: "#181716" };
+const CORES_PADRAO = { gold: "#f08a2b", copper: "#c4621a", slate: "#102440", navy: "#0e1a33" };
 let S = { eu: null, naoLidas: 0, s: { titulo: "", sub: "", banner: "", cores: { ...CORES_PADRAO } }, c: [] };
 let view = "sorteios";
 let sorteioAtual = null, pedidoPendente = null, buscandoPendente = false, encerrarPedidoModal = null;
@@ -382,7 +382,7 @@ function exigirMfaAdmin() {
 /* ---------- Aparência vinda do servidor ---------- */
 function aplicarAparencia() {
   const s = S.s, root = document.documentElement.style;
-  // As paletas padrão antigas (azul-marinho + dourado) são exibidas com a paleta atual da marca.
+  // A paleta padrão antiga (azul-marinho + dourado) é exibida com o laranja atual da marca, mantendo o azul.
   // Só a exibição muda: nada é gravado até o administrador salvar a aparência, e cores
   // personalizadas por ele continuam valendo normalmente.
   const k = c => String(c || "").toLowerCase();
@@ -432,7 +432,8 @@ function botaoVisualizarSkin(c) {
 function cardSorteio(c) {
   const pct = Math.round(Math.min(100, c.total / c.max * 100)), restante = c.max_por_usuario - c.meus.length, fechado = c.status !== "OPEN" || cheio(c);
   const card = h("article", "card"), prize = h("button", "prize");
-  // Uma única cor de destaque (a da marca): cor diferente por card não tinha significado e confundia a leitura.
+  // Ações e preços usam a cor da marca; a cor do sorteio só ilumina a área da skin (decorativa, definida no painel).
+  if (/^#[0-9a-f]{6}$/i.test(c.cor || "")) card.style.setProperty("--glow", c.cor);
   card.classList.toggle('is-closed', fechado); card.classList.toggle('is-complete', !!c.ganhador);
   const head = h('div', 'card-head');
   head.append(h('span', 'card-state', c.ganhador ? 'Sorteio realizado' : fechado ? (cheio(c) ? 'Esgotado · aguardando sorteio' : 'Inscrições encerradas') : 'Inscrições abertas'));
@@ -600,6 +601,7 @@ function renderDetalhe(c) {
   const top = h("div", "sale-hero"), visual = h("div", "sale-art"), infos = h("div", "sale-overview");
   if (c.foto) { const im = h("img"); im.src = c.foto; im.alt = c.premio; visual.append(im); }
   else { visual.append(h("span", "sale-fallback", "✦")); visual.style.background = c.cor; }
+  if (/^#[0-9a-f]{6}$/i.test(c.cor || "")) visual.style.setProperty("--glow", c.cor); // mesma iluminação do card
   infos.append(h("span", "sale-eyebrow", "GOATSKINS / SORTEIO #" + c.id), h("h1", null, c.premio));
   if (c.desgaste) infos.append(h("p", "sale-wear", c.desgaste));
   if (c.descricao) infos.append(h("p", "muted", c.descricao));
@@ -1185,7 +1187,7 @@ function editorConfiguracao(box, {dados = {}, campanha = null, predefinicao = nu
     premio:campo('Skin (ex.: AK-47 | Redline)', 'text'), desgaste:campo('Desgaste (ex.: Field-Tested)', 'text'),
     descricao:campo('Descrição', 'text'), valor:campo('Valor da skin (R$, só exibição)', 'number'),
     preco_numero:campo('Preço por número (R$; 0 = grátis)', 'number'), max:campo('Números (máx. 100)', 'number'),
-    max_por_usuario:campo('Números por pessoa', 'number'), cor:campo('Cor (se não tiver foto)', 'color'),
+    max_por_usuario:campo('Números por pessoa', 'number'), cor:campo('Cor da iluminação do card', 'color'),
     foto:campo('Foto da skin', 'file')
   };
   Object.assign(f.premio.i, {required:true, maxLength:80}); f.desgaste.i.maxLength = 40; f.descricao.i.maxLength = 500;

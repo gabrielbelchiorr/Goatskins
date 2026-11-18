@@ -26,7 +26,7 @@ completed.ganhador.n = proofWinner; completed.commit_hash = sha(proofSeed);
 const proof = {status:'DRAWN',commit_hash:sha(proofSeed),seed:proofSeed,snapshot_hash:proofSnapshot,metodo:'HMAC-SHA256(semente, sha256(numeros)) mod N',sorteado_em:'2026-11-01T12:00:00.000Z',numeros:proofNumbers,vencedor:proofWinner};
 let mode = 'normal', user = null;
 const order = {id:'a'.repeat(32),campanha:1,premio:names[0],numeros:[5,6],total:5.78,status:'PENDING',expira_em:Date.now()+300000,criado_em:new Date().toISOString(),pix:{qr_code:'FIXTURE LOCAL SEM PAGAMENTO REAL',qr_code_base64:null,ticket_url:null}};
-function state() { return {eu:user,naoLidas:0,pix:true,viewer3d:{key:'',configurado:false},s:{titulo:'GOATSKINS SORTEIOS',sub:'Escolha seus números e concorra a skins de CS.',banner:'',cores:{gold:'#f08a2b',copper:'#c4621a',slate:'#0e0d0c',navy:'#181716'}},c:mode==='empty'?[]:[...campaigns,closed,completed]}; }
+function state() { return {eu:user,naoLidas:0,pix:true,viewer3d:{key:'',configurado:false},s:{titulo:'GOATSKINS SORTEIOS',sub:'Escolha seus números e concorra a skins de CS.',banner:'',cores:{gold:'#d4aa55',copper:'#b8651f',slate:'#102440',navy:'#0e1a33'}},c:mode==='empty'?[]:[...campaigns,closed,completed]}; }
 async function api(method,route,body) {
   if(route==='/api/estado') return mode==='error'?{status:503,data:{erro:'Fixture de indisponibilidade local.'}}:{data:state()};
   if(route==='/api/pedidos/pendente') return {data:null};
