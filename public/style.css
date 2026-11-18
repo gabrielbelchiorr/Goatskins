@@ -1738,3 +1738,30 @@ main .sale-numbers>.sale-checkout.has-selection{position:sticky;z-index:20;botto
   .gb-title{font-size:min(86px,5.6vw)}
   .gb-mascot{left:61%}
 }
+
+/* Banner: tom cobre do logo (menos saturado) e tipografia original do título, sem itálico/adesivo */
+.gb-slab{background:
+  radial-gradient(circle at 2px 2px,#3a170524 1.3px,transparent 2px) 0 0/12px 12px,
+  repeating-linear-gradient(-62deg,transparent 0 34px,#ffffff0b 34px 36px),
+  radial-gradient(ellipse 70% 90% at 15% 15%,#e08a4a66,transparent 60%),
+  linear-gradient(115deg,#c9702f 0%,#b8601f 40%,#9a4a17 78%,#7f3a12 100%)}
+.gb-edge{background:linear-gradient(180deg,#f0b77f,#c9702f 60%,#e7a36a)}
+.gb-edge::after{opacity:.55}
+.gb-spot{background:radial-gradient(circle,#c9702f4d,transparent 62%)}
+.gb-spark{background:#e39a5c;box-shadow:0 0 12px #c9702f}
+.gb-copy{max-width:50%}
+.gb-eyebrow{display:block;margin:0 0 10px;color:#ffe3c6;font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase}
+.hero.gb h1{display:block;font-family:var(--font-display);font-size:50px;font-weight:800;line-height:1;letter-spacing:0;color:#fff;text-shadow:0 2px 14px #3a17054d}
+.hero.gb h1 span{color:#0b1a30;text-shadow:none}
+.gb-text{display:block;max-width:440px;margin-top:12px;color:#fff3e6;font-size:15px;line-height:1.5}
+.gb-btn{background:linear-gradient(180deg,#2fd06f,#1fae55)}
+@media (max-width:1250px){.hero.gb h1{font-size:44px}}
+@media (max-width:1100px){.hero.gb h1{font-size:38px}.gb-text{font-size:14px}.gb-copy{max-width:56%}}
+@media (max-width:600px){
+  .gb-eyebrow{font-size:11px;letter-spacing:.08em;margin-bottom:8px}
+  .hero.gb h1{font-size:30px;line-height:1.02}
+  .gb-text{font-size:13px;margin-top:8px;max-width:none}
+  .gb-copy{max-width:64%}
+}
+@media (max-width:360px){.hero.gb h1{font-size:27px}}
+@media (min-width:601px) and (max-width:1100px){.gb-text{max-width:min(330px,44vw)}}
