@@ -42,6 +42,11 @@ test("validação de entrada: txt, inteiro, foto, abrev", () => {
   assert.equal(http.foto("", 10), "");
   for (const v of ["data:image/png;base64,AAAA", "data:image/jpeg;base64,<script>", "data:image/jpeg;base64,AAAA".padEnd(5000, "A"), 7]) assert.throws(() => http.foto(v, 100), e => e.code === 400);
   assert.equal(http.foto("data:image/jpeg;base64,/9j/AAAA", 100), "data:image/jpeg;base64,/9j/AAAA");
+  // WebP (skins com fundo transparente): só com a assinatura RIFF....WEBP real.
+  const webp = "data:image/webp;base64," + Buffer.from("RIFF\0\0\0\0WEBPVP8L").toString("base64");
+  assert.equal(http.foto(webp, 100), webp);
+  for (const v of ["data:image/webp;base64," + Buffer.from("RIFF\0\0\0\0JPEGVP8L").toString("base64"), "data:image/webp;base64,<svg>", "data:image/webp;base64,"])
+    assert.throws(() => http.foto(v, 100), e => e.code === 400, v);
   assert.equal(http.abrev("Ana Maria Souza"), "Ana S."); assert.equal(http.abrev("Ana"), "Ana");
 });
 

@@ -1,7 +1,7 @@
 /* Sorteios: listagem pública, escolha de números, sorteio verificável. */
 const crypto = require("node:crypto");
 const { db, sha, agora, tx, audit, notificar, novaSemente, liberar, liberarSeVencido } = require("./db");
-const { Erro, RE, txt, inteiro, foto, abrev, limite } = require("./http");
+const { Erro, RE, txt, inteiro, foto, abrev, limite, JPG, WEBP } = require("./http");
 const mail = require("./mail"), mp = require("./mercadopago");
 
 const PADRAO_VISUAL = { titulo: "GOATSKINS SORTEIOS", sub: "Escolha seus números e concorra a skins de CS.", banner: "",
@@ -103,9 +103,10 @@ async function sortear(id, adminId, ip) {
   return { n: r.n, total: r.total, nome: abrev(g.nome) };
 }
 
-function imagem(dataUri) { // data:image/jpeg;base64,... -> bytes, com cache de 1 dia
+function imagem(dataUri) { // data:image/(jpeg|webp);base64,... -> bytes, com cache de 1 dia
   if (!dataUri) throw new Erro("Imagem não encontrada.", 404);
-  return { raw: Buffer.from(dataUri.slice(23), "base64"), tipo: "image/jpeg" };
+  const webp = dataUri.startsWith(WEBP);
+  return { raw: Buffer.from(dataUri.slice((webp ? WEBP : JPG).length), "base64"), tipo: webp ? "image/webp" : "image/jpeg" };
 }
 
 const rotas = [

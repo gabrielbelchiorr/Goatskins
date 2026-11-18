@@ -278,6 +278,11 @@ test("fotos saem por URL em cache e não dentro do /api/estado", async () => {
   const e = (await adm.get("/api/estado")).dados, c = e.c.find(x => x.premio === "Com foto");
   assert.match(c.foto, /^\/api\/campanhas\/\d+\/foto\?v=\d+$/); assert.ok(!JSON.stringify(e).includes("base64"));
   const r = await fetch(BASE + c.foto); assert.equal(r.headers.get("content-type"), "image/jpeg"); assert.match(r.headers.get("cache-control"), /max-age/);
+  // WebP com transparência: aceito e servido como image/webp, com os bytes enviados.
+  const webp = Buffer.from("UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=", "base64");
+  assert.equal((await adm.post("/api/admin/campanhas", { premio: "Com webp", max: 5, foto: "data:image/webp;base64," + webp.toString("base64") })).status, 200);
+  const w = (await adm.get("/api/estado")).dados.c.find(x => x.premio === "Com webp");
+  const rw = await fetch(BASE + w.foto); assert.equal(rw.headers.get("content-type"), "image/webp"); assert.deepEqual(Buffer.from(await rw.arrayBuffer()), webp);
 });
 
 test("cabeçalhos de segurança presentes", async () => {

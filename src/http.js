@@ -2,7 +2,7 @@
 const cfg = require("./config");
 class Erro extends Error { constructor(msg, code = 400) { super(msg); this.code = code; } }
 const RE = { email: /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/, hex: /^#[0-9a-f]{6}$/i, data: /^\d{4}-\d{2}-\d{2}$/ };
-const JPG = "data:image/jpeg;base64,";
+const JPG = "data:image/jpeg;base64,", WEBP = "data:image/webp;base64,";
 
 const txt = (v, max, min = 0) => {
   if (typeof v !== "string") throw new Erro("Campo inválido.");
@@ -13,7 +13,15 @@ const inteiro = (v, min, max, msg) => {
   const n = typeof v === "number" ? v : typeof v === "string" && /^-?\d{1,15}$/.test(v.trim()) ? Number(v) : NaN;
   if (!Number.isInteger(n) || n < min || n > max) throw new Erro(msg || "Número inválido."); return n;
 };
-const foto = (v, max) => { if (v === "") return ""; if (typeof v !== "string" || !v.startsWith(JPG) || v.length > max || !/^[A-Za-z0-9+/]+=*$/.test(v.slice(JPG.length))) throw new Erro("Imagem inválida ou grande demais."); return v; };
+/* Fotos: JPEG (sem transparência) ou WebP (aceita fundo transparente nas skins). O WebP precisa ter a assinatura
+   RIFF....WEBP de verdade; o tipo servido vem do prefixo validado aqui, nunca do navegador. */
+const foto = (v, max) => {
+  if (v === "") return "";
+  const prefixo = typeof v === "string" ? [JPG, WEBP].find(p => v.startsWith(p)) : null;
+  if (!prefixo || v.length > max || !/^[A-Za-z0-9+/]+=*$/.test(v.slice(prefixo.length))) throw new Erro("Imagem inválida ou grande demais.");
+  if (prefixo === WEBP) { const b = Buffer.from(v.slice(WEBP.length, WEBP.length + 16), "base64"); if (b.toString("latin1", 0, 4) !== "RIFF" || b.toString("latin1", 8, 12) !== "WEBP") throw new Erro("Imagem inválida ou grande demais."); }
+  return v;
+};
 const abrev = n => { const p = String(n).trim().split(/\s+/); return p.length > 1 ? p[0] + " " + p[p.length - 1][0] + "." : p[0]; }; // privacidade (LGPD)
 
 const baldes = new Map(); // chave -> { ts: [instantes], janela }
@@ -41,4 +49,4 @@ function ipDe(req) {
   if (xff) { const l = String(xff).split(",").map(s => s.trim()).filter(Boolean); if (l.length >= cfg.TRUST_PROXY_HOPS) { const ip = l[l.length - cfg.TRUST_PROXY_HOPS]; if (require("node:net").isIP(ip)) return ip; } }
   return req.socket.remoteAddress;
 }
-module.exports = { Erro, RE, txt, inteiro, foto, abrev, limite, cookie, ipDe, _baldes };
+module.exports = { Erro, RE, txt, inteiro, foto, JPG, WEBP, abrev, limite, cookie, ipDe, _baldes };

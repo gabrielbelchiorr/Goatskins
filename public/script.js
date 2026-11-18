@@ -61,6 +61,46 @@ async function carregar() {
   await atualizarPendente();
 }
 
+/* Fotos de skin: o fundo preto liso que encosta nas bordas vira transparente (preenchimento a partir das bordas,
+   então partes escuras da própria skin, cercadas pelo desenho, ficam intactas). Exporta WebP com transparência;
+   se o navegador não gerar WebP (Safari antigo), cai para JPEG como antes. */
+function recortarFundoEscuro(canvas) {
+  const ctx = canvas.getContext("2d"), W = canvas.width, H = canvas.height, dados = ctx.getImageData(0, 0, W, H), p = dados.data;
+  const escuro = i => p[i * 4 + 3] > 0 && Math.max(p[i * 4], p[i * 4 + 1], p[i * 4 + 2]) <= 26;
+  const bordaEscura = [0, W - 1, (H - 1) * W, H * W - 1].filter(escuro).length >= 3;
+  if (!bordaEscura) return false; // só age quando a foto claramente tem fundo preto
+  const visto = new Uint8Array(W * H), pilha = [];
+  for (let x = 0; x < W; x++) pilha.push(x, (H - 1) * W + x);
+  for (let y = 0; y < H; y++) pilha.push(y * W, y * W + W - 1);
+  while (pilha.length) {
+    const i = pilha.pop(); if (visto[i] || !escuro(i)) continue;
+    visto[i] = 1; p[i * 4 + 3] = 0; const x = i % W;
+    if (x > 0) pilha.push(i - 1); if (x < W - 1) pilha.push(i + 1); if (i >= W) pilha.push(i - W); if (i < W * (H - 1)) pilha.push(i + W);
+  }
+  for (let i = 0; i < W * H; i++) { // borda suave: pixels escuros vizinhos do fundo ficam semitransparentes
+    if (visto[i]) continue; const x = i % W;
+    const vizinho = (x > 0 && visto[i - 1]) || (x < W - 1 && visto[i + 1]) || (i >= W && visto[i - W]) || (i < W * (H - 1) && visto[i + W]);
+    if (vizinho) { const m = Math.max(p[i * 4], p[i * 4 + 1], p[i * 4 + 2]); if (m < 60) p[i * 4 + 3] = Math.round(255 * Math.max(0, (m - 20) / 40)); }
+  }
+  ctx.putImageData(dados, 0, 0); return true;
+}
+function exportarFotoSkin(canvas) {
+  recortarFundoEscuro(canvas);
+  const webp = canvas.toDataURL("image/webp", 0.86);
+  if (webp.startsWith("data:image/webp;base64,")) return webp;
+  const fundo = document.createElement("canvas"); fundo.width = canvas.width; fundo.height = canvas.height;
+  const fx = fundo.getContext("2d"); fx.fillStyle = "#000"; fx.fillRect(0, 0, fundo.width, fundo.height); fx.drawImage(canvas, 0, 0);
+  return fundo.toDataURL("image/jpeg", 0.82);
+}
+/* Fotos antigas em JPEG com fundo preto: mescla o preto com a iluminação do card (mix-blend-mode) em vez de mostrar um retângulo. */
+function marcarFundoEscuro(img, alvo) {
+  try {
+    const c = document.createElement("canvas"), w = c.width = 24, hh = c.height = 24, x = c.getContext("2d", { willReadFrequently: true });
+    x.drawImage(img, 0, 0, w, hh); const d = x.getImageData(0, 0, w, hh).data;
+    const canto = (cx, cy) => { const i = (cy * w + cx) * 4; return d[i + 3] > 250 && Math.max(d[i], d[i + 1], d[i + 2]) <= 30; };
+    alvo.classList.toggle("fundo-escuro", [canto(0, 0), canto(w - 1, 0), canto(0, hh - 1), canto(w - 1, hh - 1)].filter(Boolean).length >= 3);
+  } catch (_) { /* imagem de outra origem: sem análise, sem efeito */ }
+}
 function lerFoto(file, cb) {
   const r = new FileReader();
   r.onload = () => {
@@ -444,7 +484,7 @@ function cardSorteio(c) {
     const im = h("img"); im.alt = c.premio;
     im.loading = "lazy"; im.decoding = 'async'; im.width = 480; im.height = 300;
     const imageReady = () => {prize.classList.remove('skeleton'); prize.removeAttribute('aria-busy');};
-    im.addEventListener('load', imageReady, {once:true});
+    im.addEventListener('load', () => { marcarFundoEscuro(im, prize); imageReady(); }, {once:true});
     im.addEventListener('error', () => { imageReady(); im.remove(); prize.classList.remove('photo'); prize.append(h('span', 'prize-missing', 'Imagem indisponível')); }, {once:true});
     im.src = c.foto;
     prize.append(im);
@@ -599,7 +639,7 @@ function renderDetalhe(c) {
   const aberto = c.status === "OPEN" && !cheio(c), restante = Math.max(0, c.max_por_usuario - c.meus.length);
   const voltar = botao("← Voltar aos sorteios", "alt", () => navegar("sorteios")); voltar.classList.add("sale-back");
   const top = h("div", "sale-hero"), visual = h("div", "sale-art"), infos = h("div", "sale-overview");
-  if (c.foto) { const im = h("img"); im.src = c.foto; im.alt = c.premio; visual.append(im); }
+  if (c.foto) { const im = h("img"); im.addEventListener("load", () => marcarFundoEscuro(im, visual), { once: true }); im.src = c.foto; im.alt = c.premio; visual.append(im); }
   else { visual.append(h("span", "sale-fallback", "✦")); visual.style.background = c.cor; }
   if (/^#[0-9a-f]{6}$/i.test(c.cor || "")) visual.style.setProperty("--glow", c.cor); // mesma iluminação do card
   infos.append(h("span", "sale-eyebrow", "GOATSKINS / SORTEIO #" + c.id), h("h1", null, c.premio));
@@ -1082,7 +1122,7 @@ async function imagemConfiguracao(file) {
           const k = Math.min(1, IMG_MAX / img.width), canvas = document.createElement('canvas');
           canvas.width = Math.max(1, Math.round(img.width * k)); canvas.height = Math.max(1, Math.round(img.height * k));
           canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL('image/jpeg', .82));
+          resolve(exportarFotoSkin(canvas));
         } catch (_) { reject(new Error('Não foi possível preparar a imagem. Tente outro arquivo.')); }
       };
       img.src = reader.result;

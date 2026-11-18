@@ -1708,3 +1708,7 @@ main .sale-numbers>.sale-checkout.has-selection{position:sticky;z-index:20;botto
   .cb-mascot{transition:none}
   .hero.cb:hover .cb-mascot{transform:none}
 }
+
+/* Fotos antigas em JPEG com fundo preto (detectado no script): o preto se funde à iluminação do card. */
+.sale-art{isolation:isolate}
+.prize.fundo-escuro img,.sale-art.fundo-escuro img{mix-blend-mode:lighten;filter:none}
