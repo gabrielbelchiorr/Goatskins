@@ -1654,7 +1654,7 @@ main .sale-numbers>.sale-checkout.has-selection{position:sticky;z-index:20;botto
 
 /* ===== Banner da comunidade (cb-*): cenário à direita, faixas laranja na diagonal atrás do mascote,
    título com "da GOATSKINS." em laranja e duas ações. O link "Entrar no grupo" cobre o banner inteiro
-   (::after); "Saiba mais" fica acima dele. Nada aqui usa transform no texto (quebraria o link esticado). ===== */
+   (::after). Nada aqui usa transform no texto (quebraria o link esticado). ===== */
 .hero.cb{position:relative;isolation:isolate;display:flex;align-items:center;height:290px;min-height:0;padding:0 44px;overflow:hidden;border:1px solid #ffffff1a;border-radius:var(--radius-lg);background:#0a1322;color:#fff}
 .hero.cb::before{display:none}
 .hero.cb~#heroFeatured{display:none!important}
@@ -1674,8 +1674,6 @@ main .sale-numbers>.sale-checkout.has-selection{position:sticky;z-index:20;botto
 .cb-actions{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-top:20px}
 .btn.cb-join{gap:9px;min-height:46px;padding:10px 22px;border-radius:999px;font-size:15px;box-shadow:0 8px 24px color-mix(in srgb,var(--gold) 30%,transparent)}
 .cb-join::after{content:"";position:absolute;inset:0;z-index:1;border-radius:inherit}
-.cb-more{position:relative;z-index:2;display:inline-flex;align-items:center;gap:8px;min-height:46px;padding:10px 20px;border:1px solid #ffffff59;border-radius:999px;background:#0a132266;color:#fff;font-size:15px;font-weight:600;text-decoration:none;transition:border-color var(--duration) var(--ease),background-color var(--duration) var(--ease)}
-.cb-more:hover{border-color:#fff;background:#ffffff14}
 .hero.cb:hover .cb-mascot{transform:translateY(-6px)}
 .hero.cb:hover .btn.cb-join{background:color-mix(in srgb,var(--gold) 86%,white);border-color:color-mix(in srgb,var(--gold) 86%,white)}
 @media (max-width:1250px){
@@ -1702,11 +1700,9 @@ main .sale-numbers>.sale-checkout.has-selection{position:sticky;z-index:20;botto
   .cb-text{max-width:60%;margin-top:8px;font-size:13px;line-height:1.45;text-shadow:0 1px 8px #000}
   .cb-actions{position:absolute;left:18px;right:18px;bottom:18px;margin:0;gap:8px;flex-wrap:nowrap}
   .btn.cb-join{min-height:44px;padding:9px 16px;font-size:14px}
-  .cb-more{min-height:44px;padding:9px 14px;font-size:14px;background:#0a1322b3}
-}
+  }
 @media (max-width:360px){
   .hero.cb h1{font-size:23px}
-  .cb-more svg{display:none}
 }
 @media (prefers-reduced-motion:reduce){
   .cb-mascot{transition:none}
