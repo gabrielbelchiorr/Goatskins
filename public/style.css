@@ -1613,3 +1613,95 @@ main .sale-numbers>.sale-checkout.has-selection{position:sticky;z-index:20;botto
   .sale-spec{padding:12px 9px}
   .sale-spec strong{font-size:clamp(21px,6.4vw,26px);white-space:nowrap}
 }
+
+/* ===== Banner da comunidade (WhatsApp) com o mascote — o banner inteiro é um link ===== */
+.hero.hero-community{display:grid;grid-template-columns:minmax(0,1fr) minmax(240px,38%);align-items:stretch;min-height:300px;padding:0;overflow:hidden;color:var(--text);text-decoration:none;cursor:pointer;
+  background:linear-gradient(100deg,var(--surface) 0%,var(--surface) 52%,color-mix(in srgb,var(--gold) 9%,var(--surface)) 100%);transition:border-color var(--duration) var(--ease)}
+.hero.hero-community::before{background:radial-gradient(circle at 80% 62%,color-mix(in srgb,var(--gold) 22%,transparent),transparent 42%)}
+.hero.hero-community::after{content:"";display:block;position:absolute;z-index:-1;right:0;top:0;bottom:0;width:46%;pointer-events:none;
+  background:repeating-linear-gradient(-58deg,transparent 0 22px,#ffffff05 22px 23px);-webkit-mask:linear-gradient(90deg,transparent,#000 40%);mask:linear-gradient(90deg,transparent,#000 40%)}
+.hero.hero-community:hover,.hero.hero-community:focus-visible{border-color:var(--brand-line)}
+.hero.hero-community:focus-visible{outline:var(--focus);outline-offset:3px}
+.hero-community .hero-copy{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;width:auto;max-width:640px;padding:34px 40px}
+.hero-community .hero-eyebrow{display:inline-flex;align-items:center;gap:9px;margin:0 0 12px;text-transform:uppercase}
+.hero-live{width:8px;height:8px;border-radius:50%;background:var(--success);box-shadow:0 0 0 0 color-mix(in srgb,var(--success) 60%,transparent);animation:hero-live 2s ease-out infinite}
+@keyframes hero-live{70%{box-shadow:0 0 0 8px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.hero-community h1{font-size:50px;line-height:1}
+.hero-community h1 span{color:var(--gold)}
+.hero-community .tag{display:block;max-width:470px;margin:14px 0 0}
+.hero-perks{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 0}
+.hero-perks span{display:inline-flex;align-items:center;gap:6px;min-height:30px;padding:4px 12px;border:1px solid var(--line-strong);border-radius:999px;background:#ffffff06;color:var(--text-2);font-size:13px;font-weight:600}
+.hero-perks span::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--gold)}
+.hero-community .hero-cta{margin-top:22px;gap:10px;padding:12px 20px;font-size:15px;pointer-events:none}
+.hero-community:hover .hero-cta{background:color-mix(in srgb,var(--gold) 86%,white);border-color:color-mix(in srgb,var(--gold) 86%,white)}
+.hero-stage{position:relative;min-width:0}
+.hero-mascot{position:absolute;left:50%;bottom:-34%;width:auto;height:142%;max-width:none;transform:translateX(-50%);filter:drop-shadow(0 18px 30px #000a);transition:transform 260ms var(--ease)}
+.hero-community:hover .hero-mascot{transform:translateX(-50%) translateY(-6px)}
+.hero-community~#heroFeatured,.hero-community .hero-fallback{display:none!important}
+@media (max-width:1100px){
+  .hero.hero-community{grid-template-columns:minmax(0,1fr) minmax(200px,36%)}
+  .hero-community .hero-copy{padding:28px 30px}
+  .hero-community h1{font-size:42px}
+}
+@media (max-width:820px){
+  .hero.hero-community{min-height:270px}
+  .hero-community h1{font-size:36px}
+  .hero-perks span{font-size:12px}
+}
+@media (max-width:520px){
+  .hero.hero-community{grid-template-columns:minmax(0,1fr) 34%;min-height:0}
+  .hero-community .hero-copy{padding:20px 0 20px 18px}
+  .hero-community .hero-eyebrow{display:inline-flex;font-size:11px;letter-spacing:.1em}
+  .hero-community h1{font-size:27px;line-height:1.04}
+  .hero-community .tag{font-size:14px;margin-top:10px}
+  .hero-perks{display:none}
+  .hero-community .hero-cta{margin-top:16px;padding:11px 16px;font-size:14px}
+  .hero-mascot{height:118%;bottom:-24%;left:44%}
+  .hero.hero-community::after{width:60%}
+}
+@media (prefers-reduced-motion:reduce){
+  .hero-live{animation:none}
+  .hero-community:hover .hero-mascot{transform:translateX(-50%)}
+}
+@media (max-width:520px){
+  .hero.hero-community{display:block;position:relative;min-height:288px}
+  .hero-community .hero-copy{position:relative;z-index:2;max-width:66%;padding:20px 0 20px 18px}
+  .hero-community h1,.hero-community .tag{text-shadow:0 2px 12px #000c}
+  .hero-community .tag{font-size:13px}
+  .hero-stage{position:absolute;z-index:1;top:0;right:0;bottom:0;width:48%}
+  .hero-stage::before{content:"";position:absolute;inset:0 auto 0 -20%;width:60%;z-index:1;background:linear-gradient(90deg,var(--surface),transparent)}
+  .hero-mascot{left:58%;bottom:-18%;height:108%}
+}
+@media (max-width:360px){
+  .hero-community h1{font-size:24px}
+  .hero-community .hero-copy{max-width:70%}
+}
+/* Banner compacto (até ~300px): botão e benefícios na mesma linha. */
+.hero.hero-community{min-height:0}
+.hero-community .hero-copy{flex-direction:row;flex-wrap:wrap;align-items:center;align-content:center;column-gap:16px;padding:28px 40px}
+.hero-community .hero-eyebrow,.hero-community h1,.hero-community .tag{flex:0 0 100%}
+.hero-community h1{font-size:44px}
+.hero-community .tag{margin-top:10px}
+.hero-community .hero-cta{order:1;margin-top:18px}
+.hero-community .hero-perks{order:2;margin-top:18px}
+@media (max-width:1100px){
+  .hero-community .hero-copy{padding:24px 28px}
+  .hero-community h1{font-size:38px}
+  .hero-community .hero-perks{display:none}
+}
+@media (max-width:820px){
+  .hero-community h1{font-size:34px}
+}
+@media (max-width:520px){
+  .hero.hero-community{min-height:0}
+  .hero-community .hero-copy{padding:18px 0 18px 18px}
+  .hero-community .hero-eyebrow{margin-bottom:8px}
+  .hero-community h1{font-size:25px}
+  .hero-community .tag{margin-top:8px}
+  .hero-community .hero-cta{margin-top:14px;min-height:44px}
+}
+@media (min-width:1101px){
+  .hero.hero-community{grid-template-columns:minmax(0,1fr) minmax(240px,34%)}
+  .hero-community .hero-copy{max-width:780px}
+}
+.hero-community .hero-copy{justify-content:flex-start}

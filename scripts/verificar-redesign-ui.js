@@ -129,7 +129,8 @@ async function main() {
       const result=await b.cdp.evaluate(`(()=>{const nodes=[...document.querySelectorAll('#gridAtivos .card-value strong,#gridAtivos .price strong,#heroFeatured .money')];const probe=document.createElement('span');probe.className='money';document.body.append(probe);const expected=getComputedStyle(probe).color;probe.remove();return {count:nodes.length,expected,colors:nodes.map(n=>getComputedStyle(n).color)}})()`);
       assert(result.count>=12); assert(result.colors.every(color=>color===result.expected));
       assert.equal(await b.cdp.evaluate('document.querySelectorAll("#gridAtivos .card-admin").length'),0,'Visitantes não veem controles administrativos');
-      assert.equal(await b.cdp.evaluate('document.querySelector("#inicio img[src*=mascote]")===null'),true);
+      // Banner da comunidade: mascote presente e o banner inteiro leva ao grupo do WhatsApp em nova aba.
+      assert.equal(await b.cdp.evaluate('(()=>{const a=document.querySelector("a#inicio");return !!a&&a.href.startsWith("https://chat.whatsapp.com/")&&a.target==="_blank"&&/noopener/.test(a.rel)&&!!a.querySelector("img[src*=mascote]")&&!a.querySelector("a,button")})()'),true);
     });
     await check('Ordenação mantém nome acessível em mobile',async()=>{
       await viewport(b,390);
