@@ -35,10 +35,10 @@ const server=http.createServer((req,res)=>{
    await page.evaluate(()=>window.scrollTo(0,700));await page.waitForTimeout(350);
    assert(Math.abs((await header.boundingBox()).y)<2);
    if(width<=820){await menu.click();assert.equal(await menu.getAttribute('aria-expanded'),'true');}
-   const link=page.locator('.nav-community');assert.equal(await link.count(),1);await link.waitFor({state:'visible'});
+   if(width<=820)await menu.click(); // o convite do grupo agora é o banner inteiro (#inicio), não um link no topo
+   const link=page.locator('a#inicio');assert.equal(await link.count(),1);await link.waitFor({state:'visible'});
    assert.equal(await link.getAttribute('target'),'_blank');assert.equal(await link.getAttribute('rel'),'noopener noreferrer');
    const rect=await link.boundingBox();assert(rect.x>=0&&rect.x+rect.width<=width);
-   assert(rect.y>=0&&rect.y+rect.height<=(await header.boundingBox()).height);
    const popupPromise=page.waitForEvent('popup');await link.click();const popup=await popupPromise;await popup.waitForLoadState();assert.equal(popup.url(),'https://chat.whatsapp.com/BBlILmZHHfTKPKTxkFyfEj');await popup.close();
    await page.screenshot({path:path.join(__dirname,`../validation/celular-header-${width}.png`)});
    if(width<=820&&await menu.getAttribute('aria-expanded')!=='true')await menu.click();
