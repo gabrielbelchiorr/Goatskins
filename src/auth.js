@@ -87,19 +87,17 @@ const rotas = [
     const ip = ctx.ip; limite("login:" + ip, 30, 6e5);
     const email = String(ctx.body.email || "").trim().toLowerCase(), senha = String(ctx.body.senha || "");
     if (senha.length > 100 || email.length > 120) throw new Erro("E-mail ou senha incorretos.", 401);
-    await tx(() => registration.consumirLimite("login-email:" + sha(email), 5, BLOQUEIO_MS));
+    /* Orçamento por identificador digitado: as MAX_FALHAS primeiras tentativas da janela são livres; depois,
+       cada nova tentativa exige um Turnstile válido em vez de bloquear a conta. Assim um terceiro que só conhece
+       o e-mail não consegue trancar o dono (que passa pelo desafio), e a resposta é a mesma exista ou não a conta.
+       O contador é atômico, então requisições simultâneas não escapam do desafio. */
+    const livre = await tx(() => registration.consumirLimite("login-email:" + sha(email), MAX_FALHAS, BLOQUEIO_MS)
+      .then(() => true, e => { if (e.code === 429) return false; throw e; }));
+    if (!livre && ctx.req.turnstileVerificado !== "login") await require("./security").verificar(ctx.body.turnstileToken, "login");
     const u = await db.get("SELECT * FROM users WHERE lower(email)=? OR lower(contato)=?", [email, email]);
-    if (!u) { await confere(senha, await falso()); throw new Erro("E-mail ou senha incorretos.", 401); }
-    if (u.status !== "ACTIVE") { await confere(senha, await falso()); throw new Erro("E-mail ou senha incorretos.", 401); }
-    if (u.bloqueado_ate > Date.now()) { await confere(senha, await falso()); throw new Erro("Conta bloqueada por tentativas excessivas. Tente novamente em alguns minutos.", 429); }
-    /* A tentativa é RESERVADA de forma atômica ANTES de conferir a senha. Assim, mesmo com centenas de requisições simultâneas,
-       só MAX_FALHAS senhas por janela chegam a ser testadas (antes: "lê falhas, soma no JS, grava" deixava todas passarem com falhas=0). */
-    const agoraMs = Date.now();
-    const reserva = await db.get(`UPDATE users SET falhas = CASE WHEN falhas + 1 >= ? THEN 0 ELSE falhas + 1 END,
-      bloqueado_ate = CASE WHEN falhas + 1 >= ? THEN ?::bigint ELSE 0 END WHERE id=? AND bloqueado_ate <= ? RETURNING bloqueado_ate`, [MAX_FALHAS, MAX_FALHAS, agoraMs + BLOQUEIO_MS, u.id, agoraMs]);
-    if (!reserva) { await confere(senha, await falso()); throw new Erro("Conta bloqueada por tentativas excessivas. Tente novamente em alguns minutos.", 429); }
+    if (!u || u.status !== "ACTIVE") { await confere(senha, await falso()); throw new Erro("E-mail ou senha incorretos.", 401); }
     if (!(await confere(senha, u.hash))) {
-      await audit(u.id, reserva.bloqueado_ate > agoraMs ? "CONTA_BLOQUEADA" : "LOGIN_FALHA", null, ip);
+      await audit(u.id, "LOGIN_FALHA", null, ip);
       throw new Erro("E-mail ou senha incorretos.", 401);
     }
     await db.run("UPDATE users SET falhas=0, bloqueado_ate=0 WHERE id=?", [u.id]);
@@ -131,7 +129,7 @@ const rotas = [
     // Mesmo trabalho para qualquer endereço válido: nenhum SELECT de usuário ou envio nesta resposta.
     // Só confirma após o COMMIT; a fila sobrevive a reinícios e falhas do provedor.
     await tx(async () => {
-      await registration.limiteEnvio(email, ctx.ip);
+      await registration.limiteEnvio(email, ctx.ip, "recuperacao");
       await require("./recovery").enfileirar(email, ctx.ip);
     });
     return { ok: true };

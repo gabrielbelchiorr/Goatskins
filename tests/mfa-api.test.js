@@ -270,6 +270,30 @@ test('MFA HTTP: persisted account limit counts failed attempts and survives a se
   assert.equal(Number((await pool.query('SELECT COUNT(*) n FROM admin_mfa WHERE user_id=$1', [user.id])).rows[0].n), 0);
 });
 
+test('MFA HTTP: 10 consecutive wrong codes lock the factor for 1 hour across rate windows and notify the owner', cases, async () => {
+  const user = await account(), { prepared } = await enroll(user);
+  await pool.query('DELETE FROM auth_rate_limits');
+  const c = await login(user), agora = Math.floor(Date.now() / 30000);
+  const validos = new Set([-1, 0, 1, 2].map(d => code(prepared.secret, agora + d)));
+  const errado = ['000000', '111111', '222222', '333333', '444444'].find(x => !validos.has(x));
+  for (let i = 0; i < 10; i++) {
+    if (i === 5) await pool.query('DELETE FROM auth_rate_limits'); // nova janela de 8/10 min: antes o contador zerava aqui
+    const r = await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: errado });
+    assert.equal(r.status, i === 9 ? 429 : 401, JSON.stringify(r.data));
+  }
+  await pool.query('DELETE FROM auth_rate_limits');
+  const bloqueado = await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret) });
+  assert.equal(bloqueado.status, 429); // nem o código certo eleva durante o bloqueio
+  const row = (await pool.query('SELECT falhas, bloqueado_ate FROM admin_mfa WHERE user_id=$1', [user.id])).rows[0];
+  assert.ok(Number(row.bloqueado_ate) > Date.now() + 50 * 60000);
+  assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM notifications WHERE user_id=$1 AND titulo='Autenticador bloqueado'", [user.id])).rows[0].n), 1);
+  assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM audit_logs WHERE user_id=$1 AND acao='MFA_BLOQUEADO'", [user.id])).rows[0].n), 1);
+  await pool.query('UPDATE admin_mfa SET bloqueado_ate=0 WHERE user_id=$1', [user.id]);
+  const liberado = await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret) });
+  assert.equal(liberado.status, 200, JSON.stringify(liberado.data));
+  assert.equal(Number((await pool.query('SELECT falhas FROM admin_mfa WHERE user_id=$1', [user.id])).rows[0].falhas), 0);
+});
+
 test('MFA HTTP: the IP limit also bounds attempts spread across administrator accounts', cases, async () => {
   for (let i = 0; i < 5; i++) {
     const c = await login(await account());

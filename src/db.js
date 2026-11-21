@@ -217,6 +217,12 @@ ALTER TABLE campaigns ADD COLUMN viewer_3d JSONB CHECK(viewer_3d IS NULL OR json
 ALTER TABLE campaigns ADD COLUMN viewer_3d_pendente INTEGER CHECK(viewer_3d_pendente IN (0,1));
 ALTER TABLE campaign_presets ADD COLUMN viewer_3d_pendente INTEGER CHECK(viewer_3d_pendente IN (0,1));
 `
+,
+/* 13: falhas consecutivas do segundo fator. Aditiva: só colunas novas com padrão 0;
+   autenticadores e sessões existentes continuam como estão. */ `
+ALTER TABLE admin_mfa ADD COLUMN falhas INTEGER NOT NULL DEFAULT 0 CHECK(falhas>=0);
+ALTER TABLE admin_mfa ADD COLUMN bloqueado_ate BIGINT NOT NULL DEFAULT 0;
+`
 /* próximas alterações: acrescente novos itens a este array (nunca edite os já aplicados) */
 ];
 

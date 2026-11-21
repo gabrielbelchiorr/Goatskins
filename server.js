@@ -100,7 +100,7 @@ const server = http.createServer((req, res) => {
   // Esta verificacao e opcional e exige um proxy que remova o header enviado
   // pelo cliente e injete seu proprio segredo. Sem esse proxy, nao habilitar no Render.
   if (!segredoOrigemValido(req)) { res.writeHead(403, { "Cache-Control": "no-store" }); return res.end(); }
-  const destinoCanonico = security.redirecionamentoWww(req, url);
+  let destinoCanonico; try { destinoCanonico = security.redirecionamentoWww(req, url); } catch (e) { res.writeHead(400, { "Cache-Control": "no-store" }); return res.end(); }
   if (destinoCanonico) { res.writeHead(308, { Location: destinoCanonico, 'Cache-Control': 'no-store' }); return res.end(); }
   if (rota.startsWith("/api/")) {
     try { limite("api:" + ipDe(req), 300, 60000); } catch (e) { return json(res, e.code, { erro: e.message }); }

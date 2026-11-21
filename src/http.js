@@ -25,13 +25,22 @@ const foto = (v, max) => {
 const abrev = n => { const p = String(n).trim().split(/\s+/); return p.length > 1 ? p[0] + " " + p[p.length - 1][0] + "." : p[0]; }; // privacidade (LGPD)
 
 const baldes = new Map(); // chave -> { ts: [instantes], janela }
+const MAX_BALDES = 20000;
 function limite(chave, max, janelaMs) { // limitador em memória (para vários servidores, troque por Redis ou banco)
   if (cfg.TESTE) return;
-  const agora = Date.now(), b = baldes.get(chave) || { ts: [], janela: janelaMs };
-  b.janela = Math.max(b.janela, janelaMs); b.ts = b.ts.filter(t => agora - t < janelaMs); if (b.ts.length >= max) throw new Erro("Muitas tentativas. Aguarde alguns minutos.", 429);
-  if (!baldes.has(chave) && baldes.size >= 20000) throw new Erro("Serviço ocupado. Aguarde.", 429);
+  const agora = Date.now();
+  let b = baldes.get(chave);
+  // Reinserir a cada uso deixa o Map em ordem de uso recente (o primeiro é o menos usado).
+  if (b) baldes.delete(chave);
+  else {
+    b = { ts: [], janela: janelaMs };
+    // Cheio: descarta o balde usado há mais tempo. Antes, todo cliente novo recebia 429 em toda a API
+    // até as chaves expirarem, e anônimos conseguiam encher o mapa.
+    while (baldes.size >= MAX_BALDES) baldes.delete(baldes.keys().next().value);
+  }
+  b.janela = Math.max(b.janela, janelaMs); b.ts = b.ts.filter(t => agora - t < janelaMs);
+  if (b.ts.length >= max) { baldes.set(chave, b); throw new Erro("Muitas tentativas. Aguarde alguns minutos.", 429); }
   b.ts.push(agora); baldes.set(chave, b);
-  if (b.ts.length > max) throw new Erro("Muitas tentativas. Aguarde alguns minutos.", 429);
 }
 /* Poda só o que já expirou. (Antes o mapa inteiro era zerado a cada hora: quem estava bloqueado voltava a ter tentativas de graça.) */
 setInterval(() => { const t = Date.now(); for (const [k, b] of baldes) if (!b.ts.length || t - b.ts[b.ts.length - 1] > b.janela) baldes.delete(k); }, 6e4).unref();
@@ -49,4 +58,4 @@ function ipDe(req) {
   if (xff) { const l = String(xff).split(",").map(s => s.trim()).filter(Boolean); if (l.length >= cfg.TRUST_PROXY_HOPS) { const ip = l[l.length - cfg.TRUST_PROXY_HOPS]; if (require("node:net").isIP(ip)) return ip; } }
   return req.socket.remoteAddress;
 }
-module.exports = { Erro, RE, txt, inteiro, foto, JPG, WEBP, abrev, limite, cookie, ipDe, _baldes };
+module.exports = { Erro, RE, txt, inteiro, foto, JPG, WEBP, abrev, limite, cookie, ipDe, _baldes, MAX_BALDES };

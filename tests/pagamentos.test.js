@@ -36,6 +36,7 @@ async function query(sql, p = []) {
   if (q.startsWith("DELETE FROM reservas WHERE pedido_id=")) return rows([]);
   if (q.includes("SET status='PAID'")) { S.pedido.status = "PAID"; return rows([]); }
   if (q.startsWith("UPDATE pedidos SET mp_status")) return rows([]);
+  if (q.startsWith("INSERT INTO auth_rate_limits")) { const k = p[0]; S.limites = S.limites || {}; if (S.limites[k]) return rows([]); S.limites[k] = 1; return rows([{ n: 1 }]); }
   if (q.startsWith("INSERT INTO audit_logs")) { S.auditorias.push(p[2]); return rows([]); }
   if (q.startsWith("INSERT INTO notifications")) { S.notificacoes++; return rows([]); }
   throw new Error("consulta não prevista no teste: " + q.slice(0, 90));
@@ -101,6 +102,11 @@ const comFetch = (order, fn) => async () => { const antes = global.fetch; global
 
 test("webhook: sem assinatura = 401", async () => {
   await assert.rejects(chamar({ "data.id": ORD, type: "order" }, {}), e => e.code === 401);
+});
+test("webhook: rejeições repetidas do mesmo IP geram no máximo 1 linha de auditoria por hora", async () => {
+  S.limites = {}; S.auditorias.length = 0;
+  for (let i = 0; i < 5; i++) await assert.rejects(chamar({ "data.id": ORD, type: "order" }, {}), e => e.code === 401);
+  assert.equal(S.auditorias.filter(a => a === "WEBHOOK_REJEITADO").length, 1);
 });
 test("webhook: assinatura errada = 401", async () => {
   await assert.rejects(chamar({ "data.id": ORD, type: "order" }, { "x-signature": assinar(ORD, "r", "1", "errado"), "x-request-id": "r" }), e => e.code === 401);

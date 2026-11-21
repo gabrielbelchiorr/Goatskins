@@ -6,6 +6,9 @@ const { db, tx, sha, audit, notificar } = require('./db');
 const { Erro, cookie } = require('./http');
 const { consumirLimite } = require('./registration');
 const ADMIN = ['ADMIN','SUPER_ADMIN'], ELEVACAO_MS = 15 * 60000, SESSAO_MS = 8 * 3600000;
+// Falhas consecutivas do código (não só por janela): sem isso, 8 tentativas a cada 10 min
+// somam ~1.150 chutes por dia, indefinidamente, para quem já tem a senha.
+const MAX_FALHAS_MFA = 10, BLOQUEIO_MFA_MS = 3600000;
 const sessionHash = ctx => sha(cookie(ctx.req, 'sid') || '');
 const configurado = () => /^[a-f0-9]{64}$/i.test(cfg.MFA_ENCRYPTION_KEY || '');
 function chave() {
@@ -132,14 +135,25 @@ const rotas=[
       const u=await vivo(ctx,esperado),m=await db.get('SELECT * FROM admin_mfa WHERE user_id=? FOR UPDATE',[u.id]);
       if(!m||(!m.enabled&&(m.pending_session!==sessionHash(ctx)||m.pending_expira<=Date.now())))
         throw new Erro('A configuração expirou ou pertence a outra sessão. Configure o autenticador novamente.',400);
+      if(Number(m.bloqueado_ate)>Date.now())
+        throw new Erro('O autenticador foi bloqueado por excesso de códigos incorretos. Tente novamente em até '+Math.ceil((Number(m.bloqueado_ate)-Date.now())/60000)+' minuto(s).',429);
       const code=typeof ctx.body.codigo==='string'?ctx.body.codigo.trim():'';
       const step=/^\d{6}$/.test(code)?check(decrypt(m.secret,u.id),code,Number(m.last_step)):-1;
       const hashes=hashesDe(m.recovery_hashes),recovery=m.enabled===1?recoveryCode(code):null;
       const digest=recovery?recoveryDigest(u.id,recovery):null;
       const used=digest?hashes.find(h=>crypto.timingSafeEqual(Buffer.from(h,'hex'),Buffer.from(digest,'hex'))):null;
-      if(step<0&&!used)return {invalid:true,uid:u.id};
+      if(step<0&&!used){
+        // Grava dentro da tx (que confirma: este caminho retorna, não lança).
+        const falhas=Number(m.falhas||0)+1,bloqueia=falhas>=MAX_FALHAS_MFA;
+        await db.run('UPDATE admin_mfa SET falhas=?,bloqueado_ate=? WHERE user_id=?',[bloqueia?0:falhas,bloqueia?Date.now()+BLOQUEIO_MFA_MS:Number(m.bloqueado_ate||0),u.id]);
+        if(bloqueia){
+          await audit(u.id,'MFA_BLOQUEADO',MAX_FALHAS_MFA+' códigos incorretos seguidos',ctx.ip);
+          await notificar(u.id,'Autenticador bloqueado','Houve '+MAX_FALHAS_MFA+' códigos incorretos seguidos na sua verificação administrativa. Ela ficará bloqueada por 1 hora. Se não foi você, troque sua senha agora.');
+        }
+        return {invalid:true,uid:u.id,bloqueou:bloqueia,email:u.email};
+      }
       const codes=!m.enabled?Array.from({length:8},()=>crypto.randomBytes(16).toString('hex')):null;
-      await db.run(`UPDATE admin_mfa SET enabled=1,last_step=?,pending_session=NULL,pending_expira=0,recovery_hashes=? WHERE user_id=?`,
+      await db.run(`UPDATE admin_mfa SET enabled=1,last_step=?,pending_session=NULL,pending_expira=0,recovery_hashes=?,falhas=0,bloqueado_ate=0 WHERE user_id=?`,
         [step>=0?step:m.last_step,JSON.stringify(codes?codes.map(c=>recoveryDigest(u.id,c)):hashes.filter(h=>h!==used)),u.id]);
       if(codes||used)await db.run('DELETE FROM sessions WHERE user_id=? AND token<>?',[u.id,sessionHash(ctx)]);
       const now=Date.now(),expira=Math.min(u.expira,now+SESSAO_MS);
@@ -151,7 +165,12 @@ const rotas=[
         codes?'A autenticação em dois fatores protege sua administração. Guarde os códigos de recuperação.':'Um código de recuperação foi utilizado. As outras sessões foram encerradas.');
       return {expira,...(codes?{recoveryCodes:codes.map(c=>c.match(/.{8}/g).join('-'))}:{})};
     });
-    if(result.invalid){await audit(result.uid,'MFA_FALHA',null,ctx.ip);throw new Erro('Senha ou código inválido, expirado ou já utilizado.',401);}
+    if(result.invalid){
+      await audit(result.uid,'MFA_FALHA',null,ctx.ip);
+      if(result.bloqueou&&result.email)require('./mail').enviar(result.email,'Verificação administrativa bloqueada - GOATSKINS',
+        'Houve '+MAX_FALHAS_MFA+' códigos incorretos seguidos na verificação em duas etapas da sua conta de administração. Ela ficará bloqueada por 1 hora.\n\nSe não foi você, alguém pode ter a sua senha: troque-a imediatamente em '+cfg.APP_URL+' e avise o responsável pelo site.');
+      throw new Erro(result.bloqueou?'Códigos incorretos demais. A verificação foi bloqueada por 1 hora.':'Senha ou código inválido, expirado ou já utilizado.',result.bloqueou?429:401);
+    }
     // Somente após COMMIT: falha na auditoria/consumo nunca deixa cookie de sessão elevada no cliente.
     const secure=cfg.PRODUCAO||ctx.req.headers['x-forwarded-proto']==='https';
     ctx.res.setHeader('Set-Cookie','sid='+fresh+'; HttpOnly; SameSite=Lax; Path=/; Max-Age='+Math.max(1,Math.floor((result.expira-Date.now())/1000))+(secure?'; Secure':''));

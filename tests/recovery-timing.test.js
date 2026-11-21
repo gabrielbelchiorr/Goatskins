@@ -202,7 +202,7 @@ test('recovery email cooldown and hourly cap respond identically with actual per
       h.tick(60001); responses.push(await h.request(email)); // five/hour cap
       assert.deepEqual(responses.map(response => response.status), [200, 429, 200, 200, 200, 200, 429]);
       assert.equal(h.counters.enqueued, 5);
-      assert.equal(h.limits.get('email:' + sha(email)).n, 5, 'Rejected transactions must not consume additional persistent sends');
+      assert.equal(h.limits.get('email-rec:' + sha(email)).n, 5, 'Rejected transactions must not consume additional persistent sends');
       assert.equal(h.counters.users, 0); assert.equal(h.counters.provider, 0);
       results.push(responses);
     } finally { await h.close(); }
@@ -231,7 +231,7 @@ test('recovery IP limits remain active and do not reveal whether target accounts
 
 for (const limit of [
   { name: 'persistent send IP', key: 'envio-ip:' + sha('198.18.11.1'), max: 20 },
-  { name: 'global send', key: 'envio-global', max: 200 }
+  { name: 'global send', key: 'envio-global-rec', max: 200 }
 ]) test('recovery ' + limit.name + ' limit has equivalent HTTP behavior at its boundary', { timeout: 10000 }, async () => {
   const results = [];
   for (const existing of [true, false]) {
@@ -245,7 +245,7 @@ for (const limit of [
       assert.equal(accepted.status, 200); assert.equal(rejected.status, 429);
       assert.equal(h.counters.enqueued, 1);
       assert.equal(h.limits.get(limit.key).n, limit.max);
-      assert.equal(h.limits.has('email:' + sha(rejectedEmail)), false, 'Rejected send must roll back its email allowance');
+      assert.equal(h.limits.has('email-rec:' + sha(rejectedEmail)), false, 'Rejected send must roll back its email allowance');
       assert.equal(h.counters.users, 0); assert.equal(h.counters.provider, 0);
       results.push([accepted, rejected]);
     } finally { await h.close(); }
@@ -262,7 +262,7 @@ test('recovery queue persistence failure is equivalent and does not falsely repo
       const response = await h.request(email);
       assert.equal(response.status, 500); assert.equal(response.body, '{"erro":"Erro interno."}');
       assert.equal(h.jobs.length, 0);
-      assert.equal(h.limits.has('email:' + sha(email)), false, 'Failed persistence rolls back send allowances');
+      assert.equal(h.limits.has('email-rec:' + sha(email)), false, 'Failed persistence rolls back send allowances');
       assert.equal(h.counters.users, 0); assert.equal(h.counters.provider, 0);
       results.push(response);
     } finally { await h.close(); }

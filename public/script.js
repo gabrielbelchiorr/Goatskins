@@ -30,7 +30,7 @@ async function api(url, method, body, mfaRetry = false) {
     headers: { "Content-Type": "application/json", "X-Requested-With": "goatskins" }, body: body ? JSON.stringify(body) : undefined });
   const d = await r.json().catch(() => ({}));
   if (!r.ok && d.tipo === "TURNSTILE_REQUIRED") {
-    const action = url === "/api/login" ? "login" : url === "/api/registro" ? "registro" : "recuperacao";
+    const action = url === "/api/login" ? "login" : url === "/api/registro" ? "registro" : url === "/api/reenviar-verificacao" ? "reenvio" : "recuperacao";
     const token = await desafioSeguranca(action);
     const retry = await fetch(url, {method: method || "GET", credentials:"same-origin", signal:AbortSignal.timeout(20000), headers:{"Content-Type":"application/json","X-Requested-With":"goatskins"}, body:JSON.stringify({...body,turnstileToken:token})});
     const result = await retry.json(); if(!retry.ok) throw new Error(result.erro || "Falha na verificação."); return result;
@@ -1498,9 +1498,26 @@ async function abaUsuarios(box) {
   filtrar();
 }
 
+const ACOES_LOG = ["LOGIN", "LOGIN_FALHA", "LOGOUT", "MFA_FALHA", "MFA_BLOQUEADO", "MFA_VERIFICADO", "MFA_ATIVADO", "MFA_RECUPERACAO_USADA",
+  "USUARIO_PAPEL", "USUARIO_STATUS", "SENHA_ALTERADA", "SENHA_REDEFINIDA", "CONTA_CRIADA", "CONTA_EXCLUIDA", "PEDIDO_CRIADO",
+  "PIX_CRIACAO_INCERTA", "PIX_CRIACAO_RECUSADA", "PAGAMENTO_IGNORADO", "PAGAMENTO_TARDIO_REEMBOLSAR", "PEDIDO_REEMBOLSADO", "SORTEIO", "WEBHOOK_REJEITADO"];
 async function abaLogs(box) {
-  const ls = await api("/api/admin/logs");
-  box.append(tabela(["Quando", "Ação", "Quem", "Detalhe", "IP"], ls.map(l => [dataHora(l.quando), l.acao, l.email || "-", l.detalhe || "", l.ip || ""])));
+  const filtro = document.createElement("select"); filtro.setAttribute("aria-label", "Filtrar por ação");
+  [["", "Todas as ações"], ...ACOES_LOG.map(a => [a, a])].forEach(([v, t]) => { const o = document.createElement("option"); o.value = v; o.textContent = t; filtro.append(o); });
+  const lista = h("div"), barra = h("div", "row-actions");
+  let linhas = [], ultimo = null;
+  const mais = botao("Carregar mais", "alt", () => carregarLogs(false).catch(e => alert(e.message)));
+  async function carregarLogs(reiniciar) {
+    if (reiniciar) { linhas = []; ultimo = null; }
+    const q = new URLSearchParams(); if (filtro.value) q.set("acao", filtro.value); if (ultimo) q.set("antes", String(ultimo));
+    const ls = await api("/api/admin/logs" + (q.toString() ? "?" + q.toString() : ""));
+    linhas = linhas.concat(ls); if (ls.length) ultimo = ls[ls.length - 1].id;
+    lista.replaceChildren(tabela(["Quando", "Ação", "Quem", "Detalhe", "IP"], linhas.map(l => [dataHora(l.quando), l.acao, l.email || "-", l.detalhe || "", l.ip || ""])));
+    mais.hidden = ls.length < 150;
+  }
+  filtro.addEventListener("change", () => carregarLogs(true).catch(e => alert(e.message)));
+  barra.append(filtro); box.append(barra, lista, mais);
+  await carregarLogs(true);
 }
 
 function abaVisual(box) {

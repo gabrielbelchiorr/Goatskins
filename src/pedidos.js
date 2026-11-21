@@ -7,7 +7,7 @@
    4. Tudo é idempotente: a mesma notificação 10 vezes produz o mesmo resultado de 1 vez. */
 const crypto = require("node:crypto");
 const cfg = require("./config"), mp = require("./mercadopago"), mail = require("./mail");
-const { db, agora, tx, audit, notificar, liberar, liberarSeVencido } = require("./db");
+const { db, sha, agora, tx, audit, notificar, liberar, liberarSeVencido } = require("./db");
 const { Erro, inteiro, limite } = require("./http");
 
 const MAX_PENDENTES = 3;                                   // pedidos Pix abertos por pessoa (evita "segurar" números sem pagar)
@@ -140,16 +140,35 @@ async function registrarOrder(pedidoId, o) {
    Por isso NUNCA liberamos números de uma Order real antes de confirmar cancelamento
    na API, ou pagamento. Se o MP estiver offline, a reserva segue bloqueada e tentamos de novo.
    Isso evita vender o mesmo número para duas pessoas. */
+/* Recusa definitiva do Mercado Pago (4xx que não seja timeout/conflito/limite): a Order não foi criada.
+   Manter o pedido "incerto" prenderia a reserva para sempre e impediria o sorteio. */
+const recusaDefinitiva = e => Number.isInteger(e && e.status) && e.status >= 400 && e.status < 500 && ![408, 409, 429].includes(e.status);
+async function falharCriacao(pedidoId, uid, ip, status) {
+  return tx(async () => {
+    const r = await db.run("UPDATE pedidos SET status='FAILED', mp_creation_uncertain=0, atualizado_em=? WHERE id=? AND status='PENDING' AND mp_order_id IS NULL AND mp_creation_uncertain=1", [agora(), pedidoId]);
+    if (!r.changes) return false;
+    await db.run("DELETE FROM reservas WHERE pedido_id=?", [pedidoId]);
+    await audit(uid, "PIX_CRIACAO_RECUSADA", "pedido " + pedidoId + " HTTP " + status, ip);
+    if (uid) await notificar(uid, "Pix não gerado", "O Mercado Pago recusou gerar o Pix do seu pedido. Nenhuma cobrança foi feita e os números foram liberados.");
+    return true;
+  });
+}
 let varreduraAtiva = null;
 async function finalizarVencidos() {
   if (!mp.configurado()) return;
   if (varreduraAtiva) return varreduraAtiva;
   varreduraAtiva = (async () => {
     // Retry identical creation with the original idempotency key; ambiguous outcomes never release numbers.
-    const incertos = await db.all("SELECT p.id,p.public_id,p.total_centavos,u.email FROM pedidos p JOIN users u ON u.id=p.user_id WHERE p.status='PENDING' AND p.mp_creation_uncertain=1 AND p.mp_order_id IS NULL AND p.criado_em<? ORDER BY p.id LIMIT 10", [new Date(Date.now()-20000).toISOString()]);
+    // ORDER BY atualizado_em: uma falha empurra o pedido para o fim da fila, então 10 pedidos que
+    // falham sempre não impedem que os mais novos sejam tentados.
+    const incertos = await db.all("SELECT p.id,p.public_id,p.total_centavos,p.user_id,u.email FROM pedidos p JOIN users u ON u.id=p.user_id WHERE p.status='PENDING' AND p.mp_creation_uncertain=1 AND p.mp_order_id IS NULL AND p.criado_em<? ORDER BY p.atualizado_em, p.id LIMIT 10", [new Date(Date.now()-20000).toISOString()]);
     for (const p of incertos) {
       try { await registrarOrder(p.id, await mp.criarOrder({ref:p.public_id,totalCentavos:p.total_centavos,email:p.email})); }
-      catch (_) { console.error('[pix] criação ainda incerta: pedido '+p.id); }
+      catch (e) {
+        if (recusaDefinitiva(e)) { await falharCriacao(p.id, p.user_id, null, e.status).catch(x => console.error('[pix] falha ao encerrar pedido recusado '+p.id+': '+x.message)); continue; }
+        console.error('[pix] criação ainda incerta: pedido '+p.id);
+        await db.run("UPDATE pedidos SET atualizado_em=? WHERE id=? AND status='PENDING'", [agora(), p.id]).catch(() => {});
+      }
     }
     const lista = await db.all("SELECT id, public_id, mp_order_id FROM pedidos WHERE status='PENDING' AND expira_em<? AND mp_order_id IS NOT NULL ORDER BY expira_em LIMIT 10", [Date.now()]);
     for (const p of lista) {
@@ -216,6 +235,8 @@ const rotas = [
       await registrarOrder(pedido.id, o);
     } catch (e) {
       console.error("Falha ao criar order no Mercado Pago:", e.message);
+      if (recusaDefinitiva(e) && await falharCriacao(pedido.id, u.id, ctx.ip, e.status))
+        throw new Erro("O Mercado Pago recusou gerar este Pix. Nenhuma cobrança foi feita e os números foram liberados. Tente novamente ou fale com o suporte.", 502);
       // Timeout is ambiguous: MP may have created the order. Keep reservations for reconciliation.
       await audit(u.id, "PIX_CRIACAO_INCERTA", "pedido " + pedido.id, ctx.ip);
       throw new Erro("Não foi possível confirmar a geração do Pix. Aguarde antes de tentar novamente; consulte Meus pedidos.", 502);
@@ -257,8 +278,12 @@ const rotas = [
     const dataId = String(ctx.query["data.id"] || (corpo.data && corpo.data.id) || "");
     const tipo = String(ctx.query.type || corpo.type || "");
     if (!mp.assinaturaValida(h["x-signature"], h["x-request-id"], dataId)) {
-      logWebhook('warn', 'assinatura_rejeitada', {assinatura_presente:!!h['x-signature'], request_id_presente:!!h['x-request-id'], id_presente:!!dataId, tipo:tipo.slice(0,20)});
-      await audit(null, "WEBHOOK_REJEITADO", "assinatura inválida", ctx.ip); throw new Erro("Assinatura inválida.", 401);
+      logWebhook('warn', 'assinatura_rejeitada', {assinatura_presente:!!h['x-signature'], request_id_presente:!!h['x-request-id'], id_presente:!!dataId, tipo:tipo.slice(0,20), ip:String(ctx.ip).slice(0,45)});
+      // Requisições anônimas não podem encher a auditoria: no máximo uma linha por IP por hora;
+      // as demais ficam só no log do servidor (acima, com o IP).
+      try { await require("./registration").consumirLimite("wh-audit:" + sha(String(ctx.ip)), 1, 36e5); await audit(null, "WEBHOOK_REJEITADO", "assinatura inválida (repetições do mesmo IP na hora ficam só no log do servidor)", ctx.ip); }
+      catch (e) { if (e.code !== 429) throw e; }
+      throw new Erro("Assinatura inválida.", 401);
     }
     logWebhook('log', 'notificacao_recebida', {tipo:tipo.slice(0,20), acao:String(corpo.action || '').slice(0,40), id:dataId.slice(0,40)});
     if (tipo !== "order" || !RE_MP_ID.test(dataId)) return { ok: true };   // outros tópicos (e a "simulação" do painel): ignorados com 200

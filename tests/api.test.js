@@ -32,7 +32,8 @@ const mpServer = http.createServer((req, res) => {
     if (req.method === "POST" && req.url === "/v1/orders") {
       const k = req.headers["x-idempotency-key"]; if (!k) return rs(400, { errors: [{ code: "idempotency_key_required" }] });
       if (mpChaves.has(k)) return rs(201, mpOrders.get(mpChaves.get(k)));
-      const d = JSON.parse(b), id = "ORD" + String(++mpSeq).padStart(12, "0") + "TEST", pg = d.transactions.payments[0];
+      const d0 = JSON.parse(b); if (d0.total_amount === "77.00") return rs(400, { errors: [{ code: "invalid_total_amount" }] }); // recusa definitiva simulada
+      const d = d0, id = "ORD" + String(++mpSeq).padStart(12, "0") + "TEST", pg = d.transactions.payments[0];
       const o = { id, type: "online", total_amount: d.total_amount, external_reference: d.external_reference, status: "action_required", status_detail: "waiting_transfer",
         transactions: { payments: [{ id: "PAY" + mpSeq, status: "action_required", status_detail: "waiting_transfer", amount: pg.amount,
           payment_method: { id: "pix", type: "bank_transfer", ticket_url: "https://www.mercadopago.com.br/sandbox/payments/1/ticket?hash=abc", qr_code: "00020126580014br.gov.bcb.pix0136teste", qr_code_base64: "iVBORw0KGgo=" } }] }, _recebido: d };
@@ -152,11 +153,27 @@ test("sem e-mail verificado não é possível escolher números", async () => {
   assert.equal((await c.post("/api/campanhas/" + s.id + "/numeros", { numeros: [1] })).status, 401);
 });
 
-test("login: erro genérico e bloqueio da conta após 5 falhas", async () => {
+test("login: erro genérico igual para conta existente e inexistente; falhas de terceiros não trancam o dono", async () => {
   const { email } = await novoUsuario(), c = cliente();
-  for (let i = 0; i < 5; i++) assert.equal((await c.post("/api/login", { email, senha: "errada123" })).status, 401);
-  assert.equal((await c.post("/api/login", { email, senha: "Senha1234" })).status, 429); // mesmo com a senha certa
-  assert.equal((await c.post("/api/login", { email: "naoexiste@x.com", senha: "qualquer123" })).status, 401);
+  // Antes: após 5 falhas a conta respondia 429 "Conta bloqueada" (só contas reais) e o dono ficava trancado.
+  // Agora a 6ª+ tentativa exige Turnstile (desligado neste servidor de teste; ver tests/auditoria-correcoes.test.js).
+  for (const alvo of [email, "naoexiste@x.com"]) for (let i = 0; i < 7; i++) {
+    const r = await c.post("/api/login", { email: alvo, senha: "errada123" });
+    assert.equal(r.status, 401); assert.equal(r.dados.erro, "E-mail ou senha incorretos.");
+  }
+  assert.equal((await c.post("/api/login", { email, senha: "Senha1234" })).status, 200);
+});
+
+test("logs admin: filtro por ação e paginação por cursor", async () => {
+  const adm = await adminLogado();
+  const todos = (await adm.get("/api/admin/logs")).dados;
+  assert.ok(todos.length > 0 && todos.every(l => Number(l.id) > 0));
+  const so = (await adm.get("/api/admin/logs?acao=LOGIN")).dados;
+  assert.ok(so.length > 0 && so.every(l => l.acao === "LOGIN"));
+  const depois = (await adm.get("/api/admin/logs?acao=LOGIN&antes=" + so[0].id)).dados;
+  assert.ok(depois.every(l => l.acao === "LOGIN" && Number(l.id) < Number(so[0].id)));
+  const ruim = await adm.get("/api/admin/logs?acao=x%27%3BDROP&antes=1e9"); // filtros inválidos são ignorados
+  assert.equal(ruim.status, 200); assert.ok(ruim.dados.length > 0);
 });
 
 test("permissões: usuário comum não acessa admin, não vira admin e CSRF é barrado", async () => {
@@ -314,6 +331,16 @@ const pedir = async (c, s, numeros, extra = {}) => c.post("/api/campanhas/" + s.
 const mpIdDe = pedido => { for (const [id, o] of mpOrders) if (o._recebido && o.external_reference) { const p = pedido; if (o.external_reference.length === 32 && p) return id; } };
 const ultimoMp = () => [...mpOrders.keys()].pop();
 const estadoDe = async (c, s) => (await c.get("/api/estado")).dados.c.find(x => x.id === s.id);
+
+test("pagamento: recusa definitiva (HTTP 400) do Mercado Pago encerra o pedido e libera a reserva", async () => {
+  const adm = await adminLogado(), s = await pagoSorteio(adm, { preco_numero: 77 }), { c, email } = await novoUsuario();
+  const r = await pedir(c, s, [4]);
+  assert.equal(r.status, 502); assert.match(r.dados.erro, /recusou gerar este Pix/);
+  const uid = idDe(email), p = dbLer("SELECT status, mp_creation_uncertain FROM pedidos WHERE user_id=? AND campaign_id=?", uid, s.id)[0];
+  assert.equal(p.status, "FAILED"); assert.equal(Number(p.mp_creation_uncertain), 0);
+  assert.equal(Number(dbLer("SELECT COUNT(*) n FROM reservas WHERE campaign_id=?", s.id)[0].n), 0);   // antes: reserva presa para sempre, sorteio bloqueado
+  assert.deepEqual((await estadoDe(c, s)).reservados, []);
+});
 
 test("pagamento: preço vem do banco; campos forjados (total, status, preço) são ignorados", async () => {
   const adm = await adminLogado(), s = await pagoSorteio(adm), { c } = await novoUsuario();
@@ -513,12 +540,13 @@ test("falha ambígua do Mercado Pago preserva reserva e não vaza detalhes", asy
 /* ===== Auditoria pré-lançamento: usuário malicioso ===== */
 const idDe = email => dbLer("SELECT id FROM users WHERE email=?", email)[0].id;
 
-test("login: 30 tentativas SIMULTÂNEAS não burlam o bloqueio (no máximo 5 senhas chegam a ser testadas)", async () => {
+test("login: 30 tentativas SIMULTÂNEAS contam no orçamento atômico do e-mail e não trancam o dono", async () => {
   const { email } = await novoUsuario();
   const rs = await Promise.all(Array.from({ length: 30 }, () => cliente().post("/api/login", { email, senha: "errada123" })));
-  const n401 = rs.filter(r => r.status === 401).length, n429 = rs.filter(r => r.status === 429).length;
-  assert.ok(n401 <= 5, "foram testadas " + n401 + " senhas"); assert.equal(n401 + n429, 30);
-  assert.equal((await cliente().post("/api/login", { email, senha: "Senha1234" })).status, 429);   // nem a senha certa entra durante o bloqueio
+  assert.ok(rs.every(r => r.status === 401 && r.dados.erro === "E-mail ou senha incorretos."));
+  // O contador por e-mail não passa de 5: as demais tentativas caíram no caminho que exige Turnstile.
+  assert.equal(Number(dbLer("SELECT n FROM auth_rate_limits WHERE chave=?", "login-email:" + crypto.createHash("sha256").update(email).digest("hex"))[0].n), 5);
+  assert.equal((await cliente().post("/api/login", { email, senha: "Senha1234" })).status, 200);
 });
 
 test("cookie de sessão: HttpOnly, SameSite=Lax; o token não fica em texto puro no banco", async () => {
@@ -785,9 +813,11 @@ test('redefinir senha antiga não confirma e-mail nem abre sessão',async()=>{
 test('recuperação de senha também libera o limitador persistente de login',async()=>{
   const p=await novoUsuario();
   for(let i=0;i<5;i++)await cliente().post('/api/login',{email:p.email,senha:'Errada123'});
-  assert.equal((await cliente().post('/api/login',{email:p.email,senha:'Senha1234'})).status,429);
-  esperarReenvioNoBanco(p.email);await cliente().post('/api/esqueci-senha',{email:p.email});
+  const chave='login-email:'+crypto.createHash('sha256').update(p.email).digest('hex');
+  assert.equal(Number(dbLer('SELECT n FROM auth_rate_limits WHERE chave=?',chave)[0].n),5);
+  await cliente().post('/api/esqueci-senha',{email:p.email});
   const token=await tokenDeRecuperacao(p.email);
   assert.equal((await cliente().post('/api/redefinir-senha',{token,senha:'NovaSenha123'})).status,200);
+  assert.equal(dbLer('SELECT n FROM auth_rate_limits WHERE chave=?',chave).length,0);
   assert.equal((await cliente().post('/api/login',{email:p.email,senha:'NovaSenha123'})).status,200);
 });

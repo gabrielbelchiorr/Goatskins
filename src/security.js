@@ -18,7 +18,9 @@ function redirecionamentoWww(req, url) {
   if (url.pathname.startsWith('/api/') || url.pathname === '/healthz') return null;
   const canonica = new URL(cfg.APP_URL);
   if (req.headers.host !== 'www.' + canonica.host) return null;
-  return new URL(url.pathname + url.search, canonica).href;
+  // Concatena na origem canônica em vez de resolver como referência relativa: um caminho
+  // "//host" (vindo de "/.//host") seria lido como outro host ou lançaria TypeError.
+  return canonica.origin + url.pathname + url.search;
 }
 async function verificar(token, action) {
   if (!enabled()) { if (cfg.PRODUCAO) throw new Erro('Verificação indisponível.',503); return; }
@@ -43,17 +45,20 @@ async function verificar(token, action) {
 }
 async function proteger(req, body, rota) {
   if (req.method !== 'POST') return;
-  const actions = {'/api/registro':'registro','/api/esqueci-senha':'recuperacao','/api/login':'login'};
+  const actions = {'/api/registro':'registro','/api/esqueci-senha':'recuperacao','/api/login':'login','/api/reenviar-verificacao':'reenvio'};
   const action = actions[rota]; if (!action) return;
   const ip = sha(String(ipDe(req)));
   // Atomic SQL limits persist across process restarts and instances; no global write lock needed.
   if (!cfg.TESTE) await consumirLimite('auth-ip:'+action+':'+ip, action==='login'?30:10, 600000);
   if (action === 'login') {
     const key = 'captcha-login:'+ip;
-    const r = await db.get('SELECT n FROM auth_rate_limits WHERE chave=? AND expira>?',[key,Date.now()]);
-    if (r && r.n >= 3) await verificar(body.turnstileToken,'login');
-    if (!cfg.TESTE) await consumirLimite(key, 30, 600000);
-  } else await verificar(body.turnstileToken,action);
+    // Contar e decidir no mesmo passo atômico: com leitura e incremento separados,
+    // requisições simultâneas liam o valor antigo e pulavam o Turnstile.
+    const n = cfg.TESTE
+      ? ((await db.get('SELECT n FROM auth_rate_limits WHERE chave=? AND expira>?',[key,Date.now()])) || {n:0}).n + 1
+      : await consumirLimite(key, 30, 600000);
+    if (n > 3) { await verificar(body.turnstileToken,'login'); req.turnstileVerificado = 'login'; }
+  } else { await verificar(body.turnstileToken,action); req.turnstileVerificado = action; }
 }
 const rotas = [['GET', /^\/api\/seguranca$/, async()=>({turnstileSiteKey:enabled()?cfg.TURNSTILE_SITE_KEY:null})]];
 module.exports={rotas,csrf,verificar,proteger,redirecionamentoWww};

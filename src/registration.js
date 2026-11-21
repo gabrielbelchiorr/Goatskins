@@ -23,12 +23,17 @@ async function consumirLimite(chave, max, janela, intervalo = 0, mensagemLimite 
     WHERE auth_rate_limits.expira<=? OR (auth_rate_limits.n<? AND auth_rate_limits.proximo<=?) RETURNING n`,
     [chave, now, now + intervalo, now + janela, now, now, now, now + intervalo, now, now + janela, now, max, now]);
   if (!r) throw new Erro(mensagemLimite, 429);
+  return r.n;
 }
-async function limiteEnvio(email, ip) {
-  await consumirLimite('email:' + sha(email), 5, 36e5, 60e3, 'Aguarde pelo menos 60 segundos entre envios. Limite de 5 mensagens por hora por e-mail.');
+/* finalidade 'cadastro' (código, reenvio, verificação legada) ou 'recuperacao'. As cotas são
+   separadas: avisos e reenvios de cadastro, que qualquer anônimo dispara, não podem gastar
+   a cota que o dono do endereço precisa para recuperar a senha. */
+async function limiteEnvio(email, ip, finalidade = 'cadastro') {
+  const rec = finalidade === 'recuperacao';
+  await consumirLimite((rec ? 'email-rec:' : 'email:') + sha(email), 5, 36e5, 60e3, 'Aguarde pelo menos 60 segundos entre envios. Limite de 5 mensagens por hora por e-mail.');
   if (!cfg.TESTE) {
     await consumirLimite('envio-ip:' + sha(String(ip)), 20, 36e5);
-    await consumirLimite('envio-global', 200, 36e5);
+    await consumirLimite(rec ? 'envio-global-rec' : 'envio-global', 200, 36e5);
   }
 }
 async function limpar() {
@@ -92,7 +97,8 @@ async function confirmar(ctx) {
     if (!cfg.TESTE) await consumirLimite('verificar-ip:' + sha(String(ctx.ip)), 60, 36e5);
     const p = await db.get('SELECT * FROM pending_registrations WHERE token_hash=? FOR UPDATE', [sha(ctx.body.token)]);
     if (!p || p.cadastro_expira <= Date.now() || p.expira <= Date.now() || p.tentativas >= 5 || !p.enviado) return false;
-    await consumirLimite('verificar-email:' + sha(p.email), 15, 36e5);
+    // Avisos (endereço que já tem conta) nunca confirmam; não gastam a cota do endereço.
+    if (!p.aviso) await consumirLimite('verificar-email:' + sha(p.email), 15, 36e5);
     await db.run('UPDATE pending_registrations SET tentativas=tentativas+1 WHERE token_hash=?', [p.token_hash]);
     const codigo = typeof ctx.body.codigo === 'string' ? ctx.body.codigo : '';
     if (!/^\d{6}$/.test(codigo) || !crypto.timingSafeEqual(Buffer.from(digest(p.token_hash, codigo), 'hex'), Buffer.from(p.codigo_hash, 'hex'))) return false;

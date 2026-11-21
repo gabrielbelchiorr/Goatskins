@@ -157,7 +157,7 @@ test('predefinições: CRUD, segurança, persistência e campanhas independentes
       assert.equal(persisted.status, 200); assert.deepEqual(persisted.data, duplicate);
       const campaign = await request('GET', '/api/admin/campanhas/' + campaignIds[2]);
       assert.equal(campaign.status, 200); assert.deepEqual(campaign.data.viewer_3d, duplicate.dados.viewer_3d);
-      assert.equal((await pool.query('SELECT MAX(versao) v FROM schema_migrations')).rows[0].v, 12);
+      assert.equal((await pool.query('SELECT MAX(versao) v FROM schema_migrations')).rows[0].v, 13);
     });
     await t.test('modelos de armas, facas e luvas mantêm configurações próprias nas predefinições', async () => {
       for (const spec of [{item:'ak-47/redline',wear:0.18,seed:661,stattrak:true},

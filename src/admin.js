@@ -63,7 +63,17 @@ const rotas = [
     });
     return { ok: true };
   }, "super"],
-  ["GET", /^\/api\/admin\/logs$/, () => db.all("SELECT l.quando, l.acao, l.detalhe, l.ip, u.email FROM audit_logs l LEFT JOIN users u ON u.id=l.user_id ORDER BY l.id DESC LIMIT 150"), "admin"],
+  /* Filtro por ação (?acao=LOGIN_FALHA) e paginação por cursor (?antes=<id>): eventos antigos
+     continuam alcançáveis mesmo que algo gere muitas linhas recentes. */
+  ["GET", /^\/api\/admin\/logs$/, ctx => {
+    const acao = typeof ctx.query.acao === "string" && /^[A-Z_]{1,40}$/.test(ctx.query.acao) ? ctx.query.acao : null;
+    const antes = typeof ctx.query.antes === "string" && /^\d{1,15}$/.test(ctx.query.antes) ? Number(ctx.query.antes) : null;
+    const filtros = [], args = [];
+    if (acao) { filtros.push("l.acao=?"); args.push(acao); }
+    if (antes) { filtros.push("l.id<?"); args.push(antes); }
+    return db.all("SELECT l.id, l.quando, l.acao, l.detalhe, l.ip, u.email FROM audit_logs l LEFT JOIN users u ON u.id=l.user_id" +
+      (filtros.length ? " WHERE " + filtros.join(" AND ") : "") + " ORDER BY l.id DESC LIMIT 150", args);
+  }, "admin"],
   ["GET", /^\/api\/admin\/campanhas\/(\d+)\/participantes$/, ctx =>
     db.all("SELECT t.n, t.criado_em, u.nome, u.email FROM tickets t JOIN users u ON u.id=t.user_id WHERE t.campaign_id=? ORDER BY t.n", [Number(ctx.params[0])]), "admin"],
   ["GET", /^\/api\/admin\/campanhas\/(\d+)$/, async ctx => {

@@ -55,15 +55,33 @@ function politicaCache(e, versao) {
 const naoModificado = (req, etag) => String(req.headers['if-none-match'] || '').split(',')
   .some(t => t.trim().replace(/^W\//, '') === etag);
 
+/* Corpos montados por requisição (HTML com SEO, robots, sitemap): a versão comprimida fica guardada
+   pelo hash do conteúdo, numa lista curta. Antes, cada GET/HEAD rodava Brotli na qualidade máxima (11),
+   sem limite de taxa, na mesma fila de threads do scrypt do login. */
+const corposComprimidos = new Map(), MAX_CORPOS = 256;
+function comprimirCorpo(corpo, enc, hash) {
+  const chave = enc + ':' + hash;
+  let p = corposComprimidos.get(chave);
+  if (p) { corposComprimidos.delete(chave); corposComprimidos.set(chave, p); return p; }
+  p = enc === 'br'
+    ? brotli(corpo, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: corpo.length } })
+    : gzip(corpo, { level: 6 });
+  corposComprimidos.set(chave, p);
+  p.catch(() => corposComprimidos.delete(chave));
+  while (corposComprimidos.size > MAX_CORPOS) corposComprimidos.delete(corposComprimidos.keys().next().value);
+  return p;
+}
 /* Envia um corpo já pronto, com ETag/304 e compressão. */
 async function enviar(req, res, { corpo, ext, tipo, cacheControl, hash, e }) {
   const etag = '"' + hash + '"', enc = codificacao(req, ext);
   const cab = { 'Content-Type': tipo || TIPOS[ext], 'Cache-Control': cacheControl, ETag: etag };
   if (COMPRIMIVEL.has(ext)) cab.Vary = 'Accept-Encoding';
   if (naoModificado(req, etag)) { res.writeHead(304, cab); return res.end(); }
+  // HEAD não leva corpo: não vale comprimir só para descartar (sem Content-Length, que é opcional aqui).
+  if (req.method === 'HEAD' && enc && !e) { cab['Content-Encoding'] = enc; res.writeHead(200, cab); return res.end(); }
   let saida = corpo;
   if (enc) {
-    saida = e ? await comprimido(e, enc) : enc === 'br' ? await brotli(corpo) : await gzip(corpo);
+    saida = e ? await comprimido(e, enc) : await comprimirCorpo(corpo, enc, hash);
     cab['Content-Encoding'] = enc;
   }
   cab['Content-Length'] = saida.length;
