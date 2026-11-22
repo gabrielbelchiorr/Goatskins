@@ -2,8 +2,8 @@
    Rodar:  node --no-warnings server.js
    Criar o primeiro SUPER_ADMIN:  node --no-warnings server.js criar-admin email@exemplo.com SuaSenha123 "Seu Nome" */
 const http = require("node:http"), path = require("node:path"), crypto = require("node:crypto");
-const cfg = require("./src/config"), { db, iniciar, fechar, agora, audit, ping, tx, comAutorizacao } = require("./src/db");
-const { Erro, ipDe, limite } = require("./src/http");
+const cfg = require("./src/config"), { db, iniciar, fechar, agora, audit, ping, tx, comAutorizacao, podarAuditoria } = require("./src/db");
+const { Erro, ipDe, chaveIp, limite } = require("./src/http");
 const auth = require("./src/auth");
 
 async function criarAdmin() { // usa o banco do DATABASE_URL (em produção: rode no Shell do Render ou com a External URL)
@@ -48,7 +48,11 @@ async function despachar(req, res, rota, body) {
     if (administrativa) await require('./src/mfa').exigir(ctx);
     const participacao = metodo === 'POST' && /^\/api\/campanhas\/\d+\/(numeros|pedidos)$/.test(rota);
     if (participacao) require('./src/phone').exigir(user);
-    if (administrativa) return comAutorizacao(() => require('./src/mfa').exigir(ctx), () => fn(ctx));
+    if (administrativa) {
+      const r = await comAutorizacao(() => require('./src/mfa').exigir(ctx), () => fn(ctx));
+      if (metodo !== 'GET') require('./src/rifas').limparCacheImagens(); // foto ou banner podem ter mudado
+      return r;
+    }
     if (guarda === 'user') return comAutorizacao(async () => {
       const atual = await auth.exigirSessao(ctx);
       if (participacao) require('./src/phone').exigir(atual);
@@ -103,7 +107,7 @@ const server = http.createServer((req, res) => {
   let destinoCanonico; try { destinoCanonico = security.redirecionamentoWww(req, url); } catch (e) { res.writeHead(400, { "Cache-Control": "no-store" }); return res.end(); }
   if (destinoCanonico) { res.writeHead(308, { Location: destinoCanonico, 'Cache-Control': 'no-store' }); return res.end(); }
   if (rota.startsWith("/api/")) {
-    try { limite("api:" + ipDe(req), 300, 60000); } catch (e) { return json(res, e.code, { erro: e.message }); }
+    try { limite("api:" + chaveIp(ipDe(req)), 300, 60000); } catch (e) { return json(res, e.code, { erro: e.message }); }
     const partes = []; let tam = 0, estourou = false;
     const LIMITE_CORPO = rota.startsWith("/api/admin/") ? 5e6 : 1e5; // só o painel envia fotos; o resto (login, pedidos, webhook) tem poucos bytes
     req.on("data", c => { tam += c.length; if (tam > LIMITE_CORPO) { if (!estourou) { estourou = true; res.setHeader("Connection", "close"); json(res, 413, { erro: "Requisição grande demais." }); } } else if (!estourou) partes.push(c); });
@@ -160,6 +164,9 @@ async function main() {
   await registration.limpar();
   setInterval(() => registration.limpar().catch(() => console.error("[cadastro] falha na limpeza")), 60000).unref();
   pararRecuperacao = require("./src/recovery").iniciarProcessador();
+  require("./src/pedidos").iniciarVarredura();   // só no servidor: "criar-admin" nunca mexe em pedidos
+  podarAuditoria().catch(e => console.error("[auditoria] falha na limpeza:", e.message));
+  setInterval(() => podarAuditoria().catch(e => console.error("[auditoria] falha na limpeza:", e.message)), 6 * 36e5).unref();
   console.log("[e-mail] driver=" + cfg.EMAIL_DRIVER + (cfg.EMAIL_DRIVER === "console" ? " (SIMULADO; sem entrega real)" : " (Resend; confira entrega no painel)"));
   server.listen(cfg.PORT, () => console.log("GOATSKINS rodando em " + cfg.APP_URL));
 }

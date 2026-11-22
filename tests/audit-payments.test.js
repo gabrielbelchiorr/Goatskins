@@ -11,7 +11,7 @@ test('unauthenticated webhook input cannot forge physical log lines', async () =
     'node:crypto': crypto, './config': {}, './mail': {},
     './mercadopago': {configurado: () => true, assinaturaValida: () => false},
     './db': {db:{}, sha: s => s, audit: async (...args) => audits.push(args)},
-    './http': {Erro, limite: () => {}},
+    './http': {Erro, limite: () => {}, chaveIp: s => String(s)},
     './registration': {consumirLimite: async () => 1}
   };
   const sandbox = {module:{exports:{}}, Buffer, Date,

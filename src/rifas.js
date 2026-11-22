@@ -1,6 +1,6 @@
 /* Sorteios: listagem pública, escolha de números, sorteio verificável. */
 const crypto = require("node:crypto");
-const { db, sha, agora, tx, audit, notificar, novaSemente, liberar, liberarSeVencido } = require("./db");
+const { db, sha, agora, tx, audit, notificar, novaSemente, liberar, liberarSeVencido, geracao } = require("./db");
 const { Erro, RE, txt, inteiro, foto, abrev, limite, JPG, WEBP } = require("./http");
 const mail = require("./mail"), mp = require("./mercadopago");
 
@@ -19,21 +19,45 @@ function configuracao3d(c) {
   return { viewer_3d: config, reconfigurar_3d: !config && (invalida || c.viewer_3d_pendente === 1 ||
     (c.viewer_3d_pendente == null && !!c.inspect_link)) };
 }
+/* Parte pública de /api/estado (igual para todos): montada uma vez e reaproveitada até a próxima
+   transação confirmada (geracao()) ou por no máximo ESTADO_TTL_MS. Antes, cada visitante anônimo
+   custava 5 consultas e o parse do JSON visual, só com o limite de 300/min por IP na frente.
+   Requisições simultâneas esperam a mesma montagem em vez de repetir as consultas. */
+// Nos testes de API o banco é alterado por fora do servidor: lá o cache fica desligado (o unitário cobre o cache).
+const TESTE = !!require("./config").TESTE, ESTADO_TTL_MS = TESTE ? 0 : 3000, INTERVALO_VARREDURA_MS = TESTE ? 0 : 2000;
+let cachePublico = null, ultimaVarredura = 0;
+function estadoPublico() {
+  const ger = geracao(), agoraMs = Date.now();
+  if (cachePublico && cachePublico.ger === ger && agoraMs - cachePublico.em < ESTADO_TTL_MS) return cachePublico.p;
+  const p = (async () => {
+    await liberarSeVencido(); // só toma a trava de escrita se houver reserva vencida
+    const [reservas, tickets, ganhadores, v, campanhas] = await Promise.all([
+      db.all("SELECT r.campaign_id c, r.n FROM reservas r JOIN pedidos p ON p.id=r.pedido_id WHERE p.status='PENDING' ORDER BY r.n"),
+      db.all("SELECT campaign_id c, n FROM tickets ORDER BY n"),
+      db.all("SELECT w.campaign_id, w.n, w.data, w.total, w.user_id, us.nome FROM winners w JOIN users us ON us.id=w.user_id"),
+      visual(), db.all("SELECT " + COLS + " FROM campaigns WHERE archived=0 ORDER BY id")]);
+    const ocup = {}, gan = {}, res = {};
+    reservas.forEach(r => (res[r.c] = res[r.c] || []).push(r.n)); tickets.forEach(r => (ocup[r.c] = ocup[r.c] || []).push(r.n));
+    ganhadores.forEach(r => gan[r.campaign_id] = r);
+    const vis = { ...v }; vis.banner = vis.banner ? "/api/banner?v=" + vis.banner.length : "";
+    return Object.freeze({ ocup, gan, res, vis, campanhas });
+  })();
+  cachePublico = { ger, em: agoraMs, p };
+  p.catch(() => { if (cachePublico && cachePublico.p === p) cachePublico = null; }); // falha não fica guardada
+  return p;
+}
 async function estado(u) {
-  require("./pedidos").finalizarVencidos().catch(e => console.error("[pix] varredura:", e.message));
-  await liberarSeVencido(); // só toma a trava de escrita se houver reserva vencida (esta rota é a mais chamada do site)
-  const ocup = {}, meus = {}, gan = {}, res = {};
-  // consultas independentes rodam juntas (o pool tem várias conexões); eram 8 idas ao banco em sequência
-  const [reservas, tickets, meusT, ganhadores, naoLidas, v, campanhas] = await Promise.all([
-    db.all("SELECT r.campaign_id c, r.n FROM reservas r JOIN pedidos p ON p.id=r.pedido_id WHERE p.status='PENDING' ORDER BY r.n"),
-    db.all("SELECT campaign_id c, n FROM tickets ORDER BY n"),
+  // A varredura também roda a cada 5 s; aqui só adianta, e no máximo uma vez a cada 2 s.
+  if (Date.now() - ultimaVarredura >= INTERVALO_VARREDURA_MS) {
+    ultimaVarredura = Date.now();
+    require("./pedidos").finalizarVencidos().catch(e => console.error("[pix] varredura:", e.message));
+  }
+  const meus = {};
+  const [{ ocup, gan, res, vis, campanhas }, meusT, naoLidas] = await Promise.all([estadoPublico(),
     u ? db.all("SELECT campaign_id c, n FROM tickets WHERE user_id=? ORDER BY n", [u.id]) : [],
-    db.all("SELECT w.campaign_id, w.n, w.data, w.total, w.user_id, us.nome FROM winners w JOIN users us ON us.id=w.user_id"),
-    u ? db.get("SELECT COUNT(*) n FROM notifications WHERE user_id=? AND lida=0", [u.id]) : { n: 0 },
-    visual(), db.all("SELECT " + COLS + " FROM campaigns WHERE archived=0 ORDER BY id")]);
-  reservas.forEach(r => (res[r.c] = res[r.c] || []).push(r.n)); tickets.forEach(r => (ocup[r.c] = ocup[r.c] || []).push(r.n));
-  meusT.forEach(r => (meus[r.c] = meus[r.c] || []).push(r.n)); ganhadores.forEach(r => gan[r.campaign_id] = r);
-  const nao = naoLidas.n, vis = { ...v }; vis.banner = vis.banner ? "/api/banner?v=" + vis.banner.length : "";
+    u ? db.get("SELECT COUNT(*) n FROM notifications WHERE user_id=? AND lida=0", [u.id]) : { n: 0 }]);
+  meusT.forEach(r => (meus[r.c] = meus[r.c] || []).push(r.n));
+  const nao = naoLidas.n;
   const embedKey = require('./config').CS2INSPECT_EMBED_KEY || '';
   return { eu: u, naoLidas: nao, pix: mp.configurado(), s: vis, viewer3d: { key: embedKey, configurado: !!embedKey }, c: campanhas.map(c => ({
     ...c, ...configuracao3d(c), inspect_link: undefined, viewer_3d_pendente: undefined,
@@ -85,6 +109,10 @@ async function sortear(id, adminId, ip) {
         typeof c.commit_hash !== 'string' || !/^[a-f0-9]{64}$/.test(c.commit_hash) || sha(c.seed) !== c.commit_hash)
       throw new Erro("O compromisso deste sorteio está inconsistente. Procure o suporte antes de continuar.", 409);
     await liberar(); if ((await db.get("SELECT COUNT(*) n FROM reservas WHERE campaign_id=?", [id])).n) throw new Erro("Há pagamentos Pix pendentes neste sorteio. Aguarde serem confirmados ou expirarem.");
+    // Uma conta suspensa não pode ganhar. Tirar os números dela mudaria a lista já comprometida (e a prova),
+    // então o sorteio espera o administrador decidir: reativar a conta ou resolver os números antes.
+    const suspensos = (await db.get("SELECT COUNT(DISTINCT t.user_id) n FROM tickets t JOIN users u ON u.id=t.user_id WHERE t.campaign_id=? AND u.status='SUSPENDED'", [id])).n;
+    if (suspensos) throw new Erro(suspensos + (suspensos === 1 ? " participante deste sorteio está com a conta suspensa" : " participantes deste sorteio estão com a conta suspensa") + ". Os números dessas contas já fazem parte da lista do sorteio: reative a conta para poder sortear.", 409);
     const nums = (await db.all("SELECT n FROM tickets WHERE campaign_id=? ORDER BY n", [id])).map(x => x.n);
     if (!nums.length) throw new Erro("Ninguém participou deste sorteio.");
     if (nums.length < c.max && c.status !== "CLOSED") throw new Erro("O sorteio só pode ser feito com 100% das vagas preenchidas ou depois de encerrar as inscrições.");
@@ -107,6 +135,24 @@ function imagem(dataUri) { // data:image/(jpeg|webp);base64,... -> bytes, com ca
   if (!dataUri) throw new Erro("Imagem não encontrada.", 404);
   const webp = dataUri.startsWith(WEBP);
   return { raw: Buffer.from(dataUri.slice((webp ? WEBP : JPG).length), "base64"), tipo: webp ? "image/webp" : "image/jpeg" };
+}
+/* Fotos públicas decodificadas ficam em memória: antes cada acesso lia o base64 inteiro do banco
+   (até ~1,1 MB) e decodificava de novo. Qualquer escrita administrativa limpa tudo (server.js). */
+const MAX_BYTES_IMAGENS = 24e6, IMAGEM_TTL_MS = 10 * 60e3;
+const cacheImagens = new Map(); let bytesImagens = 0;
+function limparCacheImagens() { cacheImagens.clear(); bytesImagens = 0; }
+async function imagemCacheada(chave, carregar) {
+  const c = cacheImagens.get(chave);
+  if (c) cacheImagens.delete(chave);                         // reinserir mantém a ordem de uso recente
+  if (c && Date.now() - c.em < IMAGEM_TTL_MS) { cacheImagens.set(chave, c); return c.img; }
+  if (c) bytesImagens -= c.img.raw.length;
+  const img = imagem(await carregar());                      // sem foto (404) não é guardado
+  if (img.raw.length > MAX_BYTES_IMAGENS) return img;
+  while (cacheImagens.size && bytesImagens + img.raw.length > MAX_BYTES_IMAGENS) {
+    const [k, v] = cacheImagens.entries().next().value; cacheImagens.delete(k); bytesImagens -= v.img.raw.length;
+  }
+  cacheImagens.set(chave, { img, em: Date.now() }); bytesImagens += img.raw.length;
+  return img;
 }
 
 const rotas = [
@@ -133,8 +179,9 @@ const rotas = [
       return { numeros: lista, completo: (await db.get("SELECT COUNT(*) n FROM tickets WHERE campaign_id=?", [id])).n >= c.max };
     });
   }, "user"],
-  ["GET", /^\/api\/campanhas\/(\d+)\/foto$/, async ctx => imagem(((await db.get("SELECT foto f FROM campaigns WHERE id=?", [Number(ctx.params[0])])) || {}).f)],
-  ["GET", /^\/api\/banner$/, async () => imagem((await visual()).banner)],
+  ["GET", /^\/api\/campanhas\/(\d+)\/foto$/, ctx => { const id = Number(ctx.params[0]);
+    return imagemCacheada("c" + id, async () => ((await db.get("SELECT foto f FROM campaigns WHERE id=?", [id])) || {}).f); }],
+  ["GET", /^\/api\/banner$/, () => imagemCacheada("banner", async () => (await visual()).banner)],
   ["GET", /^\/api\/campanhas\/(\d+)\/verificacao$/, async ctx => { // prova pública do sorteio
     const id = Number(ctx.params[0]), c = await db.get("SELECT status, commit_hash FROM campaigns WHERE id=?", [id]);
     if (!c) throw new Erro("Sorteio não encontrado.", 404);
@@ -144,4 +191,4 @@ const rotas = [
       numeros: (await db.all("SELECT n FROM tickets WHERE campaign_id=? ORDER BY n", [id])).map(x => x.n), vencedor: w.n };
   }]
 ];
-module.exports = { rotas, corpoCampanha, configuracao3d, sortear, calcularVencedor, novaSemente, visual, imagem, RE, txt, foto };
+module.exports = { limparCacheImagens, rotas, corpoCampanha, configuracao3d, sortear, calcularVencedor, novaSemente, visual, imagem, RE, txt, foto };

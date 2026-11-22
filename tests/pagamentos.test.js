@@ -29,6 +29,7 @@ async function query(sql, p = []) {
   if (q.startsWith("SELECT max_por_usuario m, max FROM campaigns")) return rows([S.lim]);
   if (q.startsWith("SELECT 1 FROM tickets WHERE campaign_id=")) return rows(S.ocupados.includes(p[1]) ? [{}] : []);
   if (q.startsWith("SELECT 1 FROM reservas WHERE campaign_id=")) return rows([]);
+  if (q.startsWith("SELECT status FROM users WHERE id=")) return rows([{ status: S.donoStatus || "ACTIVE" }]);
   if (q.startsWith("SELECT nome, email FROM users")) return rows([{ nome: "Ana", email: "ana@teste.com" }]);
   if (q.startsWith("UPDATE pedidos SET status=$")) { S.pedido.status = p[0]; return rows([]); }
   if (q.includes("SET status='REFUND_NEEDED'")) { S.pedido.status = "REFUND_NEEDED"; return rows([]); }

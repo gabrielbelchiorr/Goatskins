@@ -19,7 +19,7 @@ moduleObj.filename = filename;
 moduleObj.require = id => {
   if (id === 'node:crypto') return require('node:crypto');
   if (id === './config') return cfg;
-  if (id === './http') return { Erro, ipDe: () => '127.0.0.1' };
+  if (id === './http') return { Erro, ipDe: () => '127.0.0.1', chaveIp: s => String(s) };
   if (id === './db') return { db: { get: async () => ({n:3}) }, sha: s => s };
   if (id === './registration') return { consumirLimite: async () => undefined };
   throw Error('Dependência inesperada: '+id);

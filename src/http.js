@@ -58,4 +58,26 @@ function ipDe(req) {
   if (xff) { const l = String(xff).split(",").map(s => s.trim()).filter(Boolean); if (l.length >= cfg.TRUST_PROXY_HOPS) { const ip = l[l.length - cfg.TRUST_PROXY_HOPS]; if (require("node:net").isIP(ip)) return ip; } }
   return req.socket.remoteAddress;
 }
-module.exports = { Erro, RE, txt, inteiro, foto, JPG, WEBP, abrev, limite, cookie, ipDe, _baldes, MAX_BALDES };
+/* Chave de cliente para os LIMITES (não para a auditoria, que guarda o IP inteiro).
+   Um único cliente IPv6 costuma receber um /64 inteiro: contar cada endereço separado dava a ele
+   2^64 cotas. Formas textuais diferentes do mesmo endereço ("::ffff:1.2.3.4", zeros à esquerda,
+   maiúsculas, "::") também viravam chaves diferentes. */
+function chaveIp(ip) {
+  let s = String(ip == null ? "" : ip).trim().toLowerCase();
+  const pct = s.indexOf("%"); if (pct >= 0) s = s.slice(0, pct);          // zona (fe80::1%eth0)
+  if (s.startsWith("[") && s.endsWith("]")) s = s.slice(1, -1);
+  const net = require("node:net");
+  if (net.isIPv4(s)) return s;
+  if (!net.isIPv6(s)) return s;
+  let [esq, dir = null] = s.split("::");
+  const partes = t => t ? t.split(":") : [];
+  let a = partes(esq), b = dir === null ? [] : partes(dir);
+  const v4 = x => { const u = x[x.length - 1]; if (u && net.isIPv4(u)) { const o = u.split(".").map(Number); x.splice(x.length - 1, 1, ((o[0] << 8) | o[1]).toString(16), ((o[2] << 8) | o[3]).toString(16)); } };
+  if (dir === null) v4(a); else v4(b);
+  const grupos = dir === null ? a : [...a, ...Array(8 - a.length - b.length).fill("0"), ...b];
+  const h = grupos.map(g => parseInt(g, 16));
+  // ::ffff:a.b.c.d (IPv4 mapeado) é o mesmo cliente que a.b.c.d
+  if (h.slice(0, 5).every(x => x === 0) && h[5] === 0xffff) return [h[6] >> 8, h[6] & 255, h[7] >> 8, h[7] & 255].join(".");
+  return h.slice(0, 4).map(x => x.toString(16)).join(":") + "::/64";
+}
+module.exports = { Erro, RE, txt, inteiro, foto, JPG, WEBP, abrev, limite, cookie, ipDe, chaveIp, _baldes, MAX_BALDES };

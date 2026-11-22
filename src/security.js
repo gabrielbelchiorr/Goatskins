@@ -1,6 +1,6 @@
 /* Boundary controls. No external service is contacted until local limits pass. */
 const cfg = require('./config');
-const { Erro, ipDe } = require('./http');
+const { Erro, ipDe, chaveIp } = require('./http');
 const { db, sha } = require('./db');
 const { consumirLimite } = require('./registration');
 const enabled = () => !!(cfg.TURNSTILE_SITE_KEY && cfg.TURNSTILE_SECRET_KEY);
@@ -47,7 +47,7 @@ async function proteger(req, body, rota) {
   if (req.method !== 'POST') return;
   const actions = {'/api/registro':'registro','/api/esqueci-senha':'recuperacao','/api/login':'login','/api/reenviar-verificacao':'reenvio'};
   const action = actions[rota]; if (!action) return;
-  const ip = sha(String(ipDe(req)));
+  const ip = sha(chaveIp(ipDe(req)));
   // Atomic SQL limits persist across process restarts and instances; no global write lock needed.
   if (!cfg.TESTE) await consumirLimite('auth-ip:'+action+':'+ip, action==='login'?30:10, 600000);
   if (action === 'login') {

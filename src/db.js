@@ -42,6 +42,10 @@ const db = { all, get, run, insert };
    BEGIN IMMEDIATE do SQLite fazia. Isso mantém as regras de "ler, conferir e gravar" (limites por pessoa, reservas
    de números) livres de corrida. As travas finas (UNIQUE/PRIMARY KEY) continuam como garantia final. */
 const LOCK_ESCRITA = 727401, LOCK_MIGRACAO = 727402;
+/* Conta as transações confirmadas neste processo. Caches de leitura (ex.: a parte pública de /api/estado)
+   guardam o número de quando foram montados e se descartam assim que alguma escrita é confirmada. */
+let geracaoEscrita = 0;
+const geracao = () => geracaoEscrita;
 async function tx(fn) {
   if (als.getStore()) return fn();               // já dentro de uma transação: participa dela
   const c = await pool.connect(); let quebrada = false;
@@ -58,7 +62,7 @@ async function tx(fn) {
       if (contexto && contexto.antesCommit) await contexto.verificar();
       return result;
     });
-    await c.query("COMMIT"); return r;
+    await c.query("COMMIT"); geracaoEscrita++; return r;
   } catch (e) {
     try { await c.query("ROLLBACK"); } catch (_) { quebrada = true; }
     throw e;
@@ -223,6 +227,19 @@ ALTER TABLE campaign_presets ADD COLUMN viewer_3d_pendente INTEGER CHECK(viewer_
 ALTER TABLE admin_mfa ADD COLUMN falhas INTEGER NOT NULL DEFAULT 0 CHECK(falhas>=0);
 ALTER TABLE admin_mfa ADD COLUMN bloqueado_ate BIGINT NOT NULL DEFAULT 0;
 `
+,
+/* 14: e-mail único sem diferenciar maiúsculas e índice para a retenção da auditoria. Não apaga nem
+   altera dados: se já houver dois e-mails iguais em maiúsculas diferentes, cria só um índice comum
+   (o login continua rápido) e o servidor avisa no log ao iniciar, para alguém resolver à mão. */ `
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM users WHERE email IS NOT NULL GROUP BY lower(email) HAVING COUNT(*) > 1) THEN
+    CREATE INDEX ix_users_email_lower ON users(lower(email));
+  ELSE
+    CREATE UNIQUE INDEX ux_users_email_lower ON users(lower(email)) WHERE email IS NOT NULL;
+  END IF;
+END $$;
+CREATE INDEX ix_audit_quando_acao ON audit_logs(quando, acao);
+`
 /* próximas alterações: acrescente novos itens a este array (nunca edite os já aplicados) */
 ];
 
@@ -255,7 +272,29 @@ async function semear() {
 
 /* Chame uma vez ao iniciar (servidor, scripts): cria/atualiza as tabelas. */
 let pronto = null;
-const iniciar = () => pronto || (pronto = (async () => { await migrar(); await semear(); })());
+const iniciar = () => pronto || (pronto = (async () => { await migrar(); await semear(); await conferirEmailUnico(); })());
+async function conferirEmailUnico() {
+  if (await get("SELECT 1 existe FROM pg_indexes WHERE tablename='users' AND indexname='ux_users_email_lower'")) return;
+  const n = (await get("SELECT COUNT(*) n FROM (SELECT 1 FROM users WHERE email IS NOT NULL GROUP BY lower(email) HAVING COUNT(*) > 1) d")).n;
+  if (n) console.warn("[banco] " + n + " e-mail(s) cadastrado(s) mais de uma vez com maiúsculas diferentes: o índice único não foi criado. " +
+    "Resolva as contas duplicadas e crie: CREATE UNIQUE INDEX ux_users_email_lower ON users(lower(email)) WHERE email IS NOT NULL;");
+}
+
+/* Retenção da auditoria: só eventos de rotina saem depois de RETENCAO_AUDITORIA_DIAS.
+   Pagamentos, pedidos, sorteios, entregas, ações de administração e contas ficam para sempre
+   (servem de prova). Apaga em lotes para não segurar o banco. */
+const RETENCAO_AUDITORIA_DIAS = 180;
+const AUDITORIA_ROTINA = ["LOGIN", "LOGIN_FALHA", "LOGOUT", "MFA_FALHA", "MFA_PREPARADO", "PERFIL_ATUALIZADO", "EMAIL_VERIFICADO",
+  "SENHA_RECUPERACAO_PEDIDA", "WEBHOOK_REJEITADO"];
+async function podarAuditoria(dias = RETENCAO_AUDITORIA_DIAS) {
+  const limiteData = new Date(Date.now() - dias * 864e5).toISOString(), marcas = AUDITORIA_ROTINA.map(() => "?").join(",");
+  let total = 0;
+  for (let i = 0; i < 100; i++) {
+    const r = await run("DELETE FROM audit_logs WHERE id IN (SELECT id FROM audit_logs WHERE quando<? AND acao IN (" + marcas + ") LIMIT 5000)", [limiteData, ...AUDITORIA_ROTINA]);
+    total += r.changes; if (r.changes < 5000) break;
+  }
+  return total;
+}
 const fechar = () => pool.end();
 
 async function audit(uid, acao, detalhe, ip) {
@@ -279,4 +318,4 @@ async function liberar() {
   await run("UPDATE pedidos SET status='EXPIRED', atualizado_em=? WHERE status='PENDING' AND mp_order_id IS NULL AND mp_creation_uncertain=0 AND expira_em<?", [agora(), Date.now()]);
   await run("DELETE FROM reservas WHERE pedido_id IN (SELECT id FROM pedidos WHERE status<>'PENDING')");
 }
-module.exports = { db, tx, comAutorizacao, iniciar, fechar, liberar, liberarSeVencido, ping, sha, agora, audit, notificar, novaSemente };
+module.exports = { geracao, podarAuditoria, AUDITORIA_ROTINA, db, tx, comAutorizacao, iniciar, fechar, liberar, liberarSeVencido, ping, sha, agora, audit, notificar, novaSemente };

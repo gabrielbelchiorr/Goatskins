@@ -37,7 +37,7 @@ test.after(() => { global.fetch = originalFetch; });
 test('www: caminho "//host" (de "/.//host") fica na origem canônica e não lança', () => {
   const sec = carregar('src/security.js', {
     './config': { PRODUCAO: true, APP_URL: 'https://goatskins.com.br' },
-    './http': { Erro, ipDe: () => '127.0.0.1' }, './db': { db: {}, sha: s => s }, './registration': { consumirLimite: async () => 1 },
+    './http': { Erro, ipDe: () => '127.0.0.1', chaveIp: s => String(s) }, './db': { db: {}, sha: s => s }, './registration': { consumirLimite: async () => 1 },
   });
   const req = (alvo) => ({ method: 'GET', headers: { host: 'www.goatskins.com.br' }, alvo });
   for (const alvo of ['/.//a:b', '/.//example.invalid/', '/%2e//a:b', '/..//x']) {
@@ -58,7 +58,7 @@ function segurancaComTurnstile() {
   };
   const sec = carregar('src/security.js', {
     './config': { PRODUCAO: true, TESTE: false, APP_URL: 'https://goatskins.com.br', TURNSTILE_SITE_KEY: 's', TURNSTILE_SECRET_KEY: 'k', TURNSTILE_HOSTNAMES: '' },
-    './http': { Erro, ipDe: () => '198.18.0.9' }, './db': { db: { get: async () => null }, sha: s => s },
+    './http': { Erro, ipDe: () => '198.18.0.9', chaveIp: s => String(s) }, './db': { db: { get: async () => null }, sha: s => s },
     './registration': { consumirLimite: lim.consumirLimite },
   });
   return { sec, chamadas };
@@ -108,7 +108,7 @@ test('login: após 5 tentativas o e-mail exige Turnstile (não bloqueia), com a 
     './registration': { consumirLimite: lim.consumirLimite, iniciar: async () => ({}) },
     './config': { PRODUCAO: false, TESTE: false }, './mail': { enviar: async () => null },
     './db': { db, sha: s => 'h:' + s, agora: () => 'agora', tx: f => f(), audit: async () => {}, notificar: async () => {}, comAutorizacao: (_a, f) => f() },
-    './http': { Erro, RE: { email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ }, txt: v => v, limite: () => {}, cookie: () => null, ipDe: () => '1.2.3.4' },
+    './http': { Erro, RE: { email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ }, txt: v => v, limite: () => {}, cookie: () => null, ipDe: () => '1.2.3.4', chaveIp: s => String(s) },
     './security': { verificar: async (token, acao) => { verificados.push(acao); if (token !== 'ok') { const e = new Erro('Conclua a verificação de segurança.', 403); e.tipo = 'TURNSTILE_REQUIRED'; throw e; } } },
   });
   hashCerto = await auth.hashSenha('Senha1234');

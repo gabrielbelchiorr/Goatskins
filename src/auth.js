@@ -2,7 +2,7 @@
 const crypto = require("node:crypto"), registration = require("./registration");
 const cfg = require("./config"), mail = require("./mail");
 const { db, sha, agora, tx, audit, notificar, comAutorizacao } = require("./db");
-const { Erro, RE, txt, limite, cookie, ipDe } = require("./http");
+const { Erro, RE, txt, limite, cookie, ipDe, chaveIp } = require("./http");
 
 const MAX_FALHAS = 5, BLOQUEIO_MS = 15 * 60e3, SESSAO_MS = 7 * 864e5;
 const senhaOk = s => typeof s === "string" && s.length >= 8 && s.length <= 100 && /[a-zA-Z]/.test(s) && /\d/.test(s);
@@ -76,7 +76,7 @@ const perfil = id => db.get("SELECT id, nome, email, telefone, celular, email_ve
 
 const rotas = [
   ["POST", /^\/api\/registro$/, async ctx => {
-    const b = ctx.body, ip = ctx.ip; limite("reg:" + ip, 10, 36e5);
+    const b = ctx.body, ip = ctx.ip; limite("reg:" + chaveIp(ip), 10, 36e5);
     const nome = txt(b.nome, 80, 2), email = txt(b.email, 120, 5).toLowerCase(), tel = require("./phone").normalize(b.telefone);
     if (!RE.email.test(email)) throw new Erro("E-mail inválido.");
     if (!senhaOk(b.senha)) throw new Erro(SENHA_MSG);
@@ -84,7 +84,7 @@ const rotas = [
     return registration.iniciar({ nome, email, telefone: tel, hash: await hashSenha(b.senha), consentimento_em: agora() }, ip);
   }],
   ["POST", /^\/api\/login$/, async ctx => {
-    const ip = ctx.ip; limite("login:" + ip, 30, 6e5);
+    const ip = ctx.ip; limite("login:" + chaveIp(ip), 30, 6e5);
     const email = String(ctx.body.email || "").trim().toLowerCase(), senha = String(ctx.body.senha || "");
     if (senha.length > 100 || email.length > 120) throw new Erro("E-mail ou senha incorretos.", 401);
     /* Orçamento por identificador digitado: as MAX_FALHAS primeiras tentativas da janela são livres; depois,
@@ -123,7 +123,7 @@ const rotas = [
   ["POST", /^\/api\/reenviar-verificacao$/, registration.reenviar],
   ["GET", /^\/api\/verificar-email$/, async () => ({ redirect: "/?msg=link-invalido" })],
   ["POST", /^\/api\/esqueci-senha$/, async ctx => {
-    limite("esq:" + ctx.ip, 5, 36e5);
+    limite("esq:" + chaveIp(ctx.ip), 5, 36e5);
     const email = String(ctx.body.email || "").trim().toLowerCase();
     if (!RE.email.test(email) || email.length > 120) throw new Erro("E-mail inválido.");
     // Mesmo trabalho para qualquer endereço válido: nenhum SELECT de usuário ou envio nesta resposta.
@@ -135,7 +135,7 @@ const rotas = [
     return { ok: true };
   }],
   ["POST", /^\/api\/redefinir-senha$/, async ctx => {
-    limite("red:" + ctx.ip, 10, 36e5);
+    limite("red:" + chaveIp(ctx.ip), 10, 36e5);
     if (!senhaOk(ctx.body.senha)) throw new Erro(SENHA_MSG);
     // Rejeita capacidades inválidas antes do scrypt. O consumo é revalidado atomicamente na tx abaixo.
     if (typeof ctx.body.token !== "string" || !/^[a-f0-9]{64}$/.test(ctx.body.token) ||
@@ -158,6 +158,8 @@ const rotas = [
   }],
   ["GET", /^\/api\/conta$/, ctx => perfil(ctx.user.id), "user"],
   ["PUT", /^\/api\/conta$/, async ctx => { // Dados cadastrais; formato do celular não comprova posse.
+    // Por conta: cada chamada grava na auditoria e toma a trava de escrita do site.
+    limite("conta:" + ctx.user.id, 20, 36e5);
     const nome=txt(ctx.body.nome,80,2);
     await tx(async()=>{
       if (ctx.body.telefone !== undefined) await require("./phone").save(ctx);
@@ -202,6 +204,12 @@ const rotas = [
     ctx.res.setHeader("Set-Cookie", "sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0" + (cfg.PRODUCAO ? "; Secure" : "")); return { ok: true };
   }, "user"],
   ["GET", /^\/api\/notificacoes$/, ctx => db.all("SELECT id, titulo, texto, lida, criado_em FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 30", [ctx.user.id]), "user"],
-  ["POST", /^\/api\/notificacoes\/lidas$/, async ctx => { await tx(() => db.run("UPDATE notifications SET lida=1 WHERE user_id=?", [ctx.user.id])); return { ok: true }; }, "user"]
+  ["POST", /^\/api\/notificacoes\/lidas$/, async ctx => {
+    limite("lidas:" + ctx.user.id, 30, 6e4);
+    // Sem nada por ler, não entra na transação (nem na trava de escrita do site).
+    if (await db.get("SELECT 1 tem FROM notifications WHERE user_id=? AND lida=0 LIMIT 1", [ctx.user.id]))
+      await tx(() => db.run("UPDATE notifications SET lida=1 WHERE user_id=? AND lida=0", [ctx.user.id]));
+    return { ok: true };
+  }, "user"]
 ];
 module.exports = { abrirSessao, rotas, usuarioDaSessao, exigirSessao, hashSenha, confere, senhaOk, ipDe };

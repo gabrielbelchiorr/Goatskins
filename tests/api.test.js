@@ -629,6 +629,57 @@ test("usuário suspenso perde a sessão na hora e não consegue entrar", async (
   assert.equal((await c.get("/api/conta")).status, 401); assert.equal((await cliente().post("/api/login", { email, senha: "Senha1234" })).status, 401);
 });
 
+test("conta suspensa: participante suspenso trava o sorteio até ser reativado; ganhador nunca é suspenso", async () => {
+  const adm = await adminLogado(), s = await novoSorteio(adm, { max: 2 }), a = await novoUsuario(), b = await novoUsuario();
+  assert.equal((await a.c.post("/api/campanhas/" + s.id + "/numeros", { numeros: [1] })).status, 200);
+  assert.equal((await b.c.post("/api/campanhas/" + s.id + "/numeros", { numeros: [2] })).status, 200);
+  assert.equal((await adm.put("/api/admin/usuarios/" + idDe(b.email) + "/status", { status: "SUSPENDED" })).status, 200);
+  const r = await adm.post("/api/admin/campanhas/" + s.id + "/sortear");
+  assert.equal(r.status, 409); assert.match(r.dados.erro, /conta suspensa/);
+  assert.equal(dbLer("SELECT COUNT(*) n FROM winners WHERE campaign_id=?", s.id)[0].n, 0);        // nada foi sorteado nem revelado
+  assert.equal(dbLer("SELECT COUNT(*) n FROM tickets WHERE campaign_id=?", s.id)[0].n, 2);         // e a lista comprometida não mudou
+  assert.equal((await adm.put("/api/admin/usuarios/" + idDe(b.email) + "/status", { status: "ACTIVE" })).status, 200);
+  assert.equal((await adm.post("/api/admin/campanhas/" + s.id + "/sortear")).status, 200);
+});
+
+test("conta suspensa: Pix pago depois da suspensão não confirma números e vai para reembolso", async () => {
+  const adm = await adminLogado(), s = await pagoSorteio(adm), { c, email } = await novoUsuario();
+  const p = (await pedir(c, s, [4])).dados, id = ultimoMp();
+  assert.equal((await adm.put("/api/admin/usuarios/" + idDe(email) + "/status", { status: "SUSPENDED" })).status, 200);
+  mpEstado(id, "pago");
+  assert.equal((await webhook(id)).status, 200);
+  assert.equal(dbLer("SELECT status FROM pedidos WHERE public_id=?", p.id)[0].status, "REFUND_NEEDED");
+  assert.equal(dbLer("SELECT COUNT(*) n FROM tickets WHERE campaign_id=?", s.id)[0].n, 0);
+  assert.deepEqual((await estadoDe(cliente(), s)).reservados, []);                                  // o número voltou a ficar livre
+  assert.equal(dbLer("SELECT COUNT(*) n FROM audit_logs WHERE acao='PAGAMENTO_CONTA_SUSPENSA' AND detalhe LIKE ?", "pedido " + dbLer("SELECT id FROM pedidos WHERE public_id=?", p.id)[0].id + " %")[0].n, 1);
+  assert.equal((await webhook(id)).status, 200);                                                    // idempotente
+  assert.equal(dbLer("SELECT status FROM pedidos WHERE public_id=?", p.id)[0].status, "REFUND_NEEDED");
+});
+
+test("e-mail é único sem diferenciar maiúsculas (migração 14)", () => {
+  dbLer("INSERT INTO users(nome,contato,email,hash) VALUES('Caixa','caixa-unica@teste.com','caixa-unica@teste.com','x')");
+  assert.throws(() => dbLer("INSERT INTO users(nome,contato,email,hash) VALUES('Caixa 2','caixa-2@teste.com','Caixa-Unica@Teste.com','x')"), /ux_users_email_lower|duplicate|duplicad/i);
+  dbLer("DELETE FROM users WHERE contato='caixa-unica@teste.com'");
+});
+
+test("retenção da auditoria: apaga só rotina antiga; pagamentos e sorteios antigos ficam", () => {
+  const velho = new Date(Date.now() - 200 * 864e5).toISOString(), novo = new Date().toISOString();
+  dbLer("INSERT INTO audit_logs(quando,acao,detalhe) VALUES(?,'LOGIN_FALHA','ret-teste'),(?,'PAGAMENTO_CONFIRMADO','ret-teste'),(?,'SORTEIO','ret-teste'),(?,'LOGIN_FALHA','ret-teste')", velho, velho, velho, novo);
+  const r = spawnSync(process.execPath, ["--no-warnings", "-e", "const d=require('./src/db');d.podarAuditoria().then(n=>{console.log('apagadas='+n);return d.fechar()})"], { cwd: path.join(__dirname, ".."), env, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /apagadas=\d+/);
+  const ficaram = dbLer("SELECT acao, quando FROM audit_logs WHERE detalhe='ret-teste' ORDER BY id").map(x => x.acao + (x.quando === velho ? ":velho" : ":novo"));
+  assert.deepEqual(ficaram, ["PAGAMENTO_CONFIRMADO:velho", "SORTEIO:velho", "LOGIN_FALHA:novo"]);
+});
+
+test("notificações: marcar como lidas funciona e repetir sem nada por ler não falha", async () => {
+  const { c, email } = await novoUsuario(), uid = idDe(email);
+  dbLer("INSERT INTO notifications(user_id,titulo,texto,criado_em) VALUES(?,'t','x',?)", uid, new Date().toISOString());
+  assert.ok(dbLer("SELECT COUNT(*) n FROM notifications WHERE user_id=? AND lida=0", uid)[0].n >= 1);
+  assert.equal((await c.post("/api/notificacoes/lidas")).status, 200);
+  assert.equal(dbLer("SELECT COUNT(*) n FROM notifications WHERE user_id=? AND lida=0", uid)[0].n, 0);
+  assert.equal((await c.post("/api/notificacoes/lidas")).status, 200);
+});
+
 test("hierarquia: ADMIN comum não promove ninguém, não mexe em outro ADMIN nem no SUPER_ADMIN", async () => {
   const sup = await adminLogado(), a = await novoUsuario(), b = await novoUsuario(), idA = idDe(a.email), idB = idDe(b.email), idSup = idDe("admin@teste.com");
   assert.equal((await sup.put("/api/admin/usuarios/" + idA + "/papel", { role: "ADMIN" })).status, 200);

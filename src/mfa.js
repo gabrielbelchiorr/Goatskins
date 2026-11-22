@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const cfg = require('./config');
 const { db, tx, sha, audit, notificar } = require('./db');
-const { Erro, cookie } = require('./http');
+const { Erro, cookie, chaveIp } = require('./http');
 const { consumirLimite } = require('./registration');
 const ADMIN = ['ADMIN','SUPER_ADMIN'], ELEVACAO_MS = 15 * 60000, SESSAO_MS = 8 * 3600000;
 // Falhas consecutivas do código (não só por janela): sem isso, 8 tentativas a cada 10 min
@@ -87,7 +87,7 @@ async function senha(ctx) {
   // Fora da tx de verificação: erros não apagam as tentativas. Nunca desativados por TESTE.
   await tx(async()=>{
     await consumirLimite('mfa-account:'+ctx.user.id,8,600000);
-    await consumirLimite('mfa-ip:'+sha(String(ctx.ip)),40,600000);
+    await consumirLimite('mfa-ip:'+sha(chaveIp(ctx.ip)),40,600000);
   });
   const u=await vivo(ctx);
   if(typeof ctx.body.senha!=='string'||!await require('./auth').confere(ctx.body.senha,u.hash)) {

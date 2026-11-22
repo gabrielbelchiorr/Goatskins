@@ -8,7 +8,7 @@
 const crypto = require("node:crypto");
 const cfg = require("./config"), mp = require("./mercadopago"), mail = require("./mail");
 const { db, sha, agora, tx, audit, notificar, liberar, liberarSeVencido } = require("./db");
-const { Erro, inteiro, limite } = require("./http");
+const { Erro, inteiro, limite, chaveIp } = require("./http");
 
 const MAX_PENDENTES = 3;                                   // pedidos Pix abertos por pessoa (evita "segurar" números sem pagar)
 // Alert only: never release a possibly payable order merely because time passed.
@@ -93,6 +93,16 @@ function aplicarNoBanco(pedidoId, o) {
     }
     /* PAGO: confirmar os números */
     const nums = JSON.parse(p.numeros), c = await db.get("SELECT status FROM campaigns WHERE id=?", [p.campaign_id]);
+    // Conta suspensa depois de gerar o Pix: o dinheiro entrou, mas a pessoa não pode passar a concorrer.
+    // Os números voltam a ficar livres e o pedido vai para reembolso, como no pagamento tardio.
+    const dono = await db.get("SELECT status FROM users WHERE id=?", [p.user_id]);
+    if (!dono || dono.status !== "ACTIVE") {
+      await db.run("DELETE FROM reservas WHERE pedido_id=?", [p.id]);
+      await db.run("UPDATE pedidos SET status='REFUND_NEEDED', mp_status='processed', atualizado_em=?, pago_em=? WHERE id=?", [agoraIso, agoraIso, p.id]);
+      await audit(p.user_id, "PAGAMENTO_CONTA_SUSPENSA", "pedido " + p.id + " pago com a conta " + (dono ? dono.status : "inexistente") + "; reembolsar");
+      if (dono) await notificar(p.user_id, "Pagamento recebido", "Sua conta está suspensa, então os números não foram confirmados. O valor será devolvido; fale com o suporte.");
+      return { status: "REFUND_NEEDED" };
+    }
     const aindaReservado = (await db.get("SELECT COUNT(*) n FROM reservas WHERE pedido_id=?", [p.id])).n === nums.length;
     if (!aindaReservado) { // a reserva venceu antes do pagamento chegar: só vende se os números continuam livres
       let ocupado = !c || c.status !== "OPEN";
@@ -188,7 +198,13 @@ async function finalizarVencidos() {
   })().finally(() => { varreduraAtiva = null; });
   return varreduraAtiva;
 }
-setInterval(() => { finalizarVencidos().catch(e => console.error("varredura Pix:", e.message)); }, 5000).unref();
+/* Ligada só pelo servidor (server.js main). Antes ela armava ao carregar o módulo, então o comando
+   "criar-admin", rodado contra o banco de produção a partir de outra máquina, também cancelava e
+   confirmava pedidos reais com a configuração de pagamento local. */
+let timerVarredura = null;
+function iniciarVarredura() {
+  if (!timerVarredura) timerVarredura = setInterval(() => { finalizarVencidos().catch(e => console.error("varredura Pix:", e.message)); }, 5000).unref();
+}
 
 const rotas = [
   /* 1-8: o usuário escolhe os números; preço e disponibilidade vêm SEMPRE do banco */
@@ -272,7 +288,7 @@ const rotas = [
   ["POST", /^\/api\/webhooks\/mercadopago$/, async ctx => {
     logWebhook('log', 'requisicao_recebida');
     if (!mp.configurado()) { logWebhook('error', 'configuracao_indisponivel'); throw new Erro("Indisponível.", 503); }
-    limite("wh:" + ctx.ip, 600, 6e4);
+    limite("wh:" + chaveIp(ctx.ip), 600, 6e4);
     const h = ctx.req.headers, corpo = ctx.body && typeof ctx.body === "object" ? ctx.body : {};
     // Documentação: o id vem em ?data.id=ORD...&type=order. O corpo JSON ({type, data:{id}}) serve de reserva.
     const dataId = String(ctx.query["data.id"] || (corpo.data && corpo.data.id) || "");
@@ -281,7 +297,7 @@ const rotas = [
       logWebhook('warn', 'assinatura_rejeitada', {assinatura_presente:!!h['x-signature'], request_id_presente:!!h['x-request-id'], id_presente:!!dataId, tipo:tipo.slice(0,20), ip:String(ctx.ip).slice(0,45)});
       // Requisições anônimas não podem encher a auditoria: no máximo uma linha por IP por hora;
       // as demais ficam só no log do servidor (acima, com o IP).
-      try { await require("./registration").consumirLimite("wh-audit:" + sha(String(ctx.ip)), 1, 36e5); await audit(null, "WEBHOOK_REJEITADO", "assinatura inválida (repetições do mesmo IP na hora ficam só no log do servidor)", ctx.ip); }
+      try { await require("./registration").consumirLimite("wh-audit:" + sha(chaveIp(ctx.ip)), 1, 36e5); await audit(null, "WEBHOOK_REJEITADO", "assinatura inválida (repetições do mesmo IP na hora ficam só no log do servidor)", ctx.ip); }
       catch (e) { if (e.code !== 429) throw e; }
       throw new Erro("Assinatura inválida.", 401);
     }
@@ -316,4 +332,4 @@ const rotas = [
     return { ok: true };
   }, "admin"]
 ];
-module.exports = { rotas, aplicar, interpretar, crc16, brcodeOk, finalizarVencidos, precisaRevisao };
+module.exports = { iniciarVarredura, rotas, aplicar, interpretar, crc16, brcodeOk, finalizarVencidos, precisaRevisao };

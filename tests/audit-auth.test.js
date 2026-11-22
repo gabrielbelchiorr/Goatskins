@@ -20,7 +20,7 @@ function offline({ get = async () => undefined, run = async () => ({ changes: 1 
     './mail': mail,
     './db': { db: { get, run }, sha: s => crypto.createHash('sha256').update(s).digest('hex'),
       tx: fn => fn(), agora: () => new Date().toISOString(), audit: async () => {} },
-    './http': { Erro, limite: () => {}, RE: { email: /^[^@]+@[^@]+\.[^@]+$/ } }
+    './http': { Erro, limite: () => {}, chaveIp: s => String(s), RE: { email: /^[^@]+@[^@]+\.[^@]+$/ } }
   };
   const sandbox = { module: { exports: {} }, Buffer, Date, console,
     setInterval: () => ({ unref() {} }), require: name => {

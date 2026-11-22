@@ -4,7 +4,7 @@
 const crypto = require('node:crypto');
 const cfg = require('./config'), mail = require('./mail');
 const { db, tx, sha, agora, audit, notificar } = require('./db');
-const { Erro } = require('./http');
+const { Erro, chaveIp } = require('./http');
 const CODIGO_MS = 10 * 60e3, CADASTRO_MS = 30 * 60e3;
 const mensagem = 'Se o endereço puder ser cadastrado, você receberá um código. Se já tiver uma conta, entre ou recupere sua senha. Confira também o spam.';
 const digest = (tokenHash, codigo) => crypto.createHmac('sha256', cfg.EMAIL_CODE_SECRET).update(tokenHash + ':' + codigo).digest('hex');
@@ -32,7 +32,7 @@ async function limiteEnvio(email, ip, finalidade = 'cadastro') {
   const rec = finalidade === 'recuperacao';
   await consumirLimite((rec ? 'email-rec:' : 'email:') + sha(email), 5, 36e5, 60e3, 'Aguarde pelo menos 60 segundos entre envios. Limite de 5 mensagens por hora por e-mail.');
   if (!cfg.TESTE) {
-    await consumirLimite('envio-ip:' + sha(String(ip)), 20, 36e5);
+    await consumirLimite('envio-ip:' + sha(chaveIp(ip)), 20, 36e5);
     await consumirLimite(rec ? 'envio-global-rec' : 'envio-global', 200, 36e5);
   }
 }
@@ -94,7 +94,7 @@ async function confirmar(ctx) {
   if (!tokenValido(ctx.body.token)) throw invalido();
   // Erros de código retornam de dentro da transação; lançar antes do commit apagaria a contagem de falhas.
   const resultado = await tx(async () => {
-    if (!cfg.TESTE) await consumirLimite('verificar-ip:' + sha(String(ctx.ip)), 60, 36e5);
+    if (!cfg.TESTE) await consumirLimite('verificar-ip:' + sha(chaveIp(ctx.ip)), 60, 36e5);
     const p = await db.get('SELECT * FROM pending_registrations WHERE token_hash=? FOR UPDATE', [sha(ctx.body.token)]);
     if (!p || p.cadastro_expira <= Date.now() || p.expira <= Date.now() || p.tentativas >= 5 || !p.enviado) return false;
     // Avisos (endereço que já tem conta) nunca confirmam; não gastam a cota do endereço.
