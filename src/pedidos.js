@@ -219,7 +219,7 @@ const rotas = [
     const publicId = crypto.randomBytes(16).toString("hex");
     const pedido = await tx(async () => {
       await liberar();
-      const c = await db.get("SELECT * FROM campaigns WHERE id=?", [campId]); if (!c) throw new Erro("Sorteio não encontrado.", 404);
+      const c = await db.get("SELECT id, premio, status, max, max_por_usuario, preco_centavos FROM campaigns WHERE id=?", [campId]); if (!c) throw new Erro("Sorteio não encontrado.", 404);
       if (c.status !== "OPEN") throw new Erro("Este sorteio não está aberto.");
       if (c.preco_centavos <= 0) throw new Erro("Este sorteio é gratuito: escolha os números direto no sorteio.");
       if (lista.some(n => n > c.max)) throw new Erro("Número fora do sorteio.");

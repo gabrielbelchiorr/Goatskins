@@ -1712,3 +1712,11 @@ main .sale-numbers>.sale-checkout.has-selection{position:sticky;z-index:20;botto
 /* Fotos antigas em JPEG com fundo preto (detectado no script): o preto se funde à iluminação do card. */
 .sale-art{isolation:isolate}
 .prize.fundo-escuro img,.sale-art.fundo-escuro img{mix-blend-mode:lighten;filter:none}
+
+/* Aviso rápido (avisoRapido no script): confirma ações do painel mesmo depois que ele é redesenhado. */
+.toast-area{position:fixed;z-index:200;right:16px;bottom:calc(16px + var(--tabbar-height,0px));left:auto;display:grid;gap:8px;width:min(360px,calc(100vw - 32px));pointer-events:none}
+.toast{margin:0;padding:12px 14px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface-raised);color:var(--text);font-size:var(--fs-sm);box-shadow:var(--shadow-sm);pointer-events:auto;animation:toast-entra var(--duration) var(--ease)}
+.toast.is-success{border-color:color-mix(in srgb,var(--success) 45%,transparent);border-left:4px solid var(--success)}
+.toast.is-error{border-color:color-mix(in srgb,var(--danger) 45%,transparent);border-left:4px solid var(--danger)}
+@keyframes toast-entra{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.toast{animation:none}}

@@ -137,7 +137,8 @@ async function closeRace(paid) {
   }
   store.db.get = async (sql, args) => {
     const row = await originalGet(sql, args);
-    if (!paused && sql === 'SELECT * FROM campaigns WHERE id=?' && args[0] === c.id) {
+    // A leitura do sorteio dentro da transação de participação (colunas explícitas desde a etapa 3).
+    if (!paused && /^SELECT [\w, *]+ FROM campaigns WHERE id=\?$/.test(sql) && sql.includes('max_por_usuario') && args[0] === c.id) {
       paused = true; announce(); await held;
     }
     return row;

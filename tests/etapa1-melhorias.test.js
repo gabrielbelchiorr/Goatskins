@@ -34,7 +34,6 @@ function rifasComDubles() {
     all: async () => { consultas++; await new Promise(r => setImmediate(r)); return []; },
     get: async (sql) => {
       if (sql.includes("FROM settings")) { consultas++; return undefined; }
-      if (sql.includes('SELECT foto f')) { imagens++; return { f: 'data:image/jpeg;base64,/9j/AAAA' }; }
       return { n: 0 };
     },
   };
@@ -45,6 +44,8 @@ function rifasComDubles() {
     './mail': {}, './mercadopago': { configurado: () => true },
     './config': { TESTE: false, CS2INSPECT_EMBED_KEY: '' },
     './pedidos': { finalizarVencidos: async () => { varreduras++; } },
+    './imagens': { chaveCampanha: id => 'campanha:' + id, CHAVE_BANNER: 'banner', legadoCampanha: () => async () => '', legadoBanner: async () => '',
+      ler: async () => { imagens++; return { raw: Buffer.from([0xff, 0xd8]), tipo: 'image/jpeg' }; } },
   });
   return { rifas, escrever: () => ger++, consultas: () => consultas, varreduras: () => varreduras, imagens: () => imagens };
 }

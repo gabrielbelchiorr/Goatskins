@@ -28,7 +28,8 @@ function preparar({status='CLOSED', archived=0, tickets=0, reservas=0, pendentes
   const mocks = {
     './db': {db,tx:fn=>fn(),liberar:async()=>{},agora:()=>'',audit:async(...args)=>chamadas.push(['audit', ...args]),novaSemente:()=>{}},
     './http': {Erro,RE:{},txt:()=>'',foto:()=>'',ipDe:()=>''},
-    './rifas': {corpoCampanha:()=>{}, sortear:()=>{}, visual:()=>{}}
+    './rifas': {corpoCampanha:()=>{}, sortear:()=>{}, visual:()=>{}},
+    './imagens': {}
   };
   const codigo = fs.readFileSync(path.join(__dirname,'../src/admin.js'),'utf8');
   const sandbox = {module:{exports:{}},require:n=>{ if (!(n in mocks)) throw Error('Import inesperado '+n); return mocks[n]; }};

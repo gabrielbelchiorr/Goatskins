@@ -25,14 +25,23 @@ const precoNumero = c => c.preco > 0 ? brl(c.preco) : "Grátis";
 const admin = () => !!S.eu && (S.eu.role === "ADMIN" || S.eu.role === "SUPER_ADMIN");
 
 /* Requisições à API com o cabeçalho exigido pela proteção CSRF. */
+/* Sem rede ou com o servidor demorando, o navegador lança mensagens técnicas ("Failed to fetch",
+   "signal timed out"). Aqui elas viram um texto que a pessoa entende. */
+async function buscar(url, opcoes) {
+  try { return await fetch(url, opcoes); }
+  catch (e) {
+    if (e && (e.name === "TimeoutError" || e.name === "AbortError")) throw new Error("O servidor demorou para responder. Confira sua conexão e tente de novo.");
+    throw new Error(navigator.onLine === false ? "Você está sem internet. Conecte-se e tente de novo." : "Não foi possível falar com o servidor. Tente de novo em instantes.");
+  }
+}
 async function api(url, method, body, mfaRetry = false) {
-  const r = await fetch(url, { method: method || "GET", credentials: "same-origin", signal: AbortSignal.timeout(20000),
+  const r = await buscar(url, { method: method || "GET", credentials: "same-origin", signal: AbortSignal.timeout(20000),
     headers: { "Content-Type": "application/json", "X-Requested-With": "goatskins" }, body: body ? JSON.stringify(body) : undefined });
   const d = await r.json().catch(() => ({}));
   if (!r.ok && d.tipo === "TURNSTILE_REQUIRED") {
     const action = url === "/api/login" ? "login" : url === "/api/registro" ? "registro" : url === "/api/reenviar-verificacao" ? "reenvio" : "recuperacao";
     const token = await desafioSeguranca(action);
-    const retry = await fetch(url, {method: method || "GET", credentials:"same-origin", signal:AbortSignal.timeout(20000), headers:{"Content-Type":"application/json","X-Requested-With":"goatskins"}, body:JSON.stringify({...body,turnstileToken:token})});
+    const retry = await buscar(url, {method: method || "GET", credentials:"same-origin", signal:AbortSignal.timeout(20000), headers:{"Content-Type":"application/json","X-Requested-With":"goatskins"}, body:JSON.stringify({...body,turnstileToken:token})});
     const result = await retry.json(); if(!retry.ok) throw new Error(result.erro || "Falha na verificação."); return result;
   }
   if (!r.ok && d.tipo === 'MFA_REQUIRED') mfaConfirmadoAte = 0; // o servidor manda: a elevação acabou
@@ -200,6 +209,17 @@ function tabela(cab, linhas) {
   scroll.setAttribute("aria-label", "Tabela: " + cab.join(", ")); scroll.append(t); return scroll;
 }
 async function rodar(err, fn) { try { await fn(); } catch (e) { mostrarFeedback(err, e.message); } }
+/* Aviso curto no canto da tela. Sobrevive ao redesenho do painel (que apaga as mensagens dentro dele),
+   então serve para confirmar que uma ação administrativa deu certo. */
+function avisoRapido(texto, sucesso = true) {
+  let area = document.getElementById("avisoRapido");
+  if (!area) { area = h("div", "toast-area"); area.id = "avisoRapido"; area.setAttribute("aria-live", "polite"); document.body.append(area); }
+  const item = h("p", "toast" + (sucesso ? " is-success" : " is-error"), texto);
+  item.setAttribute("role", sucesso ? "status" : "alert");
+  area.append(item);
+  while (area.children.length > 3) area.firstChild.remove();
+  setTimeout(() => item.remove(), sucesso ? 4000 : 7000);
+}
 
 /* Componentes de apresentação. As rotas, os corpos e as regras do servidor são preservados. */
 function mostrarFeedback(el, texto, sucesso = false) {
@@ -521,7 +541,7 @@ function cardSorteio(c) {
     summary.setAttribute('aria-label', 'Ações administrativas de ' + c.premio);
     const actions = h('div', 'card-admin-actions');
     if (fechado && c.total > 0) actions.append(botao("Girar roleta", "alt", () => roleta(c)));
-    if (!fechado) actions.append(botao("Encerrar inscrições", "alt sale-close-btn", async () => { if (confirm("Encerrar as inscrições de " + c.premio + "?")) { try { await api("/api/admin/campanhas/" + c.id + "/encerrar", "POST"); await carregar(); } catch (e) { alert(e.message); } } }));
+    if (!fechado) actions.append(botao("Encerrar inscrições", "alt sale-close-btn", async () => { if (confirm("Encerrar as inscrições de " + c.premio + "?")) { try { await api("/api/admin/campanhas/" + c.id + "/encerrar", "POST"); await carregar(); avisoRapido("Inscrições encerradas."); } catch (e) { avisoRapido(e.message, false); } } }));
     actions.append(botao("Editar", "alt sale-edit-btn", () => painel("sorteios", c)));
     controls.append(summary, actions); card.append(controls);
   }
@@ -869,9 +889,9 @@ function verificarEmailModal() { return confirmacaoPendente ? confirmarCadastroM
 
 /* ---------- Pix: sessão persistente no banco, com contagem baseada no servidor ---------- */
 const STATUS_PEDIDO = { PENDING: "Aguardando pagamento", PAID: "Pago", EXPIRED: "Expirado", CANCELED: "Cancelado", FAILED: "Não concluído", REFUND_NEEDED: "Reembolso em andamento", REFUNDED: "Reembolsado" };
-const MSG_PEDIDO = { EXPIRED: "O prazo terminou. O sistema só libera os números depois de cancelar a cobrança no Mercado Pago.",
-  CANCELED: "A cobrança foi cancelada e os números foram liberados.", FAILED: "O pagamento não foi concluído e os números foram liberados.",
-  REFUND_NEEDED: "Recebemos um pagamento após o prazo e o valor precisa ser devolvido.", REFUNDED: "O valor deste pedido foi devolvido." };
+const MSG_PEDIDO = { EXPIRED: "O prazo para pagar terminou e a cobrança foi cancelada no Mercado Pago. Os números voltaram a ficar livres; você pode fazer um novo pedido.",
+  CANCELED: "A cobrança foi cancelada e os números foram liberados.", FAILED: "O Pix não foi concluído e os números foram liberados. Nenhum valor foi cobrado; você pode tentar de novo.",
+  REFUND_NEEDED: "Recebemos o pagamento, mas os números não puderam ser confirmados (por exemplo, o Pix chegou depois do prazo). O valor será devolvido; fale com o suporte se precisar.", REFUNDED: "O valor deste pedido foi devolvido." };
 const relogio = expira => {
   const segundos=Math.max(0,Math.ceil((Number(expira)-Date.now())/1000));
   return String(Math.floor(segundos/60)).padStart(2,"0")+":"+String(segundos%60).padStart(2,"0");
@@ -927,8 +947,16 @@ function pedidoModal(p0) {
       atualizarPendente();carregar().catch(()=>{});return;
     }
     const aindaValido=Number(p.expira_em)>Date.now();
-    if(!aindaValido || !p.pix) {
-      card.append(h("span","pix-countdown pix-expired","◷ PRAZO DE 5 MINUTOS ENCERRADO"),
+    if(aindaValido && !p.pix) {
+      // O pedido existe, mas o Mercado Pago ainda não devolveu o QR Code (resposta lenta ou em dúvida).
+      // Antes esta tela dizia "prazo encerrado" mesmo com o prazo correndo.
+      card.append(h("span","pix-countdown","◷ GERANDO O PIX"),
+        h("h2",null,"Preparando seu Pix"),
+        h("p","muted center","O Mercado Pago está demorando para responder. Seus números estão reservados e o QR Code aparece aqui assim que chegar. Não é preciso fazer outro pedido."));
+      return;
+    }
+    if(!aindaValido) {
+      card.append(h("span","pix-countdown pix-expired","◷ PRAZO PARA PAGAR ENCERRADO"),
         h("h2",null,"Encerrando cobrança"),
         h("p","muted center","O pagamento está sendo conciliado com o Mercado Pago. Os números ficam protegidos até a confirmação do cancelamento ou do pagamento."));
       return;
@@ -964,7 +992,7 @@ function pedidoModal(p0) {
     if(!atual()){limpar();return;}
     const rel=card.querySelector(".pix-countdown");if(rel&&rel.tick)rel.tick();
   },1000);
-  let chamadas=0;
+  let chamadas=0, falhas=0;
   consulta=setInterval(async()=>{
     if(!atual()){limpar();return;}
     if(document.hidden||consultando||p.status!=="PENDING")return;
@@ -973,9 +1001,12 @@ function pedidoModal(p0) {
       const antes=p.status, antesPix=!!p.pix;
       const resposta=++chamadas%2===0 ? await api("/api/pedidos/"+p.id+"/atualizar","POST") : await api("/api/pedidos/"+p.id);
       if(!atual())return;
-      p=resposta;
+      p=resposta; falhas=0; if(err.dataset.conexao){err.textContent="";delete err.dataset.conexao;}
       if(p.status!==antes||!!p.pix!==antesPix)desenhar();
-    } catch(e) { /* falha de rede: mantém o pedido, tenta de novo na próxima consulta */ }
+    } catch(e) {
+      // Falha de rede: mantém o pedido e tenta de novo; depois de duas seguidas, avisa sem assustar.
+      if(++falhas>=2&&atual()){err.textContent="Sem conexão com o servidor no momento. Se você já pagou, o pagamento não se perde: a confirmação aparece assim que a conexão voltar.";err.dataset.conexao="1";}
+    }
     finally {consultando=false;}
   },10000);
   atualizarPendente();
@@ -1393,12 +1424,12 @@ async function abaSorteios(box, entrada) {
   editorConfiguracao(box, {dados:c, campanha:edit, predefinicao:entrada?.predefinicao});
   box.append(err);
   if (edit) box.append(" ", botao("Excluir este sorteio", "alt", () => rodar(err, async () => {
-    if (!confirm("Excluir " + c.premio + " e todos os números escolhidos?")) return; await api("/api/admin/campanhas/" + c.id, "DELETE"); await carregar(); painel("sorteios"); })));
+    if (!confirm("Excluir " + c.premio + " e todos os números escolhidos?")) return; await api("/api/admin/campanhas/" + c.id, "DELETE"); await carregar(); painel("sorteios"); avisoRapido("Sorteio excluído."); })));
   if (edit && c.status === "CLOSED" && c.total === 0) {
     box.append(" ", botao("Arquivar este sorteio", "alt", () => rodar(err, async () => {
       if (!confirm("Arquivar " + c.premio + "? Ele sumirá da página pública, mas os pedidos serão preservados.")) return;
       await api("/api/admin/campanhas/" + c.id + "/arquivar", "POST");
-      await carregar(); painel("sorteios");
+      await carregar(); painel("sorteios"); avisoRapido("Sorteio arquivado.");
     })));
   }
   box.append(h("h4", null, "Sorteios não arquivados"));
@@ -1413,7 +1444,7 @@ async function abaSorteios(box, entrada) {
         rodar(errRow, async () => {
           if (!confirm("Arquivar " + x.premio + "? Os pedidos não serão apagados.")) return;
           await api("/api/admin/campanhas/" + x.id + "/arquivar", "POST");
-          await carregar(); painel("sorteios");
+          await carregar(); painel("sorteios"); avisoRapido("Sorteio arquivado.");
         });
       }));
     box.append(row);
@@ -1429,7 +1460,7 @@ async function abaSorteios(box, entrada) {
         botao("Restaurar", "alt", () => rodar(errRow, async () => {
           if (!confirm("Restaurar " + x.premio + " para a página pública? Ele continuará encerrado.")) return;
           await api("/api/admin/campanhas/" + x.id + "/desarquivar", "POST");
-          await carregar(); painel("sorteios");
+          await carregar(); painel("sorteios"); avisoRapido("Sorteio restaurado.");
         })), errRow);
       archivadas.append(row);
     });
@@ -1460,7 +1491,7 @@ async function abaPedidos(box) {
   }
   const rb = d.pedidos.filter(p => p.status === "REFUND_NEEDED");
   if (rb.length) { box.append(h("h4", null, "Reembolsos pendentes (devolva no painel do Mercado Pago e marque aqui)")); rb.forEach(p => { const row = h("div", "arow"), value=h('span',null,p.nome + ' · ' + p.email + ' · ' + p.premio + ' · Nº ' + JSON.parse(p.numeros).join(',') + ' · ');value.append(h('span','money',brl(p.total)), ' · ref. ' + (p.mp_order_id || '-')); row.append(value,
-    botao("Marcar reembolsado", "alt", () => rodar(err, async () => { if (!confirm("Confirma que o reembolso já foi realizado no Mercado Pago?")) return; await api("/api/admin/pedidos/" + p.id + "/reembolsado", "POST"); painel("pedidos"); }))); box.append(row); }); }
+    botao("Marcar reembolsado", "alt", () => rodar(err, async () => { if (!confirm("Confirma que o reembolso já foi realizado no Mercado Pago?")) return; await api("/api/admin/pedidos/" + p.id + "/reembolsado", "POST"); painel("pedidos"); avisoRapido("Pedido marcado como reembolsado."); }))); box.append(row); }); }
   box.append(h("h4", null, "Pedidos"), tabela(["Quando", "Sorteio", "Pessoa", "Números", "Total", "Status"], d.pedidos.map(p => [dataHora(p.criado_em), p.premio, p.nome, JSON.parse(p.numeros).join(","), brl(p.total), (STATUS_PEDIDO[p.status] || p.status) + (p.estorno_mp ? " · estornado no MP" : "")])));
 }
 
@@ -1468,7 +1499,7 @@ async function abaEntregas(box) {
   const gs = await api("/api/admin/ganhadores"), err = h("p", "err"); box.append(err);
   if (!gs.length) box.append(h("p", "muted", "Nenhum sorteio realizado ainda."));
   gs.forEach(g => { const row = h("div", "arow"); row.append(h("span", null, g.premio + " · Nº " + g.n + " · " + g.nome + " · " + (g.email || "sem e-mail") + (g.telefone ? " · " + g.telefone : "") + (g.entregue_em ? " · ENTREGUE em " + dataHora(g.entregue_em) : " · a entregar")));
-    if (!g.entregue_em) row.append(botao("Marcar entregue", "alt", () => rodar(err, async () => { if (!confirm("Confirma que o prêmio de " + g.nome + " já foi entregue?")) return; await api("/api/admin/campanhas/" + g.id + "/entregar", "POST"); painel("entregas"); }))); box.append(row); });
+    if (!g.entregue_em) row.append(botao("Marcar entregue", "alt", () => rodar(err, async () => { if (!confirm("Confirma que o prêmio de " + g.nome + " já foi entregue?")) return; await api("/api/admin/campanhas/" + g.id + "/entregar", "POST"); painel("entregas"); avisoRapido("Prêmio marcado como entregue."); }))); box.append(row); });
 }
 
 async function abaUsuarios(box) {
@@ -1490,8 +1521,8 @@ async function abaUsuarios(box) {
     row.append(h("span", null, u.nome + " · " + (u.email || "sem e-mail") + " · " + u.role + " · " + u.status + (u.email_verificado ? "" : " · e-mail pendente")));
     if (u.role !== "SUPER_ADMIN" && u.id !== S.eu.id && u.status !== "DELETED") {
       const alvo = u.status === "ACTIVE" ? "SUSPENDED" : "ACTIVE";
-      bt.append(botao(alvo === "SUSPENDED" ? "Suspender" : "Reativar", "alt", () => rodar(err, async () => { if (!confirm("Tem certeza de que deseja " + (alvo === "SUSPENDED" ? "suspender" : "reativar") + " a conta de " + u.nome + "?")) return; await api("/api/admin/usuarios/" + u.id + "/status", "PUT", { status: alvo }); painel("usuarios"); })));
-      if (S.eu.role === "SUPER_ADMIN") bt.append(" ", botao(u.role === "ADMIN" ? "Tornar usuário" : "Tornar admin", "alt", () => rodar(err, async () => { if (!confirm("Tem certeza de que deseja " + (u.role === "ADMIN" ? "remover as permissões de administrador de " : "conceder permissões de administrador a ") + u.nome + "?")) return; await api("/api/admin/usuarios/" + u.id + "/papel", "PUT", { role: u.role === "ADMIN" ? "USER" : "ADMIN" }); painel("usuarios"); })));
+      bt.append(botao(alvo === "SUSPENDED" ? "Suspender" : "Reativar", "alt", () => rodar(err, async () => { if (!confirm("Tem certeza de que deseja " + (alvo === "SUSPENDED" ? "suspender" : "reativar") + " a conta de " + u.nome + "?")) return; await api("/api/admin/usuarios/" + u.id + "/status", "PUT", { status: alvo }); painel("usuarios"); avisoRapido(alvo === "SUSPENDED" ? "Conta suspensa." : "Conta reativada."); })));
+      if (S.eu.role === "SUPER_ADMIN") bt.append(" ", botao(u.role === "ADMIN" ? "Tornar usuário" : "Tornar admin", "alt", () => rodar(err, async () => { if (!confirm("Tem certeza de que deseja " + (u.role === "ADMIN" ? "remover as permissões de administrador de " : "conceder permissões de administrador a ") + u.nome + "?")) return; await api("/api/admin/usuarios/" + u.id + "/papel", "PUT", { role: u.role === "ADMIN" ? "USER" : "ADMIN" }); painel("usuarios"); avisoRapido("Permissões atualizadas."); })));
     }
     row.append(bt); box.append(row);
   });
@@ -1506,7 +1537,7 @@ async function abaLogs(box) {
   [["", "Todas as ações"], ...ACOES_LOG.map(a => [a, a])].forEach(([v, t]) => { const o = document.createElement("option"); o.value = v; o.textContent = t; filtro.append(o); });
   const lista = h("div"), barra = h("div", "row-actions");
   let linhas = [], ultimo = null;
-  const mais = botao("Carregar mais", "alt", () => carregarLogs(false).catch(e => alert(e.message)));
+  const mais = botao("Carregar mais", "alt", () => carregarLogs(false).catch(e => avisoRapido(e.message, false)));
   async function carregarLogs(reiniciar) {
     if (reiniciar) { linhas = []; ultimo = null; }
     const q = new URLSearchParams(); if (filtro.value) q.set("acao", filtro.value); if (ultimo) q.set("antes", String(ultimo));
@@ -1515,7 +1546,7 @@ async function abaLogs(box) {
     lista.replaceChildren(tabela(["Quando", "Ação", "Quem", "Detalhe", "IP"], linhas.map(l => [dataHora(l.quando), l.acao, l.email || "-", l.detalhe || "", l.ip || ""])));
     mais.hidden = ls.length < 150;
   }
-  filtro.addEventListener("change", () => carregarLogs(true).catch(e => alert(e.message)));
+  filtro.addEventListener("change", () => carregarLogs(true).catch(e => avisoRapido(e.message, false)));
   barra.append(filtro); box.append(barra, lista, mais);
   await carregarLogs(true);
 }
@@ -1528,7 +1559,7 @@ function abaVisual(box) {
   const par = (a, b) => { const r = h("div", "two"); r.append(a.w, b.w); return r; }, err = h("p", "err");
   const salvar = banner => rodar(err, async () => {
     const d = { titulo: t.i.value, sub: sub.i.value, cores: { gold: cor.gold.i.value, copper: cor.copper.i.value, slate: cor.slate.i.value, navy: cor.navy.i.value } };
-    if (banner !== undefined) d.banner = banner; await api("/api/admin/visual", "PUT", d); await carregar(); painel("visual");
+    if (banner !== undefined) d.banner = banner; await api("/api/admin/visual", "PUT", d); await carregar(); painel("visual"); avisoRapido("Visual do site salvo.");
   });
   box.append(t.w, sub.w, ban.w, par(cor.gold, cor.copper), par(cor.slate, cor.navy), err,
     botao("Salvar aparência", "", () => { const file = ban.i.files[0]; file ? lerFoto(file, salvar) : salvar(undefined); }), " ", botao("Remover banner", "alt", () => { if (confirm("Tem certeza de que deseja remover o banner?")) salvar(""); }));

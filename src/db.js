@@ -28,6 +28,14 @@ const agora = () => new Date().toISOString();
 /* ----- consultas ----- */
 const als = new AsyncLocalStorage();           // guarda a conexão da transação em andamento
 const autorizacao = new AsyncLocalStorage();   // revalidação de privilégios fornecida pelo dispatcher
+const filaPosCommit = new AsyncLocalStorage(); // ações que só podem acontecer se a transação for confirmada (ex.: e-mails)
+/* Roda fn depois do COMMIT da transação atual; fora de transação, logo em seguida. Se a transação
+   for desfeita, fn nunca roda. Erros de fn só vão para o log. */
+function depoisDoCommit(fn) {
+  const fila = als.getStore() && filaPosCommit.getStore();
+  const rodar = () => Promise.resolve().then(fn).catch(e => console.error("[pós-commit]", e && e.message));
+  if (fila) fila.push(rodar); else setImmediate(rodar);
+}
 const comAutorizacao = (verificar, fn, { antesCommit = true } = {}) =>
   autorizacao.run(verificar ? { verificar, antesCommit } : null, fn);
 const alvo = () => als.getStore() || pool;
@@ -48,11 +56,11 @@ let geracaoEscrita = 0;
 const geracao = () => geracaoEscrita;
 async function tx(fn) {
   if (als.getStore()) return fn();               // já dentro de uma transação: participa dela
-  const c = await pool.connect(); let quebrada = false;
+  const c = await pool.connect(); let quebrada = false; const fila = [];
   try {
     await c.query("BEGIN");
     await c.query("SELECT pg_advisory_xact_lock(" + LOCK_ESCRITA + ")");
-    const r = await als.run(c, async () => {
+    const r = await filaPosCommit.run(fila, () => als.run(c, async () => {
       const contexto = autorizacao.getStore();
       // Uma requisição pode perder sessão/MFA enquanto aguarda a trava. Revalidar já sob o mesmo lock
       // das revogações. Administradores também são revalidados antes do commit; operações de conta
@@ -61,8 +69,10 @@ async function tx(fn) {
       const result = await fn();
       if (contexto && contexto.antesCommit) await contexto.verificar();
       return result;
-    });
-    await c.query("COMMIT"); geracaoEscrita++; return r;
+    }));
+    await c.query("COMMIT"); geracaoEscrita++;
+    for (const f of fila) setImmediate(f);
+    return r;
   } catch (e) {
     try { await c.query("ROLLBACK"); } catch (_) { quebrada = true; }
     throw e;
@@ -240,6 +250,36 @@ DO $$ BEGIN
 END $$;
 CREATE INDEX ix_audit_quando_acao ON audit_logs(quando, acao);
 `
+,
+/* 15: fotos e banner em binário numa tabela própria. Só COPIA: campaigns.foto e o banner do visual
+   continuam como estão (a aplicação lê a cópia e cai no original se faltar). Uma foto malformada
+   gera aviso e fica de fora, sem impedir a migração nem o servidor de subir. */ `
+CREATE TABLE imagens(
+ chave TEXT PRIMARY KEY CHECK(length(chave) BETWEEN 1 AND 60),
+ tipo TEXT NOT NULL CHECK(tipo IN ('image/jpeg','image/webp')),
+ dados BYTEA NOT NULL,
+ versao TEXT NOT NULL,
+ atualizado_em TEXT NOT NULL
+);
+CREATE TEMP TABLE _imagens_antigas(chave TEXT, uri TEXT) ON COMMIT DROP;
+INSERT INTO _imagens_antigas SELECT 'campanha:' || id, foto FROM campaigns WHERE foto <> '';
+DO $$ BEGIN
+  INSERT INTO _imagens_antigas SELECT 'banner', v::jsonb->>'banner' FROM settings WHERE k='visual' AND COALESCE(v::jsonb->>'banner','') <> '';
+EXCEPTION WHEN OTHERS THEN RAISE WARNING 'banner não copiado (%): continua sendo lido do lugar antigo', SQLERRM;
+END $$;
+DO $$ DECLARE r RECORD; bin BYTEA; BEGIN
+  FOR r IN SELECT chave, uri FROM _imagens_antigas LOOP
+    BEGIN
+      IF r.uri NOT LIKE 'data:image/jpeg;base64,%' AND r.uri NOT LIKE 'data:image/webp;base64,%' THEN RAISE EXCEPTION 'prefixo'; END IF;
+      bin := decode(substr(r.uri, strpos(r.uri, ',') + 1), 'base64');
+      INSERT INTO imagens(chave,tipo,dados,versao,atualizado_em) VALUES(r.chave,
+        CASE WHEN r.uri LIKE 'data:image/webp;%' THEN 'image/webp' ELSE 'image/jpeg' END, bin,
+        left(encode(sha256(bin),'hex'),16), to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'));
+    EXCEPTION WHEN OTHERS THEN RAISE WARNING 'imagem % não copiada (%): continua sendo lida do lugar antigo', r.chave, SQLERRM;
+    END;
+  END LOOP;
+END $$;
+`
 /* próximas alterações: acrescente novos itens a este array (nunca edite os já aplicados) */
 ];
 
@@ -299,6 +339,7 @@ const fechar = () => pool.end();
 
 async function audit(uid, acao, detalhe, ip) {
   await run("INSERT INTO audit_logs(quando,user_id,acao,detalhe,ip) VALUES(?,?,?,?,?)", [agora(), uid || null, acao, detalhe ? String(detalhe).slice(0, 300) : null, ip || null]);
+  if (ACOES_COM_ALERTA.has(acao)) depoisDoCommit(() => require("./alertas").enviar(acao, detalhe)); // e-mail para a administração
 }
 async function notificar(uid, titulo, texto) {
   await run("INSERT INTO notifications(user_id,titulo,texto,criado_em) VALUES(?,?,?,?)", [uid, titulo, texto, agora()]);
@@ -318,4 +359,6 @@ async function liberar() {
   await run("UPDATE pedidos SET status='EXPIRED', atualizado_em=? WHERE status='PENDING' AND mp_order_id IS NULL AND mp_creation_uncertain=0 AND expira_em<?", [agora(), Date.now()]);
   await run("DELETE FROM reservas WHERE pedido_id IN (SELECT id FROM pedidos WHERE status<>'PENDING')");
 }
-module.exports = { geracao, podarAuditoria, AUDITORIA_ROTINA, db, tx, comAutorizacao, iniciar, fechar, liberar, liberarSeVencido, ping, sha, agora, audit, notificar, novaSemente };
+const ACOES_COM_ALERTA = new Set(["MFA_BLOQUEADO", "PIX_CRIACAO_INCERTA", "PIX_CRIACAO_RECUSADA", "PAGAMENTO_IGNORADO",
+  "PAGAMENTO_TARDIO_REEMBOLSAR", "PAGAMENTO_CONTA_SUSPENSA", "PAGAMENTO_ESTORNADO_NO_MP", "WEBHOOK_PEDIDO_DESCONHECIDO"]);
+module.exports = { depoisDoCommit, geracao, podarAuditoria, AUDITORIA_ROTINA, db, tx, comAutorizacao, iniciar, fechar, liberar, liberarSeVencido, ping, sha, agora, audit, notificar, novaSemente };

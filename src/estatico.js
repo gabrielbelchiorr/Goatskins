@@ -103,7 +103,8 @@ async function campanhaPublica(id) {
   if (!Number.isSafeInteger(id) || id <= 0) return null;
   try {
     const { db } = require('./db');
-    const c = await db.get(`SELECT c.id, c.premio, c.desgaste, c.preco_centavos, c.max, c.status, length(c.foto) fl,
+    const c = await db.get(`SELECT c.id, c.premio, c.desgaste, c.preco_centavos, c.max, c.status,
+      COALESCE((SELECT i.versao FROM imagens i WHERE i.chave='campanha:' || c.id), CASE WHEN octet_length(c.foto) > 0 THEN 'l' || octet_length(c.foto) END) fl,
       (SELECT COUNT(*) FROM tickets t WHERE t.campaign_id=c.id) total, (SELECT n FROM winners w WHERE w.campaign_id=c.id) vencedor
       FROM campaigns c WHERE c.id=? AND c.archived=0`, [id]);
     return c && Number(c.id) === id && typeof c.premio === 'string' ? c : null;

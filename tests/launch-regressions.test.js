@@ -4,13 +4,13 @@ function load(file,mocks){const sandbox={module:{exports:{}},require:n=>{if(n in
 class Erro extends Error{constructor(message,code=400){super(message);this.code=code;}}
 test('admin status reads role inside transaction and cannot suspend a promoted super admin',async()=>{
  let inside=false,writes=0;
- const mod=load('admin.js',{'./db':{db:{get:async()=>{assert.equal(inside,true);return {role:'SUPER_ADMIN'};},run:async()=>{writes++;}},tx:async fn=>{inside=true;try{return await fn();}finally{inside=false;}},agora:()=>''},'./http':{Erro},'./rifas':{}});
+ const mod=load('admin.js',{'./imagens':{},'./db':{db:{get:async()=>{assert.equal(inside,true);return {role:'SUPER_ADMIN'};},run:async()=>{writes++;}},tx:async fn=>{inside=true;try{return await fn();}finally{inside=false;}},agora:()=>''},'./http':{Erro},'./rifas':{}});
  const route=mod.rotas.find(r=>r[0]==='PUT'&&r[1].test('/api/admin/usuarios/2/status'));
  await assert.rejects(route[2]({params:['2'],body:{status:'SUSPENDED'},user:{id:1,role:'ADMIN'}}),e=>e.code===403);assert.equal(writes,0);
 });
 test('role change and session invalidation share the transaction',async()=>{
  let inside=false;const calls=[];
- const mod=load('admin.js',{'./db':{db:{get:async()=>{assert.ok(inside);return {role:'USER'};},run:async sql=>{assert.ok(inside);calls.push(sql);}},tx:async fn=>{inside=true;try{return await fn();}finally{inside=false;}},agora:()=>'',audit:async()=>{assert.ok(inside);}},'./http':{Erro},'./rifas':{}});
+ const mod=load('admin.js',{'./imagens':{},'./db':{db:{get:async()=>{assert.ok(inside);return {role:'USER'};},run:async sql=>{assert.ok(inside);calls.push(sql);}},tx:async fn=>{inside=true;try{return await fn();}finally{inside=false;}},agora:()=>'',audit:async()=>{assert.ok(inside);}},'./http':{Erro},'./rifas':{}});
  const route=mod.rotas.find(r=>r[0]==='PUT'&&r[1].test('/api/admin/usuarios/2/papel'));
  await route[2]({params:['2'],body:{role:'ADMIN'},user:{id:1,role:'SUPER_ADMIN'}});assert.equal(calls.length,2);assert.match(calls[1],/DELETE FROM sessions/);
 });

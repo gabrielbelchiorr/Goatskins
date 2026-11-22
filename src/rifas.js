@@ -6,10 +6,19 @@ const mail = require("./mail"), mp = require("./mercadopago");
 
 const PADRAO_VISUAL = { titulo: "GOATSKINS SORTEIOS", sub: "Escolha seus números e concorra a skins de CS.", banner: "",
   cores: { gold: "#f08a2b", copper: "#c4621a", slate: "#102440", navy: "#0e1a33" } };
-const visual = async () => { const r = await db.get("SELECT v FROM settings WHERE k='visual'"); return r ? JSON.parse(r.v) : PADRAO_VISUAL; };
+const imagens = require("./imagens");
+/* Visual sem o banner: ele mora na tabela imagens (migração 15). bannerVersao identifica o banner atual
+   para a URL em cache; se a cópia ainda não existir, vem do banner antigo guardado no JSON. */
+const visual = async () => {
+  const r = await db.get(`SELECT (v::jsonb - 'banner')::text v, COALESCE((SELECT versao FROM imagens WHERE chave='banner'),
+    CASE WHEN COALESCE(v::jsonb->>'banner','') <> '' THEN 'l' || octet_length(v::jsonb->>'banner') END) bv FROM settings WHERE k='visual'`);
+  if (!r) return { ...PADRAO_VISUAL, bannerVersao: null };
+  const { banner, ...v } = JSON.parse(r.v);
+  return { ...v, bannerVersao: r.bv || null };
+};
 
 /* Colunas públicas explícitas: a semente do sorteio NUNCA sai daqui antes da hora. */
-const COLS = "id, premio, desgaste, descricao, valor, cor, fim, max, max_por_usuario, preco_centavos, length(foto) fl, status, commit_hash, viewer_3d, viewer_3d_pendente, inspect_link"; // a foto sai por URL própria (cache), não dentro do JSON
+const COLS = "id, premio, desgaste, descricao, valor, cor, fim, max, max_por_usuario, preco_centavos, COALESCE((SELECT i.versao FROM imagens i WHERE i.chave='campanha:' || campaigns.id), CASE WHEN octet_length(foto) > 0 THEN 'l' || octet_length(foto) END) fl, status, commit_hash, viewer_3d, viewer_3d_pendente, inspect_link"; // a foto sai por URL própria (cache), não dentro do JSON
 function configuracao3d(c) {
   let config = null, invalida = false;
   if (c.viewer_3d != null) {
@@ -39,7 +48,7 @@ function estadoPublico() {
     const ocup = {}, gan = {}, res = {};
     reservas.forEach(r => (res[r.c] = res[r.c] || []).push(r.n)); tickets.forEach(r => (ocup[r.c] = ocup[r.c] || []).push(r.n));
     ganhadores.forEach(r => gan[r.campaign_id] = r);
-    const vis = { ...v }; vis.banner = vis.banner ? "/api/banner?v=" + vis.banner.length : "";
+    const { bannerVersao, ...vis } = v; vis.banner = bannerVersao ? "/api/banner?v=" + bannerVersao : "";
     return Object.freeze({ ocup, gan, res, vis, campanhas });
   })();
   cachePublico = { ger, em: agoraMs, p };
@@ -102,7 +111,7 @@ function calcularVencedor(seed, numeros) {
 
 async function sortear(id, adminId, ip) {
   const r = await tx(async () => {
-    const c = await db.get("SELECT * FROM campaigns WHERE id=?", [id]); if (!c) throw new Erro("Sorteio não encontrado.", 404);
+    const c = await db.get("SELECT id, premio, status, max, seed, commit_hash FROM campaigns WHERE id=?", [id]); if (!c) throw new Erro("Sorteio não encontrado.", 404);
     if (c.status === "DRAWN") throw new Erro("Este sorteio já foi realizado.");
     // Falha segura diante de semente ausente/corrompida: nunca publica uma prova que contradiz o compromisso.
     if (typeof c.seed !== 'string' || !/^[a-f0-9]{64}$/.test(c.seed) ||
@@ -146,7 +155,8 @@ async function imagemCacheada(chave, carregar) {
   if (c) cacheImagens.delete(chave);                         // reinserir mantém a ordem de uso recente
   if (c && Date.now() - c.em < IMAGEM_TTL_MS) { cacheImagens.set(chave, c); return c.img; }
   if (c) bytesImagens -= c.img.raw.length;
-  const img = imagem(await carregar());                      // sem foto (404) não é guardado
+  const img = await carregar();
+  if (!img) throw new Erro("Imagem não encontrada.", 404);   // sem foto (404) não é guardado
   if (img.raw.length > MAX_BYTES_IMAGENS) return img;
   while (cacheImagens.size && bytesImagens + img.raw.length > MAX_BYTES_IMAGENS) {
     const [k, v] = cacheImagens.entries().next().value; cacheImagens.delete(k); bytesImagens -= v.img.raw.length;
@@ -164,7 +174,7 @@ const rotas = [
     if (!Array.isArray(nums) || !nums.length || nums.length > 100) throw new Erro("Escolha pelo menos um número.");
     const lista = [...new Set(nums.map(n => inteiro(n, 1, 100)))];
     return tx(async () => {
-      const c = await db.get("SELECT * FROM campaigns WHERE id=?", [id]); if (!c) throw new Erro("Sorteio não encontrado.", 404);
+      const c = await db.get("SELECT id, premio, status, max, max_por_usuario, preco_centavos FROM campaigns WHERE id=?", [id]); if (!c) throw new Erro("Sorteio não encontrado.", 404);
       if (c.status !== "OPEN") throw new Erro("Este sorteio não está aberto.");
       if (c.preco_centavos > 0) throw new Erro("Este sorteio exige pagamento por Pix.", 402); // impede "comprar" de graça por esta rota
       if (lista.some(n => n > c.max)) throw new Erro("Número fora do sorteio.");
@@ -180,8 +190,8 @@ const rotas = [
     });
   }, "user"],
   ["GET", /^\/api\/campanhas\/(\d+)\/foto$/, ctx => { const id = Number(ctx.params[0]);
-    return imagemCacheada("c" + id, async () => ((await db.get("SELECT foto f FROM campaigns WHERE id=?", [id])) || {}).f); }],
-  ["GET", /^\/api\/banner$/, () => imagemCacheada("banner", async () => (await visual()).banner)],
+    return imagemCacheada("c" + id, () => imagens.ler(imagens.chaveCampanha(id), imagens.legadoCampanha(id))); }],
+  ["GET", /^\/api\/banner$/, () => imagemCacheada("banner", () => imagens.ler(imagens.CHAVE_BANNER, imagens.legadoBanner))],
   ["GET", /^\/api\/campanhas\/(\d+)\/verificacao$/, async ctx => { // prova pública do sorteio
     const id = Number(ctx.params[0]), c = await db.get("SELECT status, commit_hash FROM campaigns WHERE id=?", [id]);
     if (!c) throw new Erro("Sorteio não encontrado.", 404);

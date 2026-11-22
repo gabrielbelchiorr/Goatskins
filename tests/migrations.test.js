@@ -102,3 +102,39 @@ test('migrações preservam dados antigos e adicionam a fila de recuperação se
   }
  } finally {await c.query('ROLLBACK');c.release();await pool.end();}
 });
+
+test('migrações 14 e 15: e-mail único, cópia das fotos para a tabela imagens sem apagar os originais',{skip:!url},async()=>{
+ const {Pool}=require('pg'),pool=new Pool({connectionString:url}),c=await pool.connect(),schema='mig_'+require('node:crypto').randomBytes(8).toString('hex');
+ const src=fs.readFileSync(path.join(__dirname,'../src/db.js'),'utf8');
+ const migrations=vm.runInNewContext(src.slice(src.indexOf('const MIGRACOES ='),src.indexOf('async function migrar()'))+';MIGRACOES');
+ const jpg='/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAA//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==';
+ try {
+  await c.query('BEGIN');
+  await c.query('CREATE SCHEMA '+schema);await c.query('SET LOCAL search_path TO '+schema);
+  for(const sql of migrations.slice(0,13))await c.query(sql);
+  // 14 com duplicata em maiúsculas: não falha, cria só o índice comum
+  await c.query("INSERT INTO users(nome,contato,email,hash) VALUES('A','a@x.com','dup@x.com','h'),('B','b@x.com','DUP@x.com','h')");
+  await c.query('SAVEPOINT s14');
+  await c.query(migrations[13]);
+  const idx=(await c.query("SELECT indexname FROM pg_indexes WHERE schemaname=current_schema() AND tablename='users' AND indexname LIKE '%email_lower'")).rows.map(r=>r.indexname);
+  assert.deepEqual(idx,['ix_users_email_lower']);
+  await c.query('ROLLBACK TO SAVEPOINT s14');
+  await c.query("DELETE FROM users WHERE contato='b@x.com'");
+  await c.query(migrations[13]);
+  assert.deepEqual((await c.query("SELECT indexname FROM pg_indexes WHERE schemaname=current_schema() AND tablename='users' AND indexname LIKE '%email_lower'")).rows.map(r=>r.indexname),['ux_users_email_lower']);
+  await assert.rejects(c.query("INSERT INTO users(nome,contato,email,hash) VALUES('C','c@x.com','Dup@X.com','h')"),/ux_users_email_lower/);
+  await c.query('ROLLBACK TO SAVEPOINT s14'); await c.query("DELETE FROM users WHERE contato='b@x.com'"); await c.query(migrations[13]);
+  // 15: duas fotos boas, uma malformada e o banner no JSON do visual
+  await c.query("INSERT INTO campaigns(id,premio,fim,max,foto) VALUES(1,'J','',5,$1),(2,'W','',5,$2),(3,'Ruim','',5,'data:image/jpeg;base64,***'),(4,'Sem','',5,'')",
+    ['data:image/jpeg;base64,'+jpg,'data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=']);
+  await c.query("INSERT INTO settings(k,v) VALUES('visual',$1)",[JSON.stringify({titulo:'T',banner:'data:image/jpeg;base64,'+jpg})]);
+  const antes={campaigns:(await c.query('SELECT * FROM campaigns ORDER BY id')).rows,settings:(await c.query('SELECT * FROM settings ORDER BY k')).rows};
+  await c.query(migrations[14]);
+  assert.deepEqual((await c.query('SELECT * FROM campaigns ORDER BY id')).rows,antes.campaigns);       // nada apagado
+  assert.deepEqual((await c.query('SELECT * FROM settings ORDER BY k')).rows,antes.settings);
+  const img=(await c.query('SELECT chave,tipo,dados,versao FROM imagens ORDER BY chave')).rows;
+  assert.deepEqual(img.map(r=>r.chave+':'+r.tipo),['banner:image/jpeg','campanha:1:image/jpeg','campanha:2:image/webp']);   // a malformada ficou de fora
+  assert.deepEqual(img[1].dados,Buffer.from(jpg,'base64'));
+  assert.equal(img[1].versao,require('node:crypto').createHash('sha256').update(Buffer.from(jpg,'base64')).digest('hex').slice(0,16));
+ } finally {await c.query('ROLLBACK');c.release();await pool.end();}
+});

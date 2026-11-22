@@ -293,13 +293,61 @@ test("fotos saem por URL em cache e não dentro do /api/estado", async () => {
   const adm = await adminLogado(), px = "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAA//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==";
   assert.equal((await adm.post("/api/admin/campanhas", { premio: "Com foto", max: 5, foto: "data:image/jpeg;base64," + px })).status, 200);
   const e = (await adm.get("/api/estado")).dados, c = e.c.find(x => x.premio === "Com foto");
-  assert.match(c.foto, /^\/api\/campanhas\/\d+\/foto\?v=\d+$/); assert.ok(!JSON.stringify(e).includes("base64"));
+  assert.match(c.foto, /^\/api\/campanhas\/\d+\/foto\?v=[0-9a-f]{16}$/); assert.ok(!JSON.stringify(e).includes("base64"));
+  // Etapa 3: a foto fica em binário na tabela imagens, não na linha do sorteio.
+  assert.equal(dbLer("SELECT foto FROM campaigns WHERE id=?", c.id)[0].foto, "");
+  assert.equal(dbLer("SELECT tipo, octet_length(dados) n FROM imagens WHERE chave=?", "campanha:" + c.id)[0].tipo, "image/jpeg");
   const r = await fetch(BASE + c.foto); assert.equal(r.headers.get("content-type"), "image/jpeg"); assert.match(r.headers.get("cache-control"), /max-age/);
   // WebP com transparência: aceito e servido como image/webp, com os bytes enviados.
   const webp = Buffer.from("UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=", "base64");
   assert.equal((await adm.post("/api/admin/campanhas", { premio: "Com webp", max: 5, foto: "data:image/webp;base64," + webp.toString("base64") })).status, 200);
   const w = (await adm.get("/api/estado")).dados.c.find(x => x.premio === "Com webp");
   const rw = await fetch(BASE + w.foto); assert.equal(rw.headers.get("content-type"), "image/webp"); assert.deepEqual(Buffer.from(await rw.arrayBuffer()), webp);
+  // O formulário de edição continua recebendo o data URI; trocar e remover a foto funciona.
+  const edit = (await adm.get("/api/admin/campanhas/" + w.id)).dados;
+  assert.equal(edit.foto, "data:image/webp;base64," + webp.toString("base64"));
+  const base = { premio: "Com webp", max: 5, max_por_usuario: 1 };
+  assert.equal((await adm.put("/api/admin/campanhas/" + w.id, { ...base, foto: "data:image/jpeg;base64," + px })).status, 200);
+  const w2 = (await adm.get("/api/estado")).dados.c.find(x => x.id === w.id);
+  assert.notEqual(w2.foto, w.foto);                                                                   // versão nova = URL nova (cache)
+  assert.equal((await fetch(BASE + w2.foto)).headers.get("content-type"), "image/jpeg");
+  assert.equal((await adm.put("/api/admin/campanhas/" + w.id, { ...base, foto: "" })).status, 200);
+  assert.equal((await adm.get("/api/estado")).dados.c.find(x => x.id === w.id).foto, "");
+  assert.equal((await fetch(BASE + "/api/campanhas/" + w.id + "/foto")).status, 404);
+});
+
+test("fotos antigas (antes da migração 15) continuam aparecendo e são migradas ao editar", async () => {
+  const adm = await adminLogado(), px = "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAA//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==";
+  const s = await novoSorteio(adm, { premio: "Foto legada" });
+  dbLer("UPDATE campaigns SET foto=? WHERE id=?", "data:image/jpeg;base64," + px, s.id);       // como uma linha que a migração não copiou
+  const c = (await adm.get("/api/estado")).dados.c.find(x => x.id === s.id);
+  assert.match(c.foto, /\?v=l\d+$/);
+  const r = await fetch(BASE + c.foto); assert.equal(r.status, 200); assert.deepEqual(Buffer.from(await r.arrayBuffer()), Buffer.from(px, "base64"));
+  assert.equal((await adm.get("/api/admin/campanhas/" + s.id)).dados.foto, "data:image/jpeg;base64," + px);
+  // Banner legado dentro do JSON do visual: aparece, e salvar o visual sem mexer no banner copia para a tabela nova.
+  const visualAntes = dbLer("SELECT v FROM settings WHERE k='visual'")[0];
+  const cores = { gold: "#f08a2b", copper: "#c4621a", slate: "#102440", navy: "#0e1a33" };
+  dbLer("DELETE FROM imagens WHERE chave='banner'");
+  dbLer("INSERT INTO settings(k,v) VALUES('visual',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", JSON.stringify({ titulo: "T", sub: "", cores, banner: "data:image/jpeg;base64," + px }));
+  assert.match((await cliente().get("/api/estado")).dados.s.banner, /^\/api\/banner\?v=l\d+$/);
+  assert.equal((await fetch(BASE + "/api/banner")).status, 200);
+  assert.equal((await adm.put("/api/admin/visual", { titulo: "T", sub: "", cores })).status, 200);
+  assert.equal(dbLer("SELECT COUNT(*) n FROM imagens WHERE chave='banner'")[0].n, 1);
+  assert.ok(!dbLer("SELECT v FROM settings WHERE k='visual'")[0].v.includes("base64"));
+  assert.match((await cliente().get("/api/estado")).dados.s.banner, /^\/api\/banner\?v=[0-9a-f]{16}$/);
+  if (visualAntes) dbLer("UPDATE settings SET v=? WHERE k='visual'", visualAntes.v); else dbLer("DELETE FROM settings WHERE k='visual'");
+  dbLer("DELETE FROM imagens WHERE chave='banner'");
+});
+
+test("alerta por e-mail para a administração: Pix recusado avisa os admins depois de gravar", async () => {
+  const adm = await adminLogado(), s = await pagoSorteio(adm, { preco_numero: 77 }), { c } = await novoUsuario();
+  const antes = emailsDe("admin@teste.com").filter(m => m.includes("[GOATSKINS]")).length;
+  assert.equal((await pedir(c, s, [1])).status, 502);                                                // MP falso recusa 77,00
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && emailsDe("admin@teste.com").filter(m => m.includes("[GOATSKINS]")).length === antes) await new Promise(r => setTimeout(r, 50));
+  const alerta = emailsDe("admin@teste.com").filter(m => m.includes("[GOATSKINS]")).pop();
+  assert.match(alerta, /recusou gerar um Pix/); assert.match(alerta, /PIX_CRIACAO_RECUSADA/);
+  assert.doesNotMatch(alerta, /TOKEN-DE-TESTE|Senha1234/);
 });
 
 test("cabeçalhos de segurança presentes", async () => {
