@@ -280,6 +280,11 @@ DO $$ DECLARE r RECORD; bin BYTEA; BEGIN
   END LOOP;
 END $$;
 `
+,
+/* 16: código por e-mail exigido no primeiro cadastro do autenticador. Aditiva: coluna nova, nula. */ `
+ALTER TABLE admin_mfa ADD COLUMN email_hash TEXT;
+`
+,
 /* próximas alterações: acrescente novos itens a este array (nunca edite os já aplicados) */
 ];
 

@@ -60,7 +60,7 @@ test('Browser security: stored, URL and DOM payloads remain text across public, 
       accounts[key]={id,email};const login=await api('POST','/api/login',{email,senha:password});if(key==='admin')adminCookie=login.cookie;else userCookie=login.cookie;
     }
     const prepared=await api('POST','/api/mfa/preparar',{senha:password},adminCookie);
-    const verified=await api('POST','/api/mfa/verificar',{senha:password,codigo:totp(prepared.data.secret)},adminCookie);adminCookie=verified.cookie;
+    const verified=await api('POST','/api/mfa/verificar',{senha:password,codigo:totp(prepared.data.secret),codigoEmail:[...require("node:fs").readFileSync(require("node:path").join(root,"emails.log"),"utf8").matchAll(/Código de ativação: (\d{6})/g)].pop()[1]},adminCookie);adminCookie=verified.cookie;
     await api('PUT','/api/conta',{nome:payload(10),telefone:'+5511999999999'},userCookie);
     const visual={titulo:payload(11),sub:payload(12),banner:'',cores:{gold:'#d4aa55',copper:'#b8651f',slate:'#102440',navy:'#0e1a33'}};
     Object.defineProperty(visual,'__proto__',{value:{auditPolluted:true},enumerable:true});visual.constructor={prototype:{auditPolluted:true}};

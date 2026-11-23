@@ -73,7 +73,7 @@ test('predefinições: CRUD, segurança, persistência e campanhas independentes
     });
     const setup = await request('POST', '/api/mfa/preparar', {senha: 'Admin1234'});
     assert.equal(setup.status, 200);
-    const activated = await request('POST', '/api/mfa/verificar', {senha: 'Admin1234', codigo: otp(setup.data.secret)});
+    const activated = await request('POST', '/api/mfa/verificar', {senha: 'Admin1234', codigo: otp(setup.data.secret), codigoEmail: [...require("node:fs").readFileSync(require("node:path").join(dir,"emails.log"),"utf8").matchAll(/Código de ativação: (\d{6})/g)].pop()[1]});
     assert.equal(activated.status, 200, JSON.stringify(activated.data));
 
     await t.test('cria, lista sem imagem embutida, pesquisa literal e consulta detalhes', async () => {
@@ -157,7 +157,7 @@ test('predefinições: CRUD, segurança, persistência e campanhas independentes
       assert.equal(persisted.status, 200); assert.deepEqual(persisted.data, duplicate);
       const campaign = await request('GET', '/api/admin/campanhas/' + campaignIds[2]);
       assert.equal(campaign.status, 200); assert.deepEqual(campaign.data.viewer_3d, duplicate.dados.viewer_3d);
-      assert.equal((await pool.query('SELECT MAX(versao) v FROM schema_migrations')).rows[0].v, 15);
+      assert.equal((await pool.query('SELECT MAX(versao) v FROM schema_migrations')).rows[0].v, 16);
     });
     await t.test('modelos de armas, facas e luvas mantêm configurações próprias nas predefinições', async () => {
       for (const spec of [{item:'ak-47/redline',wear:0.18,seed:661,stattrak:true},

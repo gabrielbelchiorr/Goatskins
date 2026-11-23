@@ -368,12 +368,14 @@ function exigirMfaAdmin() {
     const pw = prepararCampo(campo('Senha da conta', 'password'), {autocomplete:'current-password', maxLength:100});
     const code = prepararCampo(campo('Código do aplicativo', 'text'), {autocomplete:'one-time-code', inputMode:'numeric', minLength:6, maxLength:6, pattern:'[0-9]{6}', placeholder:'000000'}, 'Informe o código completo, conforme exibido.');
     code.w.classList.add('code-field'); code.i.spellcheck = false; code.i.autocapitalize = 'none';
-    const err = h('p', 'err'), ok = botao(configuracao ? 'Ativar autenticação em duas etapas' : 'Confirmar acesso', 'auth-primary');
+    const emailCode = configuracao ? prepararCampo(campo('Código enviado ao seu e-mail', 'text'), {autocomplete:'off', inputMode:'numeric', minLength:6, maxLength:6, pattern:'[0-9]{6}', placeholder:'000000'}, 'Informe os 6 dígitos recebidos por e-mail.') : null;
+    if (emailCode) { emailCode.w.classList.add('code-field'); emailCode.i.addEventListener('input', () => { emailCode.i.value = emailCode.i.value.replace(/\D/g, '').slice(0,6); }); }
+    const err = h('p', 'err'), ok = botao(configuracao ?'Ativar autenticação em duas etapas' : 'Confirmar acesso', 'auth-primary');
     let usarRecuperacao = false;
     const form = formularioConta(err, ok, async () => {
       let resposta;
       pending.busy = true; $('closeBtn').disabled = true;
-      try { resposta = await api('/api/mfa/verificar', 'POST', {senha:pw.i.value, codigo:code.i.value}); }
+      try { resposta = await api('/api/mfa/verificar', 'POST', {senha:pw.i.value, codigo:code.i.value, ...(emailCode ? {codigoEmail:emailCode.i.value} : {})}); }
       finally { pending.busy = false; $('closeBtn').disabled = false; pw.i.value = ''; code.i.value = ''; }
       if (!ativo()) return;
       if (configuracao) {
@@ -394,7 +396,7 @@ function exigirMfaAdmin() {
       manual.append(key.w, h('p', 'field-hint', 'TOTP · 6 dígitos · 30 segundos · SHA-1'), botao('Copiar chave', 'alt', () => copiar(key.i.value, copyStatus, key.i)), copyStatus);
       setup.append(img, manual);
       form.append(h('p', 'field-hint', 'Adicione uma conta no Google Authenticator ou Microsoft Authenticator usando o QR Code ou a chave manual.'), setup,
-        h('p', 'field-hint', 'Depois, confirme sua senha e o código atual do aplicativo. Esta configuração expira em 10 minutos.'));
+        h('p', 'field-hint', 'Depois, confirme sua senha, o código atual do aplicativo e o código que enviamos ao seu e-mail. Esta configuração expira em 10 minutos.'));
     } else {
       const switcher = botao('Usar código de recuperação', 'link', () => {
         usarRecuperacao = !usarRecuperacao; code.i.value = ''; code.i.removeAttribute('aria-invalid');
@@ -409,7 +411,7 @@ function exigirMfaAdmin() {
       form.append(h('p', 'field-hint', 'Use o código atual do seu aplicativo. Códigos já utilizados não podem ser reutilizados.'), switcher);
       if (status.remainingRecoveryCodes <= 2) form.append(h('p', 'mfa-important', 'Códigos de recuperação restantes: ' + status.remainingRecoveryCodes + '. Mantenha o acesso ao seu aplicativo autenticador.'));
     }
-    form.append(pw.w, code.w, err, ok);
+    form.append(pw.w, code.w, ...(emailCode ? [emailCode.w] : []), err, ok);
     abrir(configuracao ? 'Conecte seu autenticador' : 'Confirme seu acesso', configuracao ? 'Proteja a administração com uma segunda etapa de verificação.' : 'A administração exige sua senha e um código do autenticador ou de recuperação.', [form, sair()]);
   };
   const preparar = status => {

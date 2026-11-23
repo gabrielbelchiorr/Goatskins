@@ -4,9 +4,9 @@ const url=require('../scripts/banco-teste').bancoTeste(process.env.TEST_DATABASE
 test('admin: senha e MFA obrigatorios, permissoes, CSRF e sorteio',{skip:!url,timeout:60000},async()=>{
  const {Pool}=require('pg'),pool=new Pool({connectionString:url,connectionTimeoutMillis:5000,query_timeout:5000}),schema='public';
  await pool.query('DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public');
- const dbUrl=new URL(url);
+ const dbUrl=new URL(url),mfaDir=require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(),"goatskins-admin-auth-"));
  const port=5200+crypto.randomInt(500),base='http://127.0.0.1:'+port;
- const env={...process.env,NODE_ENV:'test',RENDER:'',TESTE:'1',DATABASE_URL:dbUrl.toString(),DATABASE_SSL:'0',PG_POOL_MAX:'1',PORT:String(port),APP_URL:base,EMAIL_DRIVER:'console',MFA_ENCRYPTION_KEY:crypto.randomBytes(32).toString('hex'),TURNSTILE_SITE_KEY:'',TURNSTILE_SECRET_KEY:'',MP_ACCESS_TOKEN:'',MP_WEBHOOK_SECRET:'',ORIGIN_VERIFY_SECRET:''};
+ const env={...process.env,NODE_ENV:'test',RENDER:'',TESTE:'1',DATABASE_URL:dbUrl.toString(),DATABASE_SSL:'0',PG_POOL_MAX:'1',PORT:String(port),APP_URL:base,EMAIL_DRIVER:'console',DATA_DIR:mfaDir,MFA_ENCRYPTION_KEY:crypto.randomBytes(32).toString('hex'),TURNSTILE_SITE_KEY:'',TURNSTILE_SECRET_KEY:'',MP_ACCESS_TOKEN:'',MP_WEBHOOK_SECRET:'',ORIGIN_VERIFY_SECRET:''};
  const run=(args)=>new Promise((resolve,reject)=>{const p=spawn(process.execPath,args,{env,stdio:'pipe'});let error='';p.stderr.on('data',b=>error+=b);p.on('exit',n=>n?reject(Error(error)):resolve());});
  let srv;
  try {
@@ -18,7 +18,7 @@ test('admin: senha e MFA obrigatorios, permissoes, CSRF e sorteio',{skip:!url,ti
   assert.equal((await req('/api/admin/dashboard')).d.tipo,'MFA_REQUIRED');
   const prepared=await req('/api/mfa/preparar',{senha:'Admin1234'});assert.equal(prepared.status,200);
   const otp=secret=>{let bits=0,value=0;const bytes=[];for(const c of secret){value=(value<<5)|'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'.indexOf(c);bits+=5;if(bits>=8){bytes.push((value>>>(bits-8))&255);bits-=8;}}const counter=Buffer.alloc(8);counter.writeBigUInt64BE(BigInt(Math.floor(Date.now()/30000)));const h=crypto.createHmac('sha1',Buffer.from(bytes)).update(counter).digest(),offset=h[19]&15;return String((h.readUInt32BE(offset)&0x7fffffff)%1000000).padStart(6,'0');};
-  const activated=await req('/api/mfa/verificar',{senha:'Admin1234',codigo:otp(prepared.d.secret)});assert.equal(activated.status,200);assert.equal(activated.d.recoveryCodes.length,8);
+  const activated=await req('/api/mfa/verificar',{senha:'Admin1234',codigo:otp(prepared.d.secret),codigoEmail:[...require("node:fs").readFileSync(require("node:path").join(mfaDir,"emails.log"),"utf8").matchAll(/Código de ativação: (\d{6})/g)].pop()[1]});assert.equal(activated.status,200);assert.equal(activated.d.recoveryCodes.length,8);
   assert.equal((await req('/api/admin/dashboard')).status,200);
   const draw=await pool.query("INSERT INTO campaigns(premio,fim,max,max_por_usuario,status,seed,commit_hash) VALUES('Roleta fixture','',1,1,'OPEN',$1,$2) RETURNING id",['a'.repeat(64),crypto.createHash('sha256').update('a'.repeat(64)).digest('hex')]);
   const drawPath='/api/admin/campanhas/'+draw.rows[0].id+'/sortear';

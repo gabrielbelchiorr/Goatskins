@@ -82,12 +82,17 @@ function code(secret, step = Math.floor(Date.now() / 30000)) {
 }
 async function prepare(c) {
   const response = await c.post('/api/mfa/preparar', { senha: PASSWORD });
-  assert.equal(response.status, 200, JSON.stringify(response.data)); return response.data;
+  assert.equal(response.status, 200, JSON.stringify(response.data)); assert.equal(response.data.emailEnviado, true);
+  return { ...response.data, emailCode: lastActivationCode() };
+}
+function lastActivationCode() {
+  const all = [...fs.readFileSync(path.join(dataDir, "emails.log"), "utf8").matchAll(/Código de ativação: (\d{6})/g)];
+  assert.ok(all.length, "activation e-mail missing"); return all[all.length - 1][1];
 }
 async function enroll(user, offset = -1) {
   const c = await login(user), prepared = await prepare(c), oldCookie = c.cookie();
   const step = Math.floor(Date.now() / 30000) + offset;
-  const verified = await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret, step) });
+  const verified = await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret, step), codigoEmail: prepared.emailCode });
   assert.equal(verified.status, 200, JSON.stringify(verified.data));
   return { c, prepared, verified, oldCookie, step };
 }
@@ -195,7 +200,7 @@ test('MFA HTTP: enrollment returns local QR/compatible URI, encrypts the seed, a
 test('MFA HTTP: activation rotates the session, limits its lifetime, and revokes other sessions', cases, async () => {
   const user = await account(), c = await login(user), other = await login(user), old = c.cookie();
   const prepared = await prepare(c), before = Date.now();
-  const r = await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret) });
+  const r = await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret), codigoEmail: prepared.emailCode });
   assert.equal(r.status, 200); assert.notEqual(c.cookie(), old);
   assert.match(r.setCookie, /HttpOnly/i); assert.match(r.setCookie, /SameSite=Lax/i);
   const maxAge = Number(r.setCookie.match(/Max-Age=(\d+)/)[1]);
@@ -203,29 +208,29 @@ test('MFA HTTP: activation rotates the session, limits its lifetime, and revokes
   assert.equal((await c.get('/api/conta', { headers: { Cookie: old } })).status, 401);
   assert.equal((await other.get('/api/conta')).status, 401);
   const session = (await pool.query('SELECT * FROM sessions WHERE token=$1', [sha(c.cookie().slice(4))])).rows[0];
-  assert.ok(Number(session.mfa_until) >= before + 14 * 60000 && Number(session.mfa_until) <= Date.now() + 15 * 60000);
+  assert.ok(Number(session.mfa_until) >= before + 3 * 3600000 - 60000 && Number(session.mfa_until) <= Date.now() + 3 * 3600000);
   assert.ok(Number(session.expira) <= Date.now() + 8 * 3600000);
   assert.equal(session.mfa_role, user.role);
 });
 
 test('MFA HTTP: pending enrollment is session-bound, expires, and is not usable as an active factor', cases, async () => {
   const user = await account(), first = await login(user), second = await login(user), prepared = await prepare(first);
-  const stolen = await second.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret) });
+  const stolen = await second.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret), codigoEmail: prepared.emailCode });
   assert.equal(stolen.status >= 400, true); assert.equal((await second.get('/api/admin/dashboard')).data.tipo, 'MFA_REQUIRED');
   await pool.query('UPDATE admin_mfa SET pending_expira=$1 WHERE user_id=$2', [Date.now() - 1, user.id]);
-  assert.equal((await first.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret) })).status >= 400, true);
+  assert.equal((await first.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret), codigoEmail: prepared.emailCode })).status >= 400, true);
   assert.equal(Number((await pool.query('SELECT enabled FROM admin_mfa WHERE user_id=$1', [user.id])).rows[0].enabled), 0);
   const again = await prepare(first);
   assert.notEqual(again.secret, prepared.secret);
-  assert.equal((await first.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(again.secret) })).status, 200);
+  assert.equal((await first.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(again.secret), codigoEmail: again.emailCode })).status, 200);
 });
 
 test('MFA HTTP: TOTP replay is rejected and concurrent verification consumes the step only once', cases, async () => {
   const user = await account(), enrolled = await enroll(user);
-  const replay = await enrolled.c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(enrolled.prepared.secret, enrolled.step) });
+  const replay = await enrolled.c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(enrolled.prepared.secret, enrolled.step), codigoEmail: enrolled.prepared.emailCode });
   assert.equal(replay.status, 401); assert.equal(replay.setCookie, null);
   const first = await login(user), second = await login(user), step = Math.floor(Date.now() / 30000);
-  const request = { senha: PASSWORD, codigo: code(enrolled.prepared.secret, step) };
+  const request = { senha: PASSWORD, codigo: code(enrolled.prepared.secret, step), codigoEmail: enrolled.prepared.emailCode };
   const results = await Promise.all([first.post('/api/mfa/verificar', request), second.post('/api/mfa/verificar', request)]);
   assert.deepEqual(results.map(r => r.status).sort(), [200, 401]);
   assert.equal(Number((await pool.query('SELECT last_step FROM admin_mfa WHERE user_id=$1', [user.id])).rows[0].last_step), step);
@@ -282,14 +287,14 @@ test('MFA HTTP: 10 consecutive wrong codes lock the factor for 1 hour across rat
     assert.equal(r.status, i === 9 ? 429 : 401, JSON.stringify(r.data));
   }
   await pool.query('DELETE FROM auth_rate_limits');
-  const bloqueado = await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret) });
+  const bloqueado = await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret), codigoEmail: prepared.emailCode });
   assert.equal(bloqueado.status, 429); // nem o código certo eleva durante o bloqueio
   const row = (await pool.query('SELECT falhas, bloqueado_ate FROM admin_mfa WHERE user_id=$1', [user.id])).rows[0];
   assert.ok(Number(row.bloqueado_ate) > Date.now() + 50 * 60000);
   assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM notifications WHERE user_id=$1 AND titulo='Autenticador bloqueado'", [user.id])).rows[0].n), 1);
   assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM audit_logs WHERE user_id=$1 AND acao='MFA_BLOQUEADO'", [user.id])).rows[0].n), 1);
   await pool.query('UPDATE admin_mfa SET bloqueado_ate=0 WHERE user_id=$1', [user.id]);
-  const liberado = await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret) });
+  const liberado = await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret), codigoEmail: prepared.emailCode });
   assert.equal(liberado.status, 200, JSON.stringify(liberado.data));
   assert.equal(Number((await pool.query('SELECT falhas FROM admin_mfa WHERE user_id=$1', [user.id])).rows[0].falhas), 0);
 });
@@ -310,13 +315,13 @@ test('MFA HTTP: audit failure rolls back factor activation, replay state and ses
   await pool.query(`CREATE TRIGGER mfa_test_audit_failure BEFORE INSERT ON audit_logs
     FOR EACH ROW WHEN (NEW.acao LIKE 'MFA%') EXECUTE FUNCTION mfa_test_audit_failure()`);
   try {
-    const response = await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret) });
+    const response = await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret), codigoEmail: prepared.emailCode });
     assert.equal(response.status, 500); assert.equal(response.setCookie, null); assert.equal(c.cookie(), oldCookie);
     const pending = (await pool.query('SELECT enabled,last_step,recovery_hashes FROM admin_mfa WHERE user_id=$1', [user.id])).rows[0];
     assert.equal(Number(pending.enabled), 0); assert.equal(Number(pending.last_step), -1); assert.deepEqual(JSON.parse(pending.recovery_hashes), []);
     assert.equal((await c.get('/api/conta')).status, 200); assert.equal((await c.get('/api/admin/dashboard')).data.tipo, 'MFA_REQUIRED');
   } finally { await pool.query('DROP TRIGGER mfa_test_audit_failure ON audit_logs'); await pool.query('DROP FUNCTION mfa_test_audit_failure()'); }
-  assert.equal((await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret) })).status, 200);
+  assert.equal((await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret), codigoEmail: prepared.emailCode })).status, 200);
 });
 
 test('MFA HTTP: password reset and the existing admin CLI preserve the enrolled factor', cases, async () => {
@@ -358,4 +363,18 @@ test('MFA HTTP: no-key development server fails closed for setup and administrat
     assert.equal((await c.get('/api/admin/dashboard')).status >= 400, true);
     assert.equal((await c.get('/api/conta')).status, 200);
   } finally { await stop(missing); }
+});
+
+test('MFA HTTP: first enrollment needs the code e-mailed to the verified address, not just the password', cases, async () => {
+  const user = await account(), c = await login(user), prepared = await prepare(c);
+  assert.match(prepared.emailCode, /^\d{6}$/);
+  const semEmail = await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret) });
+  assert.equal(semEmail.status, 401);
+  const errado = String((Number(prepared.emailCode) + 1) % 1000000).padStart(6, '0');
+  assert.equal((await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret), codigoEmail: errado })).status, 401);
+  assert.equal(Number((await pool.query('SELECT enabled FROM admin_mfa WHERE user_id=$1', [user.id])).rows[0].enabled), 0);
+  const ok = await c.post('/api/mfa/verificar', { senha: PASSWORD, codigo: code(prepared.secret), codigoEmail: prepared.emailCode });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data)); assert.equal(ok.data.recoveryCodes.length, 8);
+  const row = (await pool.query('SELECT enabled,email_hash FROM admin_mfa WHERE user_id=$1', [user.id])).rows[0];
+  assert.equal(Number(row.enabled), 1); assert.equal(row.email_hash, null);
 });

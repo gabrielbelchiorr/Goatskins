@@ -5,7 +5,7 @@ const cfg = require('./config');
 const { db, tx, sha, audit, notificar } = require('./db');
 const { Erro, cookie, chaveIp } = require('./http');
 const { consumirLimite } = require('./registration');
-const ADMIN = ['ADMIN','SUPER_ADMIN'], ELEVACAO_MS = 15 * 60000, SESSAO_MS = 8 * 3600000;
+const ADMIN = ['ADMIN','SUPER_ADMIN'], ELEVACAO_MS = 3 * 3600000, SESSAO_MS = 8 * 3600000;
 // Falhas consecutivas do código (não só por janela): sem isso, 8 tentativas a cada 10 min
 // somam ~1.150 chutes por dia, indefinidamente, para quem já tem a senha.
 const MAX_FALHAS_MFA = 10, BLOQUEIO_MFA_MS = 3600000;
@@ -95,7 +95,8 @@ async function senha(ctx) {
   }
   return u;
 }
-const recoveryDigest = (uid,code) => sha('GOATSKINS:mfa-recovery:v1:'+uid+':'+code);
+const emailDigest = (uid,sess,code) => crypto.createHmac('sha256',cfg.EMAIL_CODE_SECRET).update('mfa-ativacao:v1:'+uid+':'+sess+':'+code).digest('hex');
+const recoveryDigest =(uid,code) => sha('GOATSKINS:mfa-recovery:v1:'+uid+':'+code);
 function recoveryCode(code) {
   if(typeof code!=='string')return null;
   const text=code.trim().toLowerCase();
@@ -114,6 +115,8 @@ const rotas=[
   },'user'],
   ['POST',/^\/api\/mfa\/preparar$/,async ctx=>{
     const esperado=await senha(ctx),secret=base32(crypto.randomBytes(20));
+    // Primeiro cadastro: a senha sozinha não basta; exige também acesso ao e-mail verificado.
+    const codigoEmail=String(crypto.randomInt(0,1000000)).padStart(6,'0');
     const uri='otpauth://totp/'+encodeURIComponent('GOATSKINS:'+esperado.email)+'?secret='+secret+'&issuer=GOATSKINS&algorithm=SHA1&digits=6&period=30';
     const qr=require('qrcode-generator')(0,'M');qr.addData(uri,'Byte');qr.make();
     const qrCode=qr.createDataURL(4,16);
@@ -121,13 +124,20 @@ const rotas=[
       const u=await vivo(ctx,esperado);
       const m=await db.get('SELECT enabled FROM admin_mfa WHERE user_id=? FOR UPDATE',[u.id]);
       if(m&&m.enabled===1)throw new Erro('Autenticador já configurado. Use o código do aplicativo ou de recuperação.',409);
-      await db.run(`INSERT INTO admin_mfa(user_id,secret,pending_session,pending_expira) VALUES(?,?,?,?)
+      await db.run(`INSERT INTO admin_mfa(user_id,secret,pending_session,pending_expira,email_hash) VALUES(?,?,?,?,?)
         ON CONFLICT(user_id) DO UPDATE SET secret=excluded.secret,pending_session=excluded.pending_session,
-        pending_expira=excluded.pending_expira,last_step=-1,recovery_hashes='[]' WHERE admin_mfa.enabled=0`,
-        [u.id,encrypt(secret,u.id),sessionHash(ctx),Date.now()+600000]);
+        pending_expira=excluded.pending_expira,email_hash=excluded.email_hash,last_step=-1,recovery_hashes='[]' WHERE admin_mfa.enabled=0`,
+        [u.id,encrypt(secret,u.id),sessionHash(ctx),Date.now()+600000,emailDigest(u.id,sessionHash(ctx),codigoEmail)]);
       await audit(u.id,'MFA_PREPARADO',null,ctx.ip);
     });
-    return {secret,uri,qrCode};
+    try {
+      await require('./mail').enviarObrigatorio(esperado.email,'Código para ativar o autenticador - GOATSKINS',
+        'Código de ativação: '+codigoEmail+'\n\nUse este código para concluir a ativação da verificação em duas etapas da sua conta de administração. Ele expira em 10 minutos.\n\nSe não foi você, alguém tem a sua senha: troque-a imediatamente em '+cfg.APP_URL+' e avise o responsável pelo site.');
+    } catch (e) {
+      console.error('[mfa] e-mail de ativação:',e.message);
+      throw new Erro('Não foi possível enviar o código de ativação por e-mail. Tente novamente em alguns minutos.',503);
+    }
+    return {secret,uri,qrCode,emailEnviado:true};
   },'user'],
   ['POST',/^\/api\/mfa\/verificar$/,async ctx=>{
     const esperado=await senha(ctx),fresh=crypto.randomBytes(32).toString('hex');
@@ -142,7 +152,10 @@ const rotas=[
       const hashes=hashesDe(m.recovery_hashes),recovery=m.enabled===1?recoveryCode(code):null;
       const digest=recovery?recoveryDigest(u.id,recovery):null;
       const used=digest?hashes.find(h=>crypto.timingSafeEqual(Buffer.from(h,'hex'),Buffer.from(digest,'hex'))):null;
-      if(step<0&&!used){
+      const ce=typeof ctx.body.codigoEmail==='string'?ctx.body.codigoEmail.trim():'';
+      const emailOk=m.enabled===1||(/^\d{6}$/.test(ce)&&typeof m.email_hash==='string'&&/^[a-f0-9]{64}$/.test(m.email_hash)&&
+        crypto.timingSafeEqual(Buffer.from(m.email_hash,'hex'),Buffer.from(emailDigest(u.id,sessionHash(ctx),ce),'hex')));
+      if((step<0&&!used)||!emailOk){
         // Grava dentro da tx (que confirma: este caminho retorna, não lança).
         const falhas=Number(m.falhas||0)+1,bloqueia=falhas>=MAX_FALHAS_MFA;
         await db.run('UPDATE admin_mfa SET falhas=?,bloqueado_ate=? WHERE user_id=?',[bloqueia?0:falhas,bloqueia?Date.now()+BLOQUEIO_MFA_MS:Number(m.bloqueado_ate||0),u.id]);
@@ -153,7 +166,7 @@ const rotas=[
         return {invalid:true,uid:u.id,bloqueou:bloqueia,email:u.email};
       }
       const codes=!m.enabled?Array.from({length:8},()=>crypto.randomBytes(16).toString('hex')):null;
-      await db.run(`UPDATE admin_mfa SET enabled=1,last_step=?,pending_session=NULL,pending_expira=0,recovery_hashes=?,falhas=0,bloqueado_ate=0 WHERE user_id=?`,
+      await db.run(`UPDATE admin_mfa SET enabled=1,last_step=?,pending_session=NULL,pending_expira=0,email_hash=NULL,recovery_hashes=?,falhas=0,bloqueado_ate=0 WHERE user_id=?`,
         [step>=0?step:m.last_step,JSON.stringify(codes?codes.map(c=>recoveryDigest(u.id,c)):hashes.filter(h=>h!==used)),u.id]);
       if(codes||used)await db.run('DELETE FROM sessions WHERE user_id=? AND token<>?',[u.id,sessionHash(ctx)]);
       const now=Date.now(),expira=Math.min(u.expira,now+SESSAO_MS);
