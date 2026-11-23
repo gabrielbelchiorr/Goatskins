@@ -85,7 +85,14 @@ test('Controles em português usam mensagens oficiais e preservam câmera, inspe
   await b.cdp.evaluate('window.__commands=[];document.querySelector("iframe").contentWindow.postMessage=(message,origin)=>{__commands.push({message,origin})};true');
   await post(b,'ready',{item:{weapon:'ak47',wear:.3,seed:13}});
   assert.match(await b.cdp.evaluate('document.querySelector(".skin-viewer-metadata").textContent'),/Desgaste: 0,3000 · Padrão: 13/);
-  assert.deepEqual(await b.cdp.evaluate('[...document.querySelectorAll(".skin-viewer-tools button")].map(b=>b.textContent)'),['Rotacionar','Primeira pessoa','Inspecionar','Ocultar controles']);
+  assert.deepEqual(await b.cdp.evaluate('[...document.querySelectorAll(".skin-viewer-tools button")].map(b=>b.textContent)'),['Rotacionar','Primeira pessoa','Inspecionar','Fundo branco','Ocultar controles']);
+  const sent=await b.cdp.evaluate('__commands.length');
+  await b.cdp.evaluate('document.querySelector(".skin-viewer-bg").click()');
+  assert.deepEqual(await b.cdp.evaluate('[document.querySelector(".skin-viewer-viewport").classList.contains("is-light"),document.querySelector(".skin-viewer-bg").textContent,getComputedStyle(document.querySelector(".skin-viewer-viewport")).backgroundColor]'),[true,'Fundo preto','rgb(255, 255, 255)']);
+  await b.cdp.evaluate('document.querySelector(".skin-viewer-bg").click()');
+  assert.equal(await b.cdp.evaluate('getComputedStyle(document.querySelector(".skin-viewer-viewport")).backgroundColor'),'rgb(0, 0, 0)');
+  assert.equal(await b.cdp.evaluate('__commands.length'),sent,'trocar o fundo não recarrega nem comanda o iframe');
+  assert.equal(await b.cdp.evaluate('getComputedStyle(document.querySelector(".skin-viewer-watermark")).pointerEvents'),'none');
   await b.cdp.evaluate('document.querySelector(".skin-viewer-hands").click()');
   assert.deepEqual(await b.cdp.evaluate('__commands.at(-1)'),{message:{type:'cs2embed:set',spec:{view:'hands'}},origin:'https://cs2inspect.skin'});
   await post(b,'view',{view:'hands'});

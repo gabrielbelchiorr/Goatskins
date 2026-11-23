@@ -38,6 +38,16 @@
     const control = (label, className) => {const button=element('button','skin-viewer-control '+className,label);button.type='button';return button;};
     const rotate = control('Rotacionar','skin-viewer-rotate'), hands = control('Primeira pessoa','skin-viewer-hands');
     const inspect = control('Inspecionar','skin-viewer-inspect'), toggle = control('Ocultar controles','skin-viewer-toggle');
+    const background = control('','skin-viewer-bg');
+    let lightBackground = false;
+    try { lightBackground = localStorage.getItem('goat-viewer-bg') === 'light'; } catch (_) {}
+    const updateBackground = () => {
+      viewport.classList.toggle('is-light',lightBackground);
+      background.textContent = lightBackground ? 'Fundo preto' : 'Fundo branco';
+      background.setAttribute('aria-label',lightBackground ? 'Mudar o fundo para preto' : 'Mudar o fundo para branco');
+    };
+    background.addEventListener('click',()=>{lightBackground=!lightBackground;try{localStorage.setItem('goat-viewer-bg',lightBackground?'light':'dark');}catch(_){}updateBackground();});
+    const watermark = element('img','skin-viewer-watermark'); watermark.src='/logo-marca.webp'; watermark.alt=''; watermark.setAttribute('aria-hidden','true'); watermark.draggable=false;
     const metadata = element('p','skin-viewer-metadata');
     let cameraView=config.view, supportsHands=!/gloves|hand[-_ ]?wraps|luvas|bandagens/i.test(config.item||config.weapon||config.name), controlsHidden=false;
     const updateMetadata = item => {
@@ -50,10 +60,10 @@
       rotate.setAttribute('aria-pressed',String(cameraView==='item')); hands.setAttribute('aria-pressed',String(cameraView==='hands'));
       hands.hidden=!supportsHands; inspect.hidden=!supportsHands||cameraView!=='hands';
       for(const button of [rotate,hands,inspect])button.disabled=!ready||failed;
-      cameras.hidden=controlsHidden; metadata.hidden=controlsHidden;
+      cameras.hidden=controlsHidden; metadata.hidden=controlsHidden; background.hidden=controlsHidden;
       toggle.textContent=controlsHidden?'Mostrar controles':'Ocultar controles';toggle.setAttribute('aria-expanded',String(!controlsHidden));
     };
-    cameras.append(rotate,hands,inspect); toolbar.append(cameras,toggle);toolbar.hidden=true;
+    cameras.append(rotate,hands,inspect); toolbar.append(cameras,background,toggle);toolbar.hidden=true;updateBackground();
     const spinner = element('span','skin-viewer-spinner'); spinner.setAttribute('aria-hidden','true');
     loading.append(spinner,element('span','','Preparando a skin…')); loading.setAttribute('role','status');
     const status = element('p','skin-viewer-status','O CS2Inspect está preparando o modelo e as texturas.');
@@ -96,6 +106,8 @@
       status.classList.remove('is-error'); status.textContent='O CS2Inspect está preparando o modelo e as texturas.'; retry.textContent='Recarregar visualizador'; loading.hidden=false;
       frame=element('iframe','skin-viewer-frame'); frame.title='CS2Inspect: visualizador 3D da skin CS2';
       frame.referrerPolicy='strict-origin-when-cross-origin'; frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-pointer-lock');
+      // O iframe é transparente; com o esquema de cores da página (escuro) diferente do dele, o navegador pintaria um fundo branco opaco.
+      frame.style.colorScheme='light';
       frame.setAttribute('allow','fullscreen'); frame.setAttribute('allowfullscreen',''); frame.setAttribute('aria-busy','true');
       frame.onload = () => {
         if (!alive || ready || failed) return;
@@ -103,7 +115,7 @@
         status.textContent='Janela carregada. O CS2Inspect está preparando a skin…';
       };
       frame.onerror = () => fail('Não foi possível abrir o CS2Inspect. Verifique sua conexão e tente novamente.');
-      viewport.append(frame,loading,toolbar,metadata); frame.src=src;
+      viewport.append(watermark,frame,loading,toolbar,metadata); frame.src=src;
       timeout=setTimeout(()=>fail('O CS2Inspect está demorando para responder. Você pode aguardar ou tentar novamente.'),25000);
     };
     const onMessage = event => {
