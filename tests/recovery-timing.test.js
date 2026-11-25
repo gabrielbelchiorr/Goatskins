@@ -105,7 +105,7 @@ async function fixture({ providerMs = 0, providerFails = false, dbMs = 1 } = {})
         if (resolved === 'src/recovery.js') return recovery;
         if (resolved === 'src/mfa.js') return { rotas: [] };
         if (['src/phone.js', 'src/rifas.js', 'src/pedidos.js', 'src/admin.js', 'src/predefinicoes.js'].includes(resolved)) return { rotas: [] };
-        assert.ok(['src/auth.js', 'src/registration.js', 'src/http.js', 'src/security.js'].includes(resolved), 'Unexpected import: ' + name);
+        assert.ok(['src/auth.js', 'src/registration.js', 'src/http.js', 'src/security.js', 'src/senhas-comuns.js'].includes(resolved), 'Unexpected import: ' + name);
         return load(resolved);
       }
     };

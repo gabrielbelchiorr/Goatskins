@@ -12,7 +12,7 @@ before(async()=>{
 });
 after(async()=>{if(!url)return;if(srv){srv.kill();await new Promise(r=>srv.once('exit',r));}await store.fechar();await pool.query('DROP SCHEMA '+schema+' CASCADE');await pool.end();});
 async function account(number=null){
- const email='phone'+(++seq)+'@test.com',hash=await require('../src/auth').hashSenha('Senha12345');
+ const email='phone'+(++seq)+'@test.com',hash=await require('../src/auth').hashSenha('Fixa9Kp2xy');
  const id=await store.db.insert("INSERT INTO users(nome,contato,email,hash,email_verificado,celular) VALUES('Teste',?,?,?,1,?)",[email,email,hash,number]);
  return {user:{id},body:{telefone:number},email,ip:'127.0.0.1'};
 }
@@ -37,7 +37,7 @@ run('legado entra e preenche celular; APIs exigem e-mail e formato, sem SMS, sem
  for(let i=0;i<100;i++){try{if((await fetch(base+'/healthz')).ok)break;}catch{}await new Promise(r=>setTimeout(r,50));}
  const c=await account();let cookie='';
  async function req(route,body){const r=await fetch(base+route,{method:body?'POST':'GET',headers:{Cookie:cookie,'Content-Type':'application/json','X-Requested-With':'goatskins'},body:body?JSON.stringify(body):undefined});const set=r.headers.get('set-cookie');if(set)cookie=set.split(';')[0];return {status:r.status,data:await r.json()};}
- assert.equal((await req('/api/login',{email:c.email,senha:'Senha12345'})).status,200);
+ assert.equal((await req('/api/login',{email:c.email,senha:'Fixa9Kp2xy'})).status,200);
  for(const route of ['/api/campanhas/1/numeros','/api/campanhas/1/pedidos'])assert.equal((await req(route,{numeros:[1],phone_verified:true,celular_preenchido:true})).status,403);
  assert.equal((await req('/api/celular',{telefone:'1133334444'})).status,400);
  assert.equal((await req('/api/celular',{telefone:'(11) 99999-9999',celular_verificado:1})).status,200);

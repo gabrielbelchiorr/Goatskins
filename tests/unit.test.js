@@ -6,19 +6,19 @@ const test = require("node:test"), assert = require("node:assert/strict"), { spa
 const auth = require("../src/auth"), http = require("../src/http");
 
 test("senha: hash com sal, formato sal:hex, confere certo e recusa errado/lixo", async () => {
-  const h1 = await auth.hashSenha("Senha1234"), h2 = await auth.hashSenha("Senha1234");
-  assert.match(h1, /^[a-f0-9]{32}:[a-f0-9]{128}$/); assert.notEqual(h1, h2); assert.ok(!h1.includes("Senha1234"));
-  assert.equal(await auth.confere("Senha1234", h1), true); assert.equal(await auth.confere("senha1234", h1), false);
+  const h1 = await auth.hashSenha("Fixa9Kp2x"), h2 = await auth.hashSenha("Fixa9Kp2x");
+  assert.match(h1, /^[a-f0-9]{32}:[a-f0-9]{128}$/); assert.notEqual(h1, h2); assert.ok(!h1.includes("Fixa9Kp2x"));
+  assert.equal(await auth.confere("Fixa9Kp2x", h1), true); assert.equal(await auth.confere("senha1234", h1), false);
   for (const lixo of [null, "", "semdoispontos", "abc:zzzz", ":"]) assert.equal(await auth.confere("x", lixo), false);
 });
 test("senha: scrypt não trava o servidor (várias verificações em paralelo deixam o laço de eventos livre)", async () => {
-  const h = await auth.hashSenha("Senha1234"); let batidas = 0; const t = setInterval(() => batidas++, 5);
+  const h = await auth.hashSenha("Fixa9Kp2x"); let batidas = 0; const t = setInterval(() => batidas++, 5);
   await Promise.all(Array.from({ length: 12 }, () => auth.confere("errada123", h))); clearInterval(t);
   assert.ok(batidas >= 3, "o timer só rodou " + batidas + " vezes: o hash está bloqueando o processo");
 });
 test("senhaOk: exige 8+ caracteres, letra e número", () => {
   for (const s of ["abc", "abcdefgh", "12345678", "", null, undefined, "a1".repeat(60), 12345678]) assert.equal(auth.senhaOk(s), false, String(s));
-  assert.equal(auth.senhaOk("Senha1234"), true);
+  assert.equal(auth.senhaOk("Fixa9Kp2x"), true);
 });
 
 test("limite: bloqueia após o máximo, por chave, e a poda não perdoa quem ainda está na janela", () => {

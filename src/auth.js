@@ -7,6 +7,9 @@ const { Erro, RE, txt, limite, cookie, ipDe, chaveIp } = require("./http");
 const MAX_FALHAS = 5, BLOQUEIO_MS = 15 * 60e3, SESSAO_MS = 7 * 864e5;
 const senhaOk = s => typeof s === "string" && s.length >= 8 && s.length <= 100 && /[a-zA-Z]/.test(s) && /\d/.test(s);
 const SENHA_MSG = "A senha precisa ter 8 ou mais caracteres, com letras e números.";
+const SENHA_COMUM_MSG = "Essa senha é comum ou fácil de adivinhar (palavra conhecida com números, sequência de teclado, seu nome ou e-mail). Escolha outra.";
+const { senhaComum } = require("./senhas-comuns");
+const pessoais = (email, nome) => [email, ...String(nome || "").split(/\s+/)];
 
 /* scrypt ASSÍNCRONO (roda no pool de threads do libuv): o scryptSync travava o servidor inteiro ~50-100 ms a cada login/cadastro,
    então uma enxurrada de tentativas de login derrubava o site para todo mundo. O formato do hash guardado ("sal:hex") não mudou. */
@@ -80,6 +83,7 @@ const rotas = [
     const nome = txt(b.nome, 80, 2), email = txt(b.email, 120, 5).toLowerCase(), tel = require("./phone").normalize(b.telefone);
     if (!RE.email.test(email)) throw new Erro("E-mail inválido.");
     if (!senhaOk(b.senha)) throw new Erro(SENHA_MSG);
+    if (senhaComum(b.senha, pessoais(email, nome))) throw new Erro(SENHA_COMUM_MSG);
     if (b.maior18 !== true || b.consentimento !== true) throw new Erro("Confirme que tem 18 anos ou mais e aceite os termos e a política de privacidade.");
     return registration.iniciar({ nome, email, telefone: tel, hash: await hashSenha(b.senha), consentimento_em: agora() }, ip);
   }],
@@ -137,6 +141,7 @@ const rotas = [
   ["POST", /^\/api\/redefinir-senha$/, async ctx => {
     limite("red:" + chaveIp(ctx.ip), 10, 36e5);
     if (!senhaOk(ctx.body.senha)) throw new Erro(SENHA_MSG);
+    if (senhaComum(ctx.body.senha)) throw new Erro(SENHA_COMUM_MSG);
     // Rejeita capacidades inválidas antes do scrypt. O consumo é revalidado atomicamente na tx abaixo.
     if (typeof ctx.body.token !== "string" || !/^[a-f0-9]{64}$/.test(ctx.body.token) ||
         !(await db.get("SELECT token_hash FROM tokens_email WHERE token_hash=? AND tipo='REDEFINIR' AND usado=0 AND expira>?", [sha(ctx.body.token), Date.now()])))
@@ -170,9 +175,10 @@ const rotas = [
   }, "user"],
   ["POST", /^\/api\/conta\/senha$/, async ctx => {
     limite("pw:" + ctx.user.id, 10, 36e5);
-    const u = await db.get("SELECT hash,email FROM users WHERE id=?", [ctx.user.id]);
+    const u = await db.get("SELECT hash,email,nome FROM users WHERE id=?", [ctx.user.id]);
     if (!(await confere(String(ctx.body.atual || ""), u.hash))) throw new Erro("Senha atual incorreta.", 401);
     if (!senhaOk(ctx.body.nova)) throw new Erro(SENHA_MSG);
+    if (senhaComum(ctx.body.nova, pessoais(u.email, u.nome))) throw new Erro(SENHA_COMUM_MSG);
     const novoHash = await hashSenha(ctx.body.nova);
     await tx(async () => {
       if (!(await db.run("UPDATE users SET hash=?, atualizado_em=? WHERE id=? AND hash=? AND status='ACTIVE' AND email_verificado=1", [novoHash, agora(), ctx.user.id, u.hash])).changes) throw new Erro("Sua conta mudou. Entre novamente.", 401);

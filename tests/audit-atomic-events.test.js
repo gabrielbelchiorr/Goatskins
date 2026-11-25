@@ -36,7 +36,7 @@ test('PG: profile update rolls back when its audit cannot be written',opts,async
 });
 test('PG: password change, revocation and audit roll back together',opts,async()=>{
   const u=await account();await fail('SENHA_ALTERADA',true);
-  try{await assert.rejects(handler('/api/conta/senha')({...u.ctx,body:{atual:'FixtureAudit123',nova:'ChangedFixture456'}}),e=>e.code==='P0001');}
+  try{await assert.rejects(handler('/api/conta/senha')({...u.ctx,body:{atual:'FixtureAudit123',nova:'Zq7mVt42pLr'}}),e=>e.code==='P0001');}
   finally{await fail('SENHA_ALTERADA',false);}
   assert.equal((await store.db.get('SELECT hash FROM users WHERE id=?',[u.id])).hash,u.hash);
   assert.equal((await store.db.get('SELECT COUNT(*) n FROM sessions WHERE user_id=?',[u.id])).n,1);

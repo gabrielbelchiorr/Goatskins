@@ -230,7 +230,7 @@ test('queue PG: changing the recovery secret fails closed instead of mailing a t
 test('queue PG: successful reset cancels queued requests that were not prepared and does not remint a token', options, async () => {
   const u = await account(), raw = crypto.randomBytes(32).toString('hex'); await enqueue(u.email);
   await store.db.run("INSERT INTO tokens_email(token_hash,user_id,tipo,expira) VALUES(?,?,'REDEFINIR',?)", [store.sha(raw), u.id, Date.now() + 60000]);
-  assert.deepEqual(await handler('/api/redefinir-senha')({ ...ctx(u), body: { token: raw, senha: 'ChangedRecovery456' } }), { ok: true });
+  assert.deepEqual(await handler('/api/redefinir-senha')({ ...ctx(u), body: { token: raw, senha: 'Zq7mVt42pLs' } }), { ok: true });
   assert.equal(await job(u.email), undefined); assert.equal(await recovery.processarUma(), false);
   assert.equal(await count('tokens_email'), 0); assert.equal(calls.length, 0);
 });
@@ -243,16 +243,16 @@ test('queue PG: a link sent by the durable worker remains consumable and reset r
   const raw = /#redefinir=([a-f0-9]{64})/.exec(calls[0][2])[1];
   await enqueue(u.email);
   assert.equal(await count('password_recovery_jobs'), 2);
-  assert.deepEqual(await handler('/api/redefinir-senha')({ ...ctx(u), body: { token: raw, senha: 'ChangedRecovery456' } }), { ok: true });
+  assert.deepEqual(await handler('/api/redefinir-senha')({ ...ctx(u), body: { token: raw, senha: 'Zq7mVt42pLs' } }), { ok: true });
   assert.equal(await count('password_recovery_jobs'), 0); assert.equal(await count('tokens_email'), 0);
   assert.equal(await recovery.processarUma(), false);
   assert.equal(calls.length, 1);
-  assert.equal(await auth.confere('ChangedRecovery456', (await store.db.get('SELECT hash FROM users WHERE id=?', [u.id])).hash), true);
+  assert.equal(await auth.confere('Zq7mVt42pLs', (await store.db.get('SELECT hash FROM users WHERE id=?', [u.id])).hash), true);
 });
 
 test('queue PG: password changes cancel unprepared recovery requests without reminting their tokens', options, async () => {
   const u = await account(); await enqueue(u.email);
-  assert.deepEqual(await handler('/api/conta/senha')({ ...ctx(u), body: { atual: 'FixtureRecovery123', nova: 'ChangedRecovery456' } }), { ok: true });
+  assert.deepEqual(await handler('/api/conta/senha')({ ...ctx(u), body: { atual: 'FixtureRecovery123', nova: 'Zq7mVt42pLs' } }), { ok: true });
   assert.equal(await job(u.email), undefined); assert.equal(await recovery.processarUma(), false);
   assert.equal(await count('tokens_email'), 0); assert.equal(calls.length, 0);
 });

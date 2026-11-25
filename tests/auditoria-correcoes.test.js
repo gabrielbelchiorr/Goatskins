@@ -105,13 +105,14 @@ test('login: após 5 tentativas o e-mail exige Turnstile (não bloqueia), com a 
     run: async () => ({ changes: 1 }),
   };
   const auth = carregar('src/auth.js', {
+    './senhas-comuns': require('../src/senhas-comuns'),
     './registration': { consumirLimite: lim.consumirLimite, iniciar: async () => ({}) },
     './config': { PRODUCAO: false, TESTE: false }, './mail': { enviar: async () => null },
     './db': { db, sha: s => 'h:' + s, agora: () => 'agora', tx: f => f(), audit: async () => {}, notificar: async () => {}, comAutorizacao: (_a, f) => f() },
     './http': { Erro, RE: { email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ }, txt: v => v, limite: () => {}, cookie: () => null, ipDe: () => '1.2.3.4', chaveIp: s => String(s) },
     './security': { verificar: async (token, acao) => { verificados.push(acao); if (token !== 'ok') { const e = new Erro('Conclua a verificação de segurança.', 403); e.tipo = 'TURNSTILE_REQUIRED'; throw e; } } },
   });
-  hashCerto = await auth.hashSenha('Senha1234');
+  hashCerto = await auth.hashSenha('Fixa9Kp2x');
   const login = auth.rotas.find(r => r[1].test('/api/login'))[2];
   const chamar = (email, senha, extra = {}) => login({ ip: '1.2.3.4', body: { email, senha, ...extra }, req: { headers: {} }, res: { setHeader() {} } });
   const respostas = {};
@@ -123,7 +124,7 @@ test('login: após 5 tentativas o e-mail exige Turnstile (não bloqueia), com a 
   assert.deepEqual(respostas['dono@goatskins.test'], respostas['naoexiste@goatskins.test']);
   assert.equal(respostas['dono@goatskins.test'].tipo, 'TURNSTILE_REQUIRED');
   // O dono, com a senha certa e o desafio resolvido, entra mesmo depois das falhas de um terceiro.
-  assert.deepEqual(await chamar('dono@goatskins.test', 'Senha1234', { turnstileToken: 'ok' }), { ok: true });
+  assert.deepEqual(await chamar('dono@goatskins.test', 'Fixa9Kp2x', { turnstileToken: 'ok' }), { ok: true });
   assert.ok(verificados.every(a => a === 'login'));
 });
 

@@ -15,14 +15,14 @@ test('role change and session invalidation share the transaction',async()=>{
  await route[2]({params:['2'],body:{role:'ADMIN'},user:{id:1,role:'SUPER_ADMIN'}});assert.equal(calls.length,2);assert.match(calls[1],/DELETE FROM sessions/);
 });
 test('account deletion rate limit runs before password verification or database reads',async()=>{
- let checked=0;const mod=load('auth.js',{'node:crypto':{},'./registration':{consumirLimite:async(key,max,window)=>{assert.equal(key,'excluir-conta:7');assert.equal(max,5);assert.equal(window,900000);checked++;throw new Erro('limit',429);}},'./config':{},'./mail':{},'./db':{db:{get:()=>{throw Error('Must not query');}}},'./http':{Erro,RE:{}}});
+ let checked=0;const mod=load('auth.js',{'./senhas-comuns':require('../src/senhas-comuns'),'node:crypto':{},'./registration':{consumirLimite:async(key,max,window)=>{assert.equal(key,'excluir-conta:7');assert.equal(max,5);assert.equal(window,900000);checked++;throw new Erro('limit',429);}},'./config':{},'./mail':{},'./db':{db:{get:()=>{throw Error('Must not query');}}},'./http':{Erro,RE:{}}});
  const route=mod.rotas.find(r=>r[1].test('/api/conta/excluir'));await assert.rejects(route[2]({user:{id:7},body:{senha:'guess'}}),e=>e.code===429);assert.equal(checked,1);
 });
 
 function deletion(changes){
  const hash='salt:'+Buffer.alloc(64,1).toString('hex'),calls=[];
  const crypto={scrypt:(s,salt,n,cb)=>cb(null,Buffer.alloc(64,1)),timingSafeEqual:require('node:crypto').timingSafeEqual};
- const mod=load('auth.js',{'node:crypto':crypto,'./registration':{consumirLimite:async()=>{}},'./recovery':{cancelar:async()=>{}},'./config':{},'./mail':{},'./http':{Erro,RE:{}},'./db':{db:{get:async sql=>sql.includes('SELECT hash, role')?{hash,role:'USER',email:'fixture@goatskins.test'}:{n:0},run:async(sql,args)=>{calls.push({sql,args});return {changes};}},tx:fn=>fn(),agora:()=>'',audit:async()=>{}}});
+ const mod=load('auth.js',{'./senhas-comuns':require('../src/senhas-comuns'),'node:crypto':crypto,'./registration':{consumirLimite:async()=>{}},'./recovery':{cancelar:async()=>{}},'./config':{},'./mail':{},'./http':{Erro,RE:{}},'./db':{db:{get:async sql=>sql.includes('SELECT hash, role')?{hash,role:'USER',email:'fixture@goatskins.test'}:{n:0},run:async(sql,args)=>{calls.push({sql,args});return {changes};}},tx:fn=>fn(),agora:()=>'',audit:async()=>{}}});
  return {route:mod.rotas.find(r=>r[1].test('/api/conta/excluir'))[2],calls,hash,ctx:{user:{id:7},body:{senha:'password'},res:{setHeader(){}}}};
 }
 test('deletion rejects password/role/status changes during password verification',async()=>{
